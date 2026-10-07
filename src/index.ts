@@ -7,6 +7,10 @@ const AskParams = Type.Object({
   options: Type.Optional(Type.Array(Type.String()))
 });
 
+const DeleteTempFileParams = Type.Object({
+  fileId: Type.String({ description: "Opaque Pi Companion temporary file id" })
+});
+
 export default function companionExtension(pi: ExtensionAPI) {
   const bridge = new CompanionBridge(pi);
 
@@ -61,10 +65,58 @@ export default function companionExtension(pi: ExtensionAPI) {
     }
   });
 
+  pi.registerTool({
+    name: "companion_temp_files",
+    label: "Companion temp files",
+    description: "List user-uploaded temporary files available to this Pi session. Paths are inside the session sandbox.",
+    parameters: Type.Object({}),
+    async execute() {
+      const files = bridge.getTempFiles();
+      return {
+        content: [{
+          type: "text",
+          text: files.length
+            ? files.map(file => file.id + "  " + file.path + "  (" + file.size + " bytes)").join("\n")
+            : "No temporary files are available for this session."
+        }],
+        details: { files }
+      };
+    }
+  });
+
+  pi.registerTool({
+    name: "companion_delete_temp_file",
+    label: "Delete companion temp file",
+    description: "Delete one user-uploaded temporary file from this session sandbox by opaque file id.",
+    parameters: DeleteTempFileParams,
+    executionMode: "sequential",
+    async execute(_toolCallId, params) {
+      const result = await bridge.deleteTempFile(params.fileId);
+      return {
+        content: [{ type: "text", text: result.ok ? "Temporary file deleted." : "Delete failed: " + (result.error ?? "unknown error") }],
+        details: result
+      };
+    }
+  });
+
   pi.registerCommand("companion", {
     description: "Show the local Pi Companion address",
     handler: async (_args, ctx) => {
       ctx.ui.notify("Pi Companion: http://127.0.0.1:43721", "info");
+    }
+  });
+
+  pi.registerCommand("remote-control", {
+    description: "Toggle remote control for this Pi session",
+    handler: async (_args, ctx) => {
+      const enabled = !bridge.isRemoteEnabled();
+      bridge.setRemoteEnabled(enabled);
+      ctx.ui.notify(
+        enabled
+          ? "Remote control enabled for this session. Pair a device from Pi Companion."
+          : "Remote control disabled for this session.",
+        enabled ? "info" : "warning"
+      );
     }
   });
 }
