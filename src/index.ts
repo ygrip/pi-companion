@@ -23,6 +23,12 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.setContext(ctx);
     bridge.setName(event.name);
   });
+  pi.on("model_select", (_event, ctx) => {
+    bridge.setContext(ctx);
+  });
+  pi.on("thinking_level_select", (_event, ctx) => {
+    bridge.setContext(ctx);
+  });
   pi.on("agent_start", (_event, ctx) => {
     bridge.setContext(ctx);
     bridge.updateStatus("active");
