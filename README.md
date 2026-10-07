@@ -122,7 +122,7 @@ Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`
 Pairing is daemon-wide rather than session-specific. Everything lives on the **Devices** page of the local console (port 43721):
 
 1. Choose **Pair a device**. The daemon creates a single-use invitation (5 minutes by default, configurable in Settings) and shows it as a QR code, a copyable link and a short code (`XXXX-XXXX`).
-2. On the phone, open the paired-device address. An unpaired device gets a connect screen: scan the QR code with the in-app camera (needs HTTPS; otherwise use the phone's camera app, which opens the invitation link) or type the short code, then give the device a name.
+2. On the phone, open the paired-device address. An unpaired device gets a connect screen: scan the QR code with the in-app camera (HTTPS required), use the phone's camera app to open the invitation link, or type the short code shown beside the QR, then give the device a name. Pi Companion explains why camera access is needed before triggering the browser permission prompt.
 3. The daemon issues a long random credential and stores only its SHA-256 hash.
 
 Typed codes are short, so wrong ones are counted: after ten misses within ten minutes every open invitation is withdrawn and code entry is refused (HTTP 429) until the window passes.
@@ -219,6 +219,7 @@ Design notes:
 - warm amber on graphite or paper, matching the logo; system fonts only, so nothing loads from the network. highlight.js and Mermaid load only when a reply contains code or a diagram
 - the window never scrolls. The sidebar, page content, activity feed, file list, diff, chips and tabs each scroll inside their own container, and the composer and mobile tab bar stay put
 - the activity feed follows new output and stops following when you scroll up ("Jump to latest" brings you back)
+- installable PWA: web app manifest, standalone display mode, Apple home-screen metadata, and a small service worker that caches only the shell and immutable assets; API/session traffic is never cached
 - mobile: bottom tab bar, safe-area insets, 44px touch targets, 16px inputs (no iOS zoom), Enter inserts a newline on touch keyboards
 - accessibility: skip link, visible focus rings, arrow-key tabs, labelled controls, live regions for the feed and questions, reduced-motion support
 - the dot field is Raksara's component, loaded when the browser is idle, paused when hidden, and static under reduced motion
