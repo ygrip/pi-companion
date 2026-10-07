@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     path::{Path as FsPath, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -8,7 +7,7 @@ use std::{
 
 use axum::{
     extract::{
-        Multipart, Path, Query, State,
+        DefaultBodyLimit, Multipart, Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, StatusCode},
@@ -48,7 +47,7 @@ struct AppState {
 #[derive(Clone)]
 struct Session {
     snapshot: Value,
-    command_tx: mpsc::UnboundedSender<Value>,
+    command_tx: Option<mpsc::UnboundedSender<Value>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -87,10 +86,6 @@ struct BrowserEnvelope {
     command: Value,
 }
 
-#[derive(Deserialize)]
-struct DeviceAuth {
-    token: Option<String>,
-}
 
 #[derive(Deserialize)]
 struct PairClaim {
@@ -462,7 +457,9 @@ async fn session_files(state: &AppState, session_id: &str) -> Vec<TempFile> {
 async fn notify_session_files(state: &AppState, session_id: &str) {
     let files = session_files(state, session_id).await;
     if let Some(session) = state.sessions.read().await.get(session_id) {
-        let _ = session.command_tx.send(serde_json::json!({ "type": "temp.files", "files": files }));
+        if let Some(command_tx) = &session.command_tx {
+            let _ = command_tx.send(serde_json::json!({ "type": "temp.files", "files": files }));
+        }
     }
     broadcast(state, serde_json::json!({
         "type": "files.update",
@@ -518,10 +515,12 @@ async fn browser_socket(socket: WebSocket, state: AppState, remote: bool) {
                 if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
                     continue;
                 }
-                let _ = session.command_tx.send(serde_json::json!({
-                    "type": "command",
-                    "command": envelope.command
-                }));
+                if let Some(command_tx) = &session.command_tx {
+                    let _ = command_tx.send(serde_json::json!({
+                        "type": "command",
+                        "command": envelope.command
+                    }));
+                }
             }
         }
     }
@@ -555,7 +554,7 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                 let snapshot = value.get("session").cloned().unwrap_or(Value::Null);
                 state.sessions.write().await.insert(
                     session_id.clone(),
-                    Session { snapshot: snapshot.clone(), command_tx: command_tx.clone() },
+                    Session { snapshot: snapshot.clone(), command_tx: Some(command_tx.clone()) },
                 );
                 broadcast(&state, serde_json::json!({ "type": "session.register", "session": snapshot }));
                 notify_session_files(&state, &session_id).await;
@@ -602,16 +601,33 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
         }
     }
 
-    state.sessions.write().await.remove(&session_id);
-    broadcast(&state, serde_json::json!({ "type": "session.remove", "sessionId": session_id }));
+    {
+        let mut sessions = state.sessions.write().await;
+        if let Some(session) = sessions.get_mut(&session_id) {
+            if let Some(snapshot) = session.snapshot.as_object_mut() {
+                snapshot.insert("status".into(), Value::String("stopped".into()));
+            }
+            session.command_tx = None;
+        }
+    }
+    broadcast(&state, serde_json::json!({
+        "type": "session.update",
+        "sessionId": session_id,
+        "patch": { "status": "stopped" }
+    }));
 
     let cleanup_state = state.clone();
     let cleanup_session = session_id.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_secs(30)).await;
-        if cleanup_state.sessions.read().await.contains_key(&cleanup_session) {
-            return;
-        }
+        let reconnected = cleanup_state
+            .sessions
+            .read()
+            .await
+            .get(&cleanup_session)
+            .and_then(|session| session.command_tx.as_ref())
+            .is_some();
+        if reconnected { return; }
         cleanup_state.files.write().await.remove(&cleanup_session);
         let _ = fs::remove_dir_all(cleanup_state.temp_root.join(&cleanup_session)).await;
     });
