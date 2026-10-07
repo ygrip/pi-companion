@@ -58,6 +58,16 @@
     }
   }
 
+  async function copyCode() {
+    if (!pairing) return;
+    try {
+      await navigator.clipboard.writeText(pairing.code);
+      toasts.show('Pairing code copied.', 'success');
+    } catch {
+      toasts.show('Copy failed. Select the code and copy it manually.', 'error');
+    }
+  }
+
   async function disconnect(device: PairedDevice) {
     busy = device.id;
     try {
@@ -119,9 +129,16 @@
           <li>Open the link, name the device and tap <strong>Pair device</strong>.</li>
           <li>Share a session by typing <code>/remote-control</code> in Pi.</li>
         </ol>
+        <div class="code-block" aria-label="One-time pairing code">
+          <div>
+            <span class="subtle">Or enter this code</span>
+            <code class="pair-code">{pairing.code}</code>
+          </div>
+          <button class="btn btn-sm" onclick={copyCode}><Icon name="copy" size={14} />Copy code</button>
+        </div>
         <div class="link-row">
           <code title={pairing.url}>{pairing.url}</code>
-          <button class="btn btn-sm" onclick={copyLink}><Icon name="copy" size={14} />Copy</button>
+          <button class="btn btn-sm" onclick={copyLink}><Icon name="copy" size={14} />Copy link</button>
         </div>
         <p class="subtle expiry" role="timer" aria-live="off">
           {#if expired}This code expired. Create a new one.{:else}One-time code · expires in {countdown(remaining)}{/if}
@@ -252,6 +269,30 @@
     display: grid;
     gap: 4px;
     color: var(--text-2);
+  }
+
+  .code-block {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius-sm);
+    background: var(--accent-soft);
+  }
+
+  .code-block > div {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .pair-code {
+    font: 800 1.35rem/1.1 var(--mono);
+    letter-spacing: 0.16em;
+    color: var(--accent-text);
+    user-select: all;
   }
 
   .link-row {
@@ -393,6 +434,16 @@
     .devices li {
       flex-wrap: wrap;
       padding: 14px 16px;
+    }
+
+    .code-block {
+      width: 100%;
+      align-items: stretch;
+      flex-direction: column;
+    }
+
+    .code-block .btn {
+      width: 100%;
     }
 
     .device-actions {
