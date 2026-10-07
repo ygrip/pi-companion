@@ -40,7 +40,16 @@
         <div id="empty" class="empty">Select a Pi session.</div>
         <div id="detail" hidden>
           <div class="session-head">
-            <div><div class="title-row"><h2 id="title"></h2><span id="remoteState" class="pill"></span></div><p id="meta"></p></div>
+            <div>
+              <div class="title-row"><h2 id="title"></h2><span id="remoteState" class="pill"></span></div>
+              <div class="session-facts">
+                <span id="shortTitle" class="pill"></span>
+                <span id="sessionStatus" class="pill status-pill"></span>
+                <span id="sessionModel" class="pill"></span>
+                <span id="sessionEffort" class="pill"></span>
+              </div>
+              <p id="meta"></p>
+            </div>
             <button id="abort" class="danger">Abort</button>
           </div>
 
