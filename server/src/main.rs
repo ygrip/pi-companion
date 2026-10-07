@@ -11,7 +11,7 @@ use axum::{
         Multipart, Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse},
     routing::{delete, get, post},
     Json, Router,
@@ -203,6 +203,7 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -231,9 +232,9 @@ async fn list_sessions(State(state): State<AppState>) -> Json<SessionsResponse> 
 
 async fn list_sessions_remote(
     State(state): State<AppState>,
-    Query(auth): Query<DeviceAuth>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<SessionsResponse>> {
-    authorize_device(&state, auth.token.as_deref()).await?;
+    authorize_device(&state, bearer_token(&headers)?).await?;
     let sessions = state
         .sessions
         .read()
@@ -331,9 +332,9 @@ async fn list_files(
 async fn list_files_remote(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-    Query(auth): Query<DeviceAuth>,
+    headers: HeaderMap,
 ) -> ApiResult<Json<FilesResponse>> {
-    authorize_device(&state, auth.token.as_deref()).await?;
+    authorize_device(&state, bearer_token(&headers)?).await?;
     require_remote_session(&state, &session_id).await?;
     Ok(Json(FilesResponse { files: session_files(&state, &session_id).await }))
 }
@@ -349,10 +350,10 @@ async fn upload_file(
 async fn upload_file_remote(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
-    Query(auth): Query<DeviceAuth>,
+    headers: HeaderMap,
     multipart: Multipart,
 ) -> ApiResult<Json<TempFile>> {
-    authorize_device(&state, auth.token.as_deref()).await?;
+    authorize_device(&state, bearer_token(&headers)?).await?;
     require_remote_session(&state, &session_id).await?;
     store_upload(&state, &session_id, multipart).await.map(Json)
 }
@@ -420,9 +421,9 @@ async fn delete_file_local(
 async fn delete_file_remote(
     State(state): State<AppState>,
     Path((session_id, file_id)): Path<(String, String)>,
-    Query(auth): Query<DeviceAuth>,
+    headers: HeaderMap,
 ) -> ApiResult<StatusCode> {
-    authorize_device(&state, auth.token.as_deref()).await?;
+    authorize_device(&state, bearer_token(&headers)?).await?;
     require_remote_session(&state, &session_id).await?;
     delete_temp_file(&state, &session_id, &file_id).await?;
     Ok(StatusCode::NO_CONTENT)
@@ -477,17 +478,33 @@ async fn browser_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl
 async fn browser_ws_remote(
     ws: WebSocketUpgrade,
     State(state): State<AppState>,
-    Query(auth): Query<DeviceAuth>,
+    headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
-    authorize_device(&state, auth.token.as_deref()).await?;
-    Ok(ws.on_upgrade(move |socket| browser_socket(socket, state, true)))
+    let token = websocket_token(&headers)?;
+    authorize_device(&state, token).await?;
+    Ok(ws.protocols(["pi-companion"]).on_upgrade(move |socket| browser_socket(socket, state, true)))
 }
 
 async fn browser_socket(socket: WebSocket, state: AppState, remote: bool) {
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.browser_tx.subscribe();
+    let event_state = state.clone();
     let send_task = tokio::spawn(async move {
         while let Ok(value) = events.recv().await {
+            if remote {
+                let session_id = value
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .or_else(|| value.get("session").and_then(|s| s.get("id")).and_then(Value::as_str));
+                let Some(session_id) = session_id else { continue };
+                let sessions = event_state.sessions.read().await;
+                let allowed = sessions
+                    .get(session_id)
+                    .and_then(|s| s.snapshot.get("remoteEnabled"))
+                    .and_then(Value::as_bool)
+                    == Some(true);
+                if !allowed { continue; }
+            }
             if sender.send(Message::Text(value.to_string().into())).await.is_err() {
                 break;
             }
@@ -611,8 +628,7 @@ async fn require_remote_session(state: &AppState, session_id: &str) -> ApiResult
     }
 }
 
-async fn authorize_device(state: &AppState, token: Option<&str>) -> ApiResult<()> {
-    let token = token.ok_or((StatusCode::UNAUTHORIZED, "Missing device token.".into()))?;
+async fn authorize_device(state: &AppState, token: &str) -> ApiResult<()> {
     let hash = hash_token(token);
     let mut devices = state.devices.write().await;
     if let Some(device) = devices.values_mut().find(|d| d.token_hash == hash) {
@@ -620,6 +636,30 @@ async fn authorize_device(state: &AppState, token: Option<&str>) -> ApiResult<()
         return Ok(());
     }
     Err((StatusCode::UNAUTHORIZED, "Invalid device token.".into()))
+}
+
+fn bearer_token(headers: &HeaderMap) -> ApiResult<&str> {
+    let value = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing device credential.".into()))?;
+    value
+        .strip_prefix("Bearer ")
+        .filter(|token| !token.is_empty())
+        .ok_or((StatusCode::UNAUTHORIZED, "Invalid authorization header.".into()))
+}
+
+fn websocket_token(headers: &HeaderMap) -> ApiResult<&str> {
+    let protocols = headers
+        .get("sec-websocket-protocol")
+        .and_then(|value| value.to_str().ok())
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing WebSocket credential.".into()))?;
+    protocols
+        .split(',')
+        .map(str::trim)
+        .find_map(|value| value.strip_prefix("token."))
+        .filter(|token| !token.is_empty())
+        .ok_or((StatusCode::UNAUTHORIZED, "Missing WebSocket device credential.".into()))
 }
 
 fn hash_token(token: &str) -> String {
