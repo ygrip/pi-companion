@@ -20,7 +20,8 @@ export class CompanionBridge {
     id: this.sessionId,
     cwd: process.cwd(),
     pid: process.pid,
-    idle: true,
+    shortTitle: process.cwd().split(/[\\/]/).filter(Boolean).pop() ?? "Pi",
+    status: "idle",
     remoteEnabled: false,
     connectedAt: new Date().toISOString()
   };
@@ -32,15 +33,18 @@ export class CompanionBridge {
     this.snapshot = {
       ...this.snapshot,
       cwd: ctx.cwd,
-      model: ctx.model?.id,
-      thinkingLevel: ctx.thinkingLevel,
-      idle: ctx.isIdle()
+      shortTitle: this.snapshot.name?.trim() || ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
+      mainModel: ctx.model?.id,
+      effort: ctx.thinkingLevel,
+      status: ctx.isIdle() ? "idle" : "active"
     };
   }
 
   setName(name?: string) {
     this.snapshot.name = name;
-    this.send({ type: "session.update", session: { name } });
+    const shortTitle = name?.trim() || this.snapshot.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
+    this.snapshot.shortTitle = shortTitle;
+    this.send({ type: "session.update", session: { name, shortTitle } });
   }
 
   setRemoteEnabled(remoteEnabled: boolean) {
@@ -84,9 +88,9 @@ export class CompanionBridge {
     this.send({ type: "event", event, payload });
   }
 
-  updateIdle(idle: boolean) {
-    this.snapshot.idle = idle;
-    this.send({ type: "session.update", session: { idle } });
+  updateStatus(status: "active" | "idle" | "stopped") {
+    this.snapshot.status = status;
+    this.send({ type: "session.update", session: { status } });
   }
 
   async ask(question: string, options?: string[]) {
