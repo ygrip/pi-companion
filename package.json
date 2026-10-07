@@ -4,12 +4,14 @@
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",
-    "pi",
     "pi-extension",
     "pi-coding-agent",
+    "pi",
     "remote-control",
+    "remote-agent",
     "companion",
-    "dashboard",
+    "session-dashboard",
+    "developer-tools",
     "mobile"
   ],
   "homepage": "https://github.com/ygrip/pi-companion#readme",
@@ -84,5 +86,8 @@
     "@google/genai": false,
     "protobufjs": false,
     "fsevents": false
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
