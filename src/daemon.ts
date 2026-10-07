@@ -40,13 +40,20 @@ function isLocalTarget() {
   }
 }
 
-export async function isDaemonUp(timeoutMs = 800) {
+type DaemonContext = { version?: string; pid?: number };
+
+async function daemonContext(timeoutMs = 800): Promise<DaemonContext | null> {
   try {
     const response = await fetch(adminHttpUrl() + "/api/context", { signal: AbortSignal.timeout(timeoutMs) });
-    return response.ok;
+    if (!response.ok) return null;
+    return await response.json() as DaemonContext;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export async function isDaemonUp(timeoutMs = 800) {
+  return Boolean(await daemonContext(timeoutMs));
 }
 
 function packageVersion() {
@@ -182,13 +189,51 @@ async function acquireLock() {
   }
 }
 
-async function waitForDaemon(ms: number) {
+async function waitForDaemon(ms: number, expectedVersion?: string) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (await isDaemonUp(500)) return true;
+    const context = await daemonContext(500);
+    if (context && (!expectedVersion || context.version === expectedVersion)) return true;
     await new Promise(resolve => setTimeout(resolve, 300));
   }
   return false;
+}
+
+async function waitForDaemonDown(ms: number) {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (!(await isDaemonUp(300))) return true;
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+  return false;
+}
+
+async function stopDaemonForUpgrade(context: DaemonContext, log: DaemonLog) {
+  try {
+    const response = await fetch(adminHttpUrl() + "/api/shutdown", {
+      method: "POST",
+      signal: AbortSignal.timeout(2_000)
+    });
+    if (response.ok && await waitForDaemonDown(5_000)) return true;
+  } catch {
+    // Older daemons do not have /api/shutdown. Fall through to a local process stop.
+  }
+
+  try {
+    if (typeof context.pid === "number" && Number.isInteger(context.pid) && context.pid > 1) {
+      process.kill(context.pid, "SIGTERM");
+    } else if (process.platform === "win32") {
+      await execFileAsync("taskkill", ["/IM", "pi-companion-server.exe", "/F"]);
+    } else {
+      await execFileAsync("pkill", ["-f", "pi-companion-server"]);
+    }
+  } catch {
+    // The process may already have exited between the probe and the stop attempt.
+  }
+
+  const stopped = await waitForDaemonDown(5_000);
+  if (!stopped) log("Could not stop the older Pi Companion daemon automatically.", "warning");
+  return stopped;
 }
 
 /**
@@ -196,21 +241,32 @@ async function waitForDaemon(ms: number) {
  * Never spawns when a daemon (manual `cargo run`, another session's daemon, …) is already up.
  */
 export async function ensureDaemon(log: DaemonLog) {
-  if (await isDaemonUp()) return true;
-  if (process.env.PI_COMPANION_AUTOSTART === "0" || !isLocalTarget()) return false;
+  const expectedVersion = packageVersion();
+  const running = await daemonContext();
+  if (running?.version === expectedVersion) return true;
+  if (process.env.PI_COMPANION_AUTOSTART === "0" || !isLocalTarget()) return Boolean(running);
 
   const release = await acquireLock();
-  if (!release) return await waitForDaemon(10_000); // another Pi session is starting it
+  if (!release) return await waitForDaemon(10_000, expectedVersion); // another Pi session is starting/upgrading it
   try {
-    if (await isDaemonUp()) return true; // started while we were taking the lock
+    const current = await daemonContext();
+    if (current?.version === expectedVersion) return true;
+
+    if (current) {
+      log(
+        "Updating Pi Companion daemon from v" + (current.version ?? "unknown") + " to v" + expectedVersion + "…"
+      );
+      if (!(await stopDaemonForUpgrade(current, log))) return false;
+    }
+
     const binary = await resolveDaemonBinary(log);
     await new Promise<void>((resolve, reject) => {
       const child = spawn(binary, [], { detached: true, stdio: "ignore", windowsHide: true });
       child.once("error", reject);
       child.once("spawn", () => { child.unref(); resolve(); });
     });
-    const up = await waitForDaemon(10_000);
-    if (!up) log("Pi Companion daemon did not become ready (" + binary + ")", "warning");
+    const up = await waitForDaemon(10_000, expectedVersion);
+    if (!up) log("Pi Companion daemon v" + expectedVersion + " did not become ready (" + binary + ")", "warning");
     return up;
   } catch (error) {
     log("Could not start Pi Companion daemon: " + (error instanceof Error ? error.message : String(error)), "warning");
