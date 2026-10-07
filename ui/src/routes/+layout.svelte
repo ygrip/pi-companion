@@ -62,6 +62,12 @@
     theme.init();
     void companion.boot();
 
+    // The PWA worker only caches the shell and immutable static assets. API/session data
+    // stays network-only so an installed Companion never replays stale control state.
+    if ('serviceWorker' in navigator && window.isSecureContext) {
+      void navigator.serviceWorker.register('/service-worker.js', { scope: '/' }).catch(() => {});
+    }
+
     // A file dropped outside a drop zone would make the browser navigate to file:///…,
     // which it blocks with a security error. Swallow stray drops everywhere.
     const swallow = (event: DragEvent) => {
