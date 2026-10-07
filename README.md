@@ -112,6 +112,20 @@ which destroys one temporary file by opaque id.
 
 This means the agent can consume uploaded artifacts using its normal file capabilities while Pi Companion retains ownership of upload placement and cleanup.
 
+## Session identity
+
+Every registered Pi session publishes a compact display model to the daemon:
+
+- session name
+- short title
+- status: active, idle, or stopped
+- main model
+- thinking effort
+- working directory and process id
+- remote-control state
+
+Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period.
+
 ## Browser controls
 
 The initial slice supports:
@@ -144,6 +158,14 @@ In another shell:
 For extension work while running the server manually:
 
     PI_COMPANION_AUTOSTART=0 pi -e ./src/index.ts
+
+## Releases
+
+A tag matching vX.Y.Z triggers the release workflow.
+
+Before publishing, the workflow requires X.Y.Z to match both package.json and server/Cargo.toml. It then runs TypeScript and Rust checks, builds native daemon archives for Linux x86_64, macOS arm64, macOS x86_64, and Windows x86_64, generates SHA-256 checksums, and creates a GitHub Release.
+
+If the repository has an NPM_TOKEN secret, the same validated tag also publishes @ygrip/pi-companion to npm with provenance. Without that secret, the native GitHub Release still proceeds.
 
 ## Security boundary
 
