@@ -7,16 +7,25 @@
   import type { Settings, SettingsResponse } from '#lib/types.ts';
 
   let data = $state<SettingsResponse | null>(null);
-  let draft = $state<Settings>({ publicUrl: '', pairingTtlMinutes: 5, maxUploadMb: 25 });
+  let draft = $state<Settings>({ publicUrl: '', pairingTtlMinutes: 5, maxUploadMb: 25, allowedUploadTypes: [] });
+  /** Comma or newline separated MIME patterns, edited as text. */
+  let typesText = $state('');
   let saving = $state(false);
   let error = $state('');
   let loadError = $state('');
+
+  const parseTypes = (text: string) =>
+    text
+      .split(/[\s,]+/)
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
 
   const dirty = $derived(
     Boolean(data) &&
       (draft.publicUrl.trim() !== data!.settings.publicUrl ||
         Number(draft.pairingTtlMinutes) !== data!.settings.pairingTtlMinutes ||
-        Number(draft.maxUploadMb) !== data!.settings.maxUploadMb)
+        Number(draft.maxUploadMb) !== data!.settings.maxUploadMb ||
+        parseTypes(typesText).join(',') !== data!.settings.allowedUploadTypes.join(','))
   );
 
   const themes: { value: ThemePreference; label: string; hint: string; icon: IconName }[] = [
@@ -28,6 +37,7 @@
   function apply(response: SettingsResponse) {
     data = response;
     draft = { ...response.settings };
+    typesText = response.settings.allowedUploadTypes.join(', ');
   }
 
   onMount(async () => {
@@ -46,7 +56,8 @@
         await companion.saveSettings({
           publicUrl: draft.publicUrl.trim(),
           pairingTtlMinutes: Number(draft.pairingTtlMinutes),
-          maxUploadMb: Number(draft.maxUploadMb)
+          maxUploadMb: Number(draft.maxUploadMb),
+          allowedUploadTypes: parseTypes(typesText)
         })
       );
       toasts.show('Settings saved.', 'success');
@@ -122,6 +133,12 @@
             <label for="max-upload">Largest file</label>
             <div class="unit"><input id="max-upload" class="input" type="number" min="1" max={data.limits.maxUploadMb} inputmode="numeric" bind:value={draft.maxUploadMb} required /><span>MB</span></div>
             <span class="hint">1 to {data.limits.maxUploadMb} MB per file.</span>
+          </div>
+          <div class="field">
+            <label for="upload-types">Allowed file types</label>
+            <input id="upload-types" class="input" type="text" placeholder="Any type" bind:value={typesText}
+              autocomplete="off" spellcheck="false" aria-describedby="upload-types-hint" />
+            <span class="hint" id="upload-types-hint">Optional. MIME types separated by commas, for example <code>image/*, application/pdf, text/plain</code>. Leave empty to accept any file.</span>
           </div>
         </div>
       </section>

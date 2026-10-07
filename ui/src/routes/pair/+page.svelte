@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onDestroy, onMount, tick } from 'svelte';
   import { goto } from '$app/navigation';
   import { page } from '$app/state';
+  import jsQR from 'jsqr';
   import logo from '../../assets/pi-companion.webp';
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
@@ -8,10 +10,20 @@
 
   const invite = $derived(page.url.searchParams.get('invite'));
   let name = $state(guessName());
+  let code = $state('');
   let pairing = $state(false);
   let error = $state('');
+  let scannerAvailable = $state(false);
+  let scanning = $state(false);
+  let cameraError = $state('');
+  let video = $state<HTMLVideoElement>();
+  let stream: MediaStream | undefined;
+  let frame = 0;
+  let lastScan = 0;
+  let scanCanvas = $state<HTMLCanvasElement>();
 
   function guessName() {
+    if (typeof navigator === 'undefined') return 'My device';
     const agent = navigator.userAgent;
     if (/iPhone/.test(agent)) return 'iPhone';
     if (/iPad/.test(agent)) return 'iPad';
@@ -21,25 +33,92 @@
     return 'My device';
   }
 
+  onMount(() => {
+    scannerAvailable = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia);
+  });
+
+  onDestroy(stopCamera);
+
   // Already paired: nothing to do here.
   $effect(() => {
     if (companion.booted && companion.paired && !pairing) void goto('/', { replaceState: true });
   });
 
-  async function pair() {
-    if (!invite) return;
+  function stopCamera() {
+    if (frame && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(frame);
+    frame = 0;
+    stream?.getTracks().forEach((track) => track.stop());
+    stream = undefined;
+    scanning = false;
+    if (video) video.srcObject = null;
+  }
+
+  async function claim(source: { invite: string } | { code: string }) {
     error = '';
     pairing = true;
+    stopCamera();
     try {
-      await companion.claim(invite, name.trim());
+      await companion.claim(source, name.trim());
       await goto('/', { replaceState: true });
     } catch (e) {
-      const message = errorMessage(e);
-      error = /invalid|already used|expired/i.test(message)
-        ? 'This code was already used or has expired. Ask your computer for a new one.'
-        : message;
+      error = errorMessage(e);
     } finally {
       pairing = false;
+    }
+  }
+
+  function handleCodeInput(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const compact = input.value.replace(/[^a-z0-9]/gi, '').slice(0, 8).toUpperCase();
+    code = compact.length > 4 ? `${compact.slice(0, 4)}-${compact.slice(4)}` : compact;
+  }
+
+  function submit(event: SubmitEvent) {
+    event.preventDefault();
+    if (!name.trim()) return;
+    if (invite) void claim({ invite });
+    else if (code.replace(/[^a-z0-9]/gi, '').length === 8) void claim({ code });
+  }
+
+  function inspectFrame() {
+    if (!scanning || !video || !scanCanvas) return;
+    frame = requestAnimationFrame(inspectFrame);
+    if (performance.now() - lastScan < 120 || video.readyState < HTMLMediaElement.HAVE_CURRENT_DATA) return;
+    lastScan = performance.now();
+    const context = scanCanvas.getContext('2d', { willReadFrequently: true });
+    if (!context) return;
+    const scale = Math.min(1, 480 / video.videoWidth);
+    scanCanvas.width = Math.round(video.videoWidth * scale);
+    scanCanvas.height = Math.round(video.videoHeight * scale);
+    context.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+    const pixels = context.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+    const result = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: 'dontInvert' });
+    if (!result) return;
+    try {
+      const url = new URL(result.data, location.href);
+      const token = url.searchParams.get('invite');
+      if (!token) return;
+      stopCamera();
+      void claim({ invite: token });
+    } catch {
+      cameraError = 'That QR code is not a valid Pi Companion pairing link.';
+    }
+  }
+
+  async function startCamera() {
+    cameraError = '';
+    if (!scannerAvailable) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      scanning = true;
+      await tick();
+      if (!video) return stopCamera();
+      video.srcObject = stream;
+      await video.play();
+      frame = requestAnimationFrame(inspectFrame);
+    } catch (e) {
+      stopCamera();
+      cameraError = errorMessage(e) || 'Could not start the camera. Check camera permission and try again.';
     }
   }
 </script>
@@ -54,27 +133,45 @@
       <span class="eyebrow">Access removed</span>
       <h1>This device was unpaired</h1>
       <p class="muted">Your computer revoked this device. To use it again, scan a new pairing code from <strong>Devices</strong> on your computer.</p>
-    {:else if invite}
-      <span class="eyebrow">Pair this device</span>
-      <h1>Connect to your computer</h1>
-      <p class="muted">Give this device a name so you can recognise it in the Devices list later.</p>
-      <form onsubmit={(event) => { event.preventDefault(); void pair(); }}>
+    {:else}
+      <span class="eyebrow">{invite ? 'Pair this device' : 'Not paired yet'}</span>
+      <h1>{invite ? 'Connect to your computer' : 'Connect this device'}</h1>
+      <p class="muted">Scan a pairing QR code or enter the unique code shown in Pi Companion on your computer.</p>
+
+      {#if !invite}
+        <section class="scanner" aria-label="QR code scanner">
+          {#if scannerAvailable}
+            {#if scanning}
+              <video bind:this={video} playsinline muted aria-label="Camera view for scanning the pairing QR code"></video>
+              <button class="btn btn-ghost" type="button" onclick={stopCamera}>Stop camera</button>
+            {:else}
+              <button class="btn" type="button" onclick={startCamera}><Icon name="devices" />Scan QR code with camera</button>
+            {/if}
+          {:else}
+            <p class="subtle">Live scanning requires a secure camera connection. Scan the QR code with your phone’s camera app to open its pairing link (<code>/pair?invite=…</code>), or enter the code below.</p>
+          {/if}
+          {#if cameraError}<p class="error" role="alert">{cameraError}</p>{/if}
+          <canvas bind:this={scanCanvas} class="scan-canvas" aria-hidden="true"></canvas>
+        </section>
+        <div class="divider"><span>or enter the code</span></div>
+      {/if}
+
+      <form onsubmit={submit}>
+        {#if !invite}
+          <div class="field">
+            <label for="pair-code">Pairing code</label>
+            <input id="pair-code" class="input pair-code" value={code} oninput={handleCodeInput} placeholder="XXXX-XXXX" maxlength="9" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required aria-describedby="pair-code-hint" />
+            <span id="pair-code-hint" class="subtle small">Enter the one-time code shown on your computer.</span>
+          </div>
+        {/if}
         <div class="field">
           <label for="device-name">Device name</label>
           <input id="device-name" class="input" bind:value={name} maxlength="80" required autocomplete="off" />
-          {#if error}<span class="error" role="alert">{error}</span>{/if}
         </div>
-        <button class="btn btn-primary" disabled={pairing || !name.trim()}>{pairing ? 'Pairing…' : 'Pair device'}</button>
+        {#if error}<p class="error" role="alert">{error}</p>{/if}
+        <button class="btn btn-primary" disabled={pairing || !name.trim() || (!invite && code.replace(/[^a-z0-9]/gi, '').length !== 8)}>{pairing ? 'Connecting…' : 'Connect device'}</button>
       </form>
       <p class="subtle small"><Icon name="check" size={14} />The code works once. Your computer can disconnect or revoke this device at any time.</p>
-    {:else}
-      <span class="eyebrow">Not paired yet</span>
-      <h1>Scan a code to get started</h1>
-      <ol class="muted">
-        <li>On your computer, open Pi Companion and go to <strong>Devices</strong>.</li>
-        <li>Choose <strong>Pair a device</strong>.</li>
-        <li>Scan the code with this device’s camera.</li>
-      </ol>
     {/if}
   </section>
 </div>
@@ -85,42 +182,28 @@
     display: grid;
     place-items: center;
     padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
-    background: radial-gradient(circle at 50% 0%, var(--accent-soft), transparent 60%), var(--bg);
+    background: radial-gradient(circle at 50% 0%, var(--accent-soft), transparent 60%);
   }
 
   .pair {
-    width: min(440px, 100%);
+    width: min(460px, 100%);
     display: grid;
     gap: 12px;
     padding: 28px;
   }
 
-  .pair img {
-    border-radius: 15px;
-    margin-bottom: 6px;
-  }
+  .pair img { border-radius: 15px; margin-bottom: 6px; }
+  form { display: grid; gap: 14px; margin-top: 6px; }
+  .field { display: grid; gap: 6px; }
+  .field label { font-weight: 600; }
+  .pair-code { font: 700 1.2rem/1 var(--mono); letter-spacing: 0.16em; }
+  .scanner { display: grid; justify-items: center; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--clay-radius); background: var(--surface-2); }
+  video { width: min(100%, 320px); max-height: 280px; border-radius: 14px; object-fit: cover; }
+  .scan-canvas { display: none; }
+  .divider { display: flex; align-items: center; gap: 12px; color: var(--text-3); font-size: 0.82rem; }
+  .divider::before, .divider::after { content: ''; height: 1px; flex: 1; background: var(--border); }
+  .error { color: var(--danger); font-size: 0.85rem; }
+  .small { display: flex; gap: 6px; font-size: 0.8rem; }
 
-  form {
-    display: grid;
-    gap: 14px;
-    margin-top: 6px;
-  }
-
-  ol {
-    margin: 0;
-    padding-left: 20px;
-    display: grid;
-    gap: 6px;
-  }
-
-  .error {
-    color: var(--danger);
-    font-size: 0.85rem;
-  }
-
-  .small {
-    display: flex;
-    gap: 6px;
-    font-size: 0.8rem;
-  }
+  @media (max-width: 480px) { .pair { padding: 22px; } }
 </style>

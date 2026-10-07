@@ -43,6 +43,8 @@ export type TempFile = {
   name: string;
   path: string;
   size: number;
+  /** MIME type the daemon accepted the upload as. */
+  mime?: string;
   createdAt: number | string;
 };
 
@@ -51,6 +53,8 @@ export type PairedDevice = {
   name: string;
   pairedAt: number;
   lastSeen: number;
+  /** Browser user agent recorded at pairing. */
+  userAgent?: string;
   connected: boolean;
   connections: number;
 };
@@ -66,6 +70,8 @@ export type Settings = {
   publicUrl: string;
   pairingTtlMinutes: number;
   maxUploadMb: number;
+  /** MIME allowlist for uploads (`image/*`, `application/pdf`); empty allows everything. */
+  allowedUploadTypes: string[];
 };
 
 export type SettingsResponse = {

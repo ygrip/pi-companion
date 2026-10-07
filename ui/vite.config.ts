@@ -26,9 +26,17 @@ export default defineConfig({
     })
   ],
   server: {
+    // The daemon only accepts its own origin, so present proxied requests as coming from it.
     proxy: {
-      '/api': daemon,
-      '/ws': { target: daemon.replace(/^http/, 'ws'), ws: true }
+      '/api': {
+        target: daemon,
+        configure: (proxy) => proxy.on('proxyReq', (request) => request.setHeader('origin', daemon))
+      },
+      '/ws': {
+        target: daemon.replace(/^http/, 'ws'),
+        ws: true,
+        configure: (proxy) => proxy.on('proxyReqWs', (request) => request.setHeader('origin', daemon))
+      }
     }
   },
   build: {

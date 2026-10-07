@@ -38,6 +38,27 @@ function summarize(value: unknown, max = 400) {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
+/**
+ * Bounded copy of tool arguments for the transcript: long strings cut, long arrays and deep
+ * nesting elided, so a huge `write` payload never floods the companion socket.
+ */
+function compactInput(value: unknown, depth = 0): unknown {
+  if (typeof value === "string") return value.length > 2000 ? value.slice(0, 2000) + "…" : value;
+  if (value === null || typeof value !== "object") return value;
+  if (depth >= 3) return Array.isArray(value) ? "[…]" : "{…}";
+  if (Array.isArray(value)) {
+    const items = value.slice(0, 20).map(item => compactInput(item, depth + 1));
+    return value.length > 20 ? [...items, "… " + (value.length - 20) + " more"] : items;
+  }
+  const entries = Object.entries(value).slice(0, 30);
+  return Object.fromEntries(entries.map(([key, item]) => [key, compactInput(item, depth + 1)]));
+}
+
+function toolInput(args: unknown) {
+  const input = compactInput(args);
+  return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
+}
+
 function resultText(result: unknown) {
   const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content;
   if (Array.isArray(content)) {
@@ -82,8 +103,9 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
   pi.on("tool_execution_start", (event, ctx) => {
     bridge.setContext(ctx);
-    bridge.emit("tool.start", { toolCallId: event.toolCallId, toolName: event.toolName, args: summarize(event.args) });
+    // Publish a relayed question before anything else so the companion shows it immediately.
     bridge.toolDialogs.start(event.toolName, event.toolCallId, event.args);
+    bridge.emit("tool.start", { toolCallId: event.toolCallId, toolName: event.toolName, args: summarize(event.args), input: toolInput(event.args) });
   });
   pi.on("tool_execution_end", (event, ctx) => {
     bridge.setContext(ctx);

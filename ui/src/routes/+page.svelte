@@ -1,16 +1,17 @@
 <script lang="ts">
   import { onMount, type Component } from 'svelte';
-  import piArt from '../assets/morph/pi.png';
-  import computerClay from '../assets/clay/computer.webp';
-  import mobileClay from '../assets/clay/mobile.webp';
+  import computerArt from '../assets/morph/computer.svg';
+  import phoneArt from '../assets/morph/phone.svg';
+  import terminalArt from '../assets/morph/terminal.svg';
   import bulbClay from '../assets/clay/bulb.webp';
   import chatBubbleClay from '../assets/clay/chat-bubble.webp';
+  import computerClay from '../assets/clay/computer.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
   import { companion } from '#lib/companion.svelte.ts';
 
-  // The dot field morphs Pi → computer → companion, on the same loop as Raksara.
-  const art = [piArt, computerClay, mobileClay];
+  // The dot field cycles through clear computer, phone and terminal shapes.
+  const art = [computerArt, phoneArt, terminalArt];
   let visual = $state<HTMLDivElement | null>(null);
   let DotField = $state<Component<any> | null>(null);
 
@@ -62,7 +63,7 @@
         images={art}
         anchor={visual}
         className="hero-field"
-        label="Dots shaping the Pi symbol, then a computer, then a phone companion" />
+        label="Dots morphing between a computer, phone and terminal window" />
     {/if}
     <div class="hero-copy">
       <span class="eyebrow">{companion.isAdmin ? 'Pi Companion' : 'Paired with your computer'}</span>
@@ -292,8 +293,8 @@
     padding: 12px 18px;
     text-decoration: none;
   }
+  .guide-tile > img, .section-head h2 img, .empty .empty-icon img { filter: sepia(0.55) saturate(1.65) hue-rotate(350deg); }
   .guide-tile > img, .section-head h2 img { width: 56px; height: 56px; object-fit: contain; flex: none; }
-  .guide-tile > span:nth-child(2) { display: grid; gap: 3px; }
   .guide-tile .btn { margin-left: auto; }
   .section-head h2 { display: flex; align-items: center; gap: 10px; }
   .empty .empty-icon img { width: 64px; height: 64px; object-fit: contain; }

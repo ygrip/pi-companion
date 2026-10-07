@@ -608,6 +608,7 @@ version = "0.2.0"
 dependencies = [
  "axum",
  "futures-util",
+ "http-body-util",
  "mime_guess",
  "qrcode",
  "rust-embed",
@@ -615,6 +616,8 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "tokio",
+ "tokio-tungstenite",
+ "tower",
  "tower-http",
  "tracing",
  "tracing-subscriber",

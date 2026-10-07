@@ -7,6 +7,7 @@ export type ActivityEntry = {
   body: string;
   status?: 'running' | 'ok' | 'error';
   toolCallId?: string;
+  input?: Record<string, unknown>;
   at: number;
 };
 
@@ -41,14 +42,19 @@ export function reduceBridgeMessage(entries: ActivityEntry[], message: any): Act
       }
       return cap([...entries, entry(kind, kind === 'thinking' ? 'Thinking' : 'Pi', String(payload.delta ?? ''))]);
     }
-    case 'tool.start':
+    case 'tool.start': {
+      const input = payload.input && typeof payload.input === 'object' && !Array.isArray(payload.input)
+        ? payload.input as Record<string, unknown>
+        : undefined;
       return cap([
         ...entries,
         entry('tool', String(payload.toolName ?? 'tool'), String(payload.args ?? ''), {
           status: 'running',
-          toolCallId: payload.toolCallId
+          toolCallId: payload.toolCallId,
+          input
         })
       ]);
+    }
     case 'tool.end': {
       let index = -1;
       for (let i = entries.length - 1; i >= 0; i--) {

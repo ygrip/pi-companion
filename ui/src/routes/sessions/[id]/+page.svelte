@@ -5,7 +5,7 @@
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
-  import { codeBlock, looksLikeJson, prettify, prettyJson, renderMarkdown } from '#lib/markdown.ts';
+  import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
 
@@ -14,6 +14,88 @@
     const split = entry.body.indexOf('\n→ ');
     if (split >= 0) return { args: entry.body.slice(0, split), result: entry.body.slice(split + 3) };
     return entry.toolCallId ? { args: entry.body, result: '' } : { args: '', result: entry.body };
+  }
+
+  type ToolSummary =
+    | { kind: 'command'; command: string }
+    | { kind: 'file'; path: string; range: string; oldText: string; newText: string }
+    | { kind: 'search'; pattern: string; path: string }
+    | { kind: 'questions'; questions: string[] }
+    | { kind: 'values'; values: { key: string; value: string }[] };
+
+  function inputFor(entry: ActivityEntry, args: string): Record<string, unknown> {
+    if (entry.input) return entry.input;
+    try {
+      const parsed: unknown = JSON.parse(args);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function textValue(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (value == null) return '';
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
+
+  function fallbackCommand(args: string): string {
+    const match = args.match(/["']?command["']?\s*:\s*"((?:\\.|[^"\\])*)/);
+    if (match) {
+      try {
+        return JSON.parse(`"${match[1]}"`);
+      } catch {
+        return match[1];
+      }
+    }
+    return args.replace(/[{}"]/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  function toolSummary(entry: ActivityEntry, args: string): ToolSummary {
+    const input = inputFor(entry, args);
+    const tool = entry.title.toLowerCase();
+    const first = (...keys: string[]) => keys.map((key) => input[key]).find((value) => value != null);
+    if (/^(bash|shell|run|execute|terminal)$/.test(tool)) {
+      return { kind: 'command', command: textValue(first('command', 'cmd') ?? fallbackCommand(args)).trim() };
+    }
+    if (/^(read|write|edit)$/.test(tool)) {
+      const lineRange = first('line_range', 'lineRange', 'lines');
+      const offset = first('offset');
+      const limit = first('limit', 'length', 'num_lines', 'numLines');
+      const rangeParts = lineRange != null ? [`lines ${textValue(lineRange)}`] : offset != null ? [`offset ${textValue(offset)}`] : [];
+      if (limit != null) rangeParts.push(`limit ${textValue(limit)}`);
+      const range = rangeParts.join(' · ');
+      return {
+        kind: 'file',
+        path: textValue(first('path', 'file_path', 'filePath') ?? 'unknown path'),
+        range,
+        oldText: textValue(first('oldText', 'old_text', 'old_string', 'old')),
+        newText: textValue(first('newText', 'new_text', 'new_string', 'new'))
+      };
+    }
+    if (/^(grep|find|ls|glob)$/.test(tool)) {
+      return {
+        kind: 'search',
+        pattern: textValue(first('pattern', 'query', 'name') ?? ''),
+        path: textValue(first('path', 'file_path', 'directory', 'cwd') ?? '')
+      };
+    }
+    if (/^(companion_ask_user|jar_ask)$/.test(tool)) {
+      const raw = first('questions', 'question', 'prompt');
+      const label = (item: unknown) =>
+        item && typeof item === 'object' && 'question' in item ? textValue(item.question) : textValue(item);
+      const questions = Array.isArray(raw) ? raw.map(label) : raw == null ? [] : [label(raw)];
+      return { kind: 'questions', questions };
+    }
+    const values = Object.entries(input).slice(0, 8).map(([key, value]) => ({
+      key,
+      value: textValue(value).replace(/\s+/g, ' ').slice(0, 120)
+    }));
+    if (!values.length && args.trim()) {
+      return { kind: 'values', values: [{ key: 'arguments', value: args.replace(/[{}"]/g, '').replace(/\s+/g, ' ').slice(0, 160) }] };
+    }
+    return { kind: 'values', values };
   }
 
   const lineCount = (text: string) => text.split('\n').length;
@@ -311,24 +393,50 @@
                       <div class="line-main">
                         {#if entry.kind === 'tool'}
                           {@const parts = toolParts(entry)}
+                          {@const summary = toolSummary(entry, parts.args)}
                           <div class="cmd">
                             <b>{entry.title}</b>
-                            {#if parts.args}<code class="args" title={parts.args}>{parts.args}</code>{/if}
                             {#if entry.status === 'running'}<span class="state run">running</span>
                             {:else if entry.status === 'ok'}<span class="state ok">ok</span>
                             {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
                           </div>
+                          {#if summary.kind === 'command' && summary.command}
+                            <pre class="command"><span aria-hidden="true">$ </span>{summary.command}</pre>
+                          {:else if summary.kind === 'file'}
+                            <div class="tool-summary">
+                              <code class="path-chip">{summary.path}</code>
+                              {#if summary.range}<span class="range">{summary.range}</span>{/if}
+                            </div>
+                            {#if entry.title.toLowerCase() === 'edit' && (summary.oldText || summary.newText)}
+                              <details class="edit-snippet">
+                                <summary>edit preview</summary>
+                                <div class="edit-pair">
+                                  {#if summary.oldText}<pre class="old-snippet">{summary.oldText}</pre>{/if}
+                                  {#if summary.newText}<pre class="new-snippet">{summary.newText}</pre>{/if}
+                                </div>
+                              </details>
+                            {/if}
+                          {:else if summary.kind === 'search'}
+                            <div class="tool-summary">
+                              {#if summary.pattern}<code class="pattern">{summary.pattern}</code>{/if}
+                              {#if summary.path}<code class="path-chip">{summary.path}</code>{/if}
+                            </div>
+                          {:else if summary.kind === 'questions'}
+                            {#if summary.questions.length}
+                              <ul class="question-list">{#each summary.questions as question}<li>{question}</li>{/each}</ul>
+                            {/if}
+                          {:else if summary.kind === 'values' && summary.values.length}
+                            <dl class="tool-values">
+                              {#each summary.values as value}
+                                <div><dt>{value.key}</dt><dd>{value.value}</dd></div>
+                              {/each}
+                            </dl>
+                          {/if}
                           {#if parts.result}
-                            {@const json = looksLikeJson(parts.result)}
-                            {@const shown = json ? prettyJson(parts.result) : parts.result}
-                            {@const lines = lineCount(shown)}
+                            {@const lines = lineCount(parts.result)}
                             <details class="out" open={entry.status === 'error' || lines <= 6}>
                               <summary>output · {lines} {lines === 1 ? 'line' : 'lines'}</summary>
-                              {#if json}
-                                <div use:prettify={{ text: shown, final: true }}>{@html codeBlock(shown, 'json')}</div>
-                              {:else}
-                                <pre>{shown}</pre>
-                              {/if}
+                              <pre class:error-output={entry.status === 'error'}>{parts.result}</pre>
                             </details>
                           {/if}
                         {:else if entry.kind === 'lifecycle'}
@@ -424,13 +532,15 @@
           </div>
         {:else}
           <form class="pane plan scroll" onsubmit={(event) => { event.preventDefault(); runPlan(); }}>
-            <div class="field">
-              <label for="plan-goal">What should Pi plan?</label>
-              <textarea id="plan-goal" class="textarea" rows="5" bind:value={plan} disabled={ended}
-                placeholder="Leave empty to plan from the current conversation"></textarea>
-              <span class="hint">Runs <code>/plan</code> in this session.</span>
+            <div class="plan-card clay">
+              <div class="field">
+                <label for="plan-goal">What should Pi plan?</label>
+                <textarea id="plan-goal" class="textarea" rows="5" bind:value={plan} disabled={ended}
+                  placeholder="Leave empty to plan from the current conversation"></textarea>
+                <span class="hint">Runs <code>/plan</code> in this session.</span>
+              </div>
+              <button class="btn-bento primary" disabled={ended}><Icon name="plan" size={18} />Ask Pi to plan</button>
             </div>
-            <button class="btn-bento primary" disabled={ended}><Icon name="plan" size={18} />Ask Pi to plan</button>
           </form>
         {/if}
       </div>
@@ -737,14 +847,6 @@
     color: var(--term-text);
   }
 
-  .args {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--term-dim);
-    font-size: 0.78rem;
-  }
 
   .state {
     flex: none;
@@ -762,6 +864,110 @@
   .state.err {
     color: var(--term-err);
   }
+  .command {
+    margin: 4px 0 2px;
+    padding: 10px 12px;
+    border-left: 2px solid var(--term-accent);
+    border-radius: 0 10px 10px 0;
+    background: var(--term-bg);
+    color: var(--term-text);
+    font: 0.9rem/1.5 var(--mono);
+    overflow-wrap: anywhere;
+  }
+
+  .command span {
+    color: var(--term-accent);
+    font-weight: 700;
+  }
+
+  .tool-summary {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 4px 0;
+  }
+
+  .path-chip,
+  .pattern {
+    max-width: 100%;
+    padding: 3px 8px;
+    border: 1px solid var(--term-line);
+    border-radius: 8px;
+    background: var(--term-bg);
+    color: var(--term-text);
+    font: 0.78rem/1.5 var(--mono);
+    overflow-wrap: anywhere;
+  }
+
+  .pattern {
+    color: var(--term-accent);
+  }
+
+  .range {
+    color: var(--term-dim);
+    font-size: 0.75rem;
+  }
+
+  .question-list {
+    margin: 4px 0;
+    padding-left: 2ch;
+  }
+
+  .tool-values {
+    display: grid;
+    gap: 3px;
+    margin: 4px 0;
+    font-size: 0.78rem;
+  }
+
+  .tool-values > div {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    gap: 1ch;
+  }
+
+  .tool-values dt {
+    color: var(--term-dim);
+  }
+
+  .tool-values dd {
+    min-width: 0;
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .edit-snippet {
+    margin: 4px 0;
+  }
+
+  .edit-pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 6px;
+    margin: 4px 0 4px 1.5ch;
+  }
+
+  .edit-pair pre {
+    min-width: 0;
+    padding: 6px 8px;
+    border-radius: 8px;
+    font-size: 0.76rem;
+  }
+
+  .old-snippet {
+    background: var(--diff-del);
+  }
+
+  .new-snippet {
+    background: var(--diff-add);
+  }
+
+  .error-output {
+    color: var(--term-err) !important;
+    border-left-color: var(--term-err) !important;
+  }
+
 
   /* Collapsible tool output and thinking. */
   details.out,
@@ -1075,7 +1281,24 @@
   }
 
   .plan {
-    max-width: 720px;
+    width: 100%;
+    max-width: none;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: stretch;
+  }
+
+  .plan-card {
+    width: 100%;
+    min-height: 100%;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    gap: 20px;
+    padding: clamp(18px, 3vw, 32px);
+  }
+
+  .plan-card .field {
+    width: 100%;
   }
 
   .none {
@@ -1156,12 +1379,30 @@
     font-weight: 700;
   }
 
-  /* ---------- Composer: a shell prompt ---------- */
-
   .composer {
+    --composer-inset: var(--clay-pressed);
     flex: none;
     display: grid;
     gap: 8px;
+    padding: 12px;
+    border: 1px solid var(--term-line);
+    border-radius: var(--radius-bento);
+    background: var(--surface-2);
+    box-shadow: var(--composer-inset);
+  }
+
+  :global([data-theme='dark']) .composer {
+    --composer-inset: inset 2px 3px 8px rgb(0 0 0 / 0.5), inset -2px -2px 6px rgb(255 255 255 / 0.05);
+  }
+
+  :global([data-theme='light']) .composer {
+    --composer-inset: inset 2px 3px 8px rgb(150 120 70 / 0.24), inset -2px -2px 6px rgb(255 255 255 / 0.9);
+  }
+
+  .composer:focus-within {
+    border-color: var(--accent);
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .ask-pill {
@@ -1185,18 +1426,14 @@
   .prompt-row {
     display: flex;
     align-items: flex-end;
-    gap: 8px;
-    padding: 8px 8px 8px 14px;
-    border: 1px solid var(--term-line);
-    border-radius: var(--radius-bento);
-    background: var(--term-bg);
+    gap: 10px;
+    min-height: 72px;
+    padding: 2px 4px;
+    border: 0;
+    border-radius: 12px;
+    background: transparent;
     color: var(--term-text);
     font-family: var(--mono);
-  }
-
-  .prompt-row:focus-within {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
   .ps1 {
@@ -1208,14 +1445,14 @@
   .prompt-row textarea {
     flex: 1;
     min-width: 0;
-    min-height: 36px;
+    min-height: 60px;
     max-height: 180px;
-    padding: 7px 0;
+    padding: 9px 0;
     border: 0;
     background: transparent;
     color: var(--term-text);
     caret-color: var(--term-accent);
-    font: 0.9rem/1.5 var(--mono);
+    font: 1rem/1.55 var(--mono);
     resize: none;
     outline: none;
   }

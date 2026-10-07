@@ -207,6 +207,11 @@ class Companion {
         );
         break;
       }
+      case 'resync':
+        // This socket fell behind and the daemon dropped frames; re-read the snapshots so a
+        // missed question or status change shows up now instead of at the next reconnect.
+        void this.refresh().catch(() => {});
+        break;
       case 'files.update':
         this.files = { ...this.files, [message.sessionId]: message.files };
         break;
@@ -286,11 +291,11 @@ class Companion {
     return this.request<Pairing>('/api/pairing/start', { method: 'POST' });
   }
 
-  async claim(invite: string, deviceName: string) {
+  async claim(source: { invite: string } | { code: string }, deviceName: string) {
     const response = await fetch('/api/pairing/claim', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ invite, deviceName })
+      body: JSON.stringify({ ...source, deviceName })
     });
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || response.statusText);
     const result = (await response.json()) as { token: string };

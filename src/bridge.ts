@@ -129,10 +129,6 @@ export class CompanionBridge implements AskChannel {
     this.send({ type: "session.update", session: { status } });
   }
 
-  isConnected() {
-    return this.ws?.readyState === WebSocket.OPEN;
-  }
-
   /**
    * Publish a question to the companion UI. Pending questions live in the session snapshot,
    * so browsers that connect later still see them.

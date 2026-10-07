@@ -18,6 +18,7 @@ jobs:
           node-version: 22
       - run: npm install
       - run: npm run check
+      - run: npm run test:extension
       - run: npm run ui:build
       - uses: actions/upload-artifact@v4
         with:
@@ -38,4 +39,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: server
-      - run: cargo check --manifest-path server/Cargo.toml
+      - run: cargo test --manifest-path server/Cargo.toml

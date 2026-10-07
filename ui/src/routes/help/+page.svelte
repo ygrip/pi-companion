@@ -1,9 +1,4 @@
 <script lang="ts">
-  import bulbClay from '../../assets/clay/bulb.webp';
-  import chatBubbleClay from '../../assets/clay/chat-bubble.webp';
-  import chatTextClay from '../../assets/clay/chat-text.webp';
-  import lockClay from '../../assets/clay/lock.webp';
-  import rocketClay from '../../assets/clay/rocket.webp';
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { toasts } from '#lib/toast.svelte.ts';
@@ -38,7 +33,7 @@
 
 <svelte:head><title>Help · Pi Companion</title></svelte:head>
 
-<div class="page">
+<div class="page info-page">
   <header class="page-head">
     <div>
       <span class="eyebrow">Guide</span>
@@ -71,8 +66,8 @@
   </section>
 
   <section class="bento" aria-label="Help topics">
-    <article class="tile span-2">
-      <img class="feature-art" src={rocketClay} alt="" aria-hidden="true" />
+    <article class="tile">
+      <span class="topic-icon"><Icon name="tool" /></span>
       <h2>Pi commands</h2>
       <div class="table-wrap">
         <table>
@@ -85,7 +80,7 @@
       </div>
     </article>
     <article class="tile">
-      <img class="feature-art" src={chatBubbleClay} alt="" aria-hidden="true" />
+      <span class="topic-icon"><Icon name="chat" /></span>
       <h2>Companion tools</h2>
       <dl>
         <dt><code>companion_ask_user</code></dt><dd>Ask 1–4 questions in the dashboard or paired-device sheet, with descriptions, multi-select options or free text.</dd>
@@ -95,13 +90,13 @@
       <p class="muted">Questions from other extensions are relayed too, including <code>ctx.ui</code> select/confirm/input dialogs and pi-jar’s <code>jar_ask</code>. Answer in the terminal or Companion; the first answer wins. Temporary uploads are removed when their session ends.</p>
     </article>
     <article class="tile">
-      <img class="feature-art" src={lockClay} alt="" aria-hidden="true" />
+      <span class="topic-icon"><Icon name="devices" /></span>
       <h2>Pairing</h2>
       <p>Pair phones from <a href="/devices">Devices</a>. A pairing code is one-time and expires quickly. Paired devices stay trusted until you revoke them. Disconnect ends the current connection without revoking the device.</p>
       <p>For a remote connection, use the device URL shown in Settings—not the local-only admin URL.</p>
     </article>
     <article class="tile">
-      <img class="feature-art" src={bulbClay} alt="" aria-hidden="true" />
+      <span class="topic-icon"><Icon name="alert" /></span>
       <h2>Troubleshooting</h2>
       <dl>
         <dt>Daemon not reachable</dt><dd>Run <code>/companion</code> in the Pi session. The admin service normally listens on port <code>43721</code>.</dd>
@@ -110,8 +105,8 @@
         <dt>Git errors</dt><dd>Git problems on the Changes tab appear as a toast; check the message and your repository state.</dd>
       </dl>
     </article>
-    <article class="tile span-2">
-      <img class="feature-art" src={chatTextClay} alt="" aria-hidden="true" />
+    <article class="tile">
+      <span class="topic-icon"><Icon name="help" /></span>
       <h2>Frequently asked questions</h2>
       <dl>
         <dt>Why don’t I see every Pi session?</dt><dd>Control is opt-in per session. Run <code>/companion</code> in each session you want to manage.</dd>
@@ -122,16 +117,15 @@
     </article>
   </section>
 
-  <footer class="help-footer" aria-label="Credits and legal links">
-    <a href="https://3dicons.co" rel="noreferrer">3D icons by 3dicons (CC0)</a>
-    <span aria-hidden="true">·</span><a href="/privacy">Privacy</a><span aria-hidden="true">·</span><a href="/terms">Terms</a>
+  <footer class="help-footer" aria-label="Legal links">
+    <a href="/privacy">Privacy</a><span aria-hidden="true">·</span><a href="/terms">Terms</a>
   </footer>
 </div>
 
 <style>
+  .bento { grid-template-columns: minmax(0, 1fr); }
   .tile { display: grid; align-content: start; gap: 12px; }
-  .tile :global(.badge), .tile :global(.chip) { justify-self: start; width: fit-content; white-space: nowrap; }
-  .feature-art { width: 64px; height: 64px; object-fit: contain; justify-self: start; }
+  .topic-icon { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 14px; background: var(--accent-soft); color: var(--accent-text); }
   .stepper { padding: 22px; }
   .stepper ol { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
   .stepper li { position: relative; display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 14px; padding-bottom: 24px; }

@@ -41,13 +41,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm install
       - run: npm run check
+      - run: npm run test:extension
       - run: npm run ui:build
       - uses: actions/upload-artifact@v4
         with:
           name: companion-web-ui
           path: server/web-dist
           if-no-files-found: error
-      - run: cargo check --manifest-path server/Cargo.toml --locked || cargo check --manifest-path server/Cargo.toml
+      - run: cargo test --manifest-path server/Cargo.toml --locked
 
   rust:
     needs: [validate, test]

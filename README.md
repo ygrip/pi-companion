@@ -83,6 +83,7 @@ Optional environment variables (none are required):
 | PI_COMPANION_URL | daemon WebSocket URL (default ws://127.0.0.1:43721); autostart only happens for loopback URLs |
 | PI_COMPANION_AUTOSTART=0 | never launch a daemon, only connect |
 | PI_COMPANION_PUBLIC_URL | daemon-side: public URL embedded in pairing QR codes |
+| PI_COMPANION_ALLOWED_ORIGINS | daemon-side: extra comma-separated browser origins accepted besides the loopback addresses and the public URL |
 
 Local admin:
 
@@ -98,7 +99,7 @@ Set the externally reachable paired-device URL before starting the daemon:
 
     PI_COMPANION_PUBLIC_URL=https://companion.example.com pi-companion-server
 
-The configured public URL is used only to construct pairing invitations.
+The configured public URL is used to construct pairing invitations and is the browser origin the paired-device surface accepts (see Security boundary).
 
 ## Per-session remote control
 
@@ -120,16 +121,18 @@ Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`
 
 Pairing is daemon-wide rather than session-specific. Everything lives on the **Devices** page of the local console (port 43721):
 
-1. Choose **Pair a device**. The daemon creates a single-use invitation (5 minutes by default, configurable in Settings) and shows it as a QR code and a copyable link.
-2. Scan it with the phone and give the device a name.
+1. Choose **Pair a device**. The daemon creates a single-use invitation (5 minutes by default, configurable in Settings) and shows it as a QR code, a copyable link and a short code (`XXXX-XXXX`).
+2. On the phone, open the paired-device address. An unpaired device gets a connect screen: scan the QR code with the in-app camera (needs HTTPS; otherwise use the phone's camera app, which opens the invitation link) or type the short code, then give the device a name.
 3. The daemon issues a long random credential and stores only its SHA-256 hash.
+
+Typed codes are short, so wrong ones are counted: after ten misses within ten minutes every open invitation is withdrawn and code entry is refused (HTTP 429) until the window passes.
 
 Each paired device shows a live **Connected** / **Disconnected** status (with the number of open tabs), when it was last seen and when it was paired. From the console you can:
 
 - **Disconnect**: end the device's live connections (WebSocket close code 4001). It stays paired and can reconnect when its user chooses.
 - **Revoke**: delete its credential and drop its connections (close code 4003). The device clears its stored credential and must scan a new code.
 
-Paired devices and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json` (mode 0600; override the directory with `PI_COMPANION_HOME`).
+Paired devices (name, browser user agent, pairing and last-seen times, credential hash) and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json`, created with mode 0600 inside a 0700 directory and replaced atomically; a looser mode found on startup is tightened. Override the directory with `PI_COMPANION_HOME`.
 
 A phone pairs once with the daemon. Individual Pi sessions still opt in using /companion.
 
@@ -143,6 +146,7 @@ The **Settings** page (local console only) covers:
 | Public address | empty | The tunnel / reverse-proxy URL embedded in pairing codes. `PI_COMPANION_PUBLIC_URL` overrides it and locks the field. |
 | Pairing code lifetime | 5 minutes | 1 to 60. |
 | Largest file | 25 MB | 1 to 100 MB per upload. |
+| Allowed file types | any | Optional MIME allowlist such as `image/*, application/pdf`. Uploads outside it get HTTP 415. |
 
 It also shows the daemon version, both addresses, and where settings and session files are stored.
 
@@ -156,7 +160,9 @@ On Unix the daemon attempts to set the Pi Companion and session directories to m
 
 The browser can upload a file from the Files tab. Current constraints:
 
-- 25 MiB maximum per upload
+- 25 MiB maximum per upload by default (Settings); a rejected or interrupted upload leaves no partial file
+- optional MIME allowlist: the type guessed from the file name and any specific declared Content-Type must both be allowed
+- session ids in paths are limited to `[A-Za-z0-9_-]`, so they can never name a directory outside the sandbox
 - filename is reduced to its final path component
 - generated opaque file id prefixes the on-disk name
 - the daemon never accepts a client-provided destination path
@@ -270,6 +276,10 @@ Type checks cover the extension (`tsc`) and the UI (`svelte-check`, warnings fai
 
     npm run check
 
+Tests cover the question relay (`node --test`) and the daemon's wire protocol, pairing expiry and code throttling, origin policy, bridge and device reconnects, path traversal, upload limits, MIME allowlist, state-file permissions and multi-session isolation (`cargo test`):
+
+    npm test
+
 UI modules import shared code through the `#lib/*` subpath import declared in `ui/package.json` (SvelteKit 3 replaced `$lib`). Subpath imports do not guess extensions, so always write the full file name: `#lib/format.ts`, `#lib/companion.svelte.ts`, `#lib/Icon.svelte`. `ui/tsconfig.json` extends SvelteKit's generated `$app/tsconfig`.
 
 Then, in another shell, start Pi with the extension from this checkout:
@@ -305,26 +315,21 @@ The design follows a few non-negotiable rules:
 - local admin and remote device surfaces use different ports
 - both listeners bind to loopback
 - only the remote listener should ever sit behind a tunnel
-- pairing invitations are single-use and expire after five minutes
-- paired-device secrets are not stored in plaintext by the daemon
+- pairing invitations are single-use and expire after five minutes; wrong short codes are throttled
+- paired-device secrets are stored only as SHA-256 hashes, in a 0600 state file
+- strict Origin checks: the paired-device surface accepts WebSocket upgrades and POST/DELETE only from its own loopback address, the public URL or `PI_COMPANION_ALLOWED_ORIGINS`, and refuses any foreign Origin; the console accepts only its own loopback origin, so a web page cannot drive Pi through it
 - remote devices only see sessions with remoteEnabled=true
-- uploads are placed only in daemon-created session sandboxes
+- uploads are placed only in daemon-created session sandboxes, within the size limit and optional MIME allowlist
 - file deletion is id-based and boundary checked
 - there is no generic shell endpoint
 - Pi remains the authority that performs agent actions
 
-The current paired-device registry is process-local. Persistent encrypted/restricted device state and explicit origin checking are the next hardening step before treating this as a finished internet-facing product.
-
 ## Next hardening milestones
 
-1. Persist device metadata and credential hashes in a 0600 state file.
-2. Add strict Origin checks to the paired-device HTTP and WebSocket surface.
-3. Add per-device session permissions in addition to session opt-in.
-4. Bound browser event queues by both item count and bytes, dropping low-priority deltas first.
-5. Add upload count/quota limits per session and optional MIME allowlists.
-6. Add proper transcript rendering instead of raw event JSON.
-7. Package signed/notarized daemon binaries and service installation for macOS/Linux/Windows.
-8. Add protocol, pairing expiry, reconnect, traversal, upload-limit, and multi-session isolation tests.
+1. Add per-device session permissions in addition to session opt-in.
+2. Bound browser event queues by both item count and bytes, dropping low-priority deltas first.
+3. Add upload count/quota limits per session.
+4. Package signed/notarized daemon binaries and service installation for macOS/Linux/Windows.
 
 ## License
 

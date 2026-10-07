@@ -1,5 +1,7 @@
 mod assets;
 mod config;
+#[cfg(test)]
+mod tests;
 
 use std::{
     collections::HashMap,
@@ -10,12 +12,14 @@ use std::{
 
 use axum::{
     extract::{
-        DefaultBodyLimit, Multipart, Path, State,
+        DefaultBodyLimit, Multipart, Path, Request, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode},
-    response::IntoResponse,
+    http::{HeaderMap, Method, StatusCode, header},
+    middleware::{self, Next},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
+    serve::ListenerExt,
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -26,7 +30,7 @@ use sha2::{Digest, Sha256};
 use tokio::{
     fs,
     io::AsyncWriteExt,
-    sync::{broadcast, mpsc, RwLock},
+    sync::{broadcast, mpsc, Mutex, RwLock},
 };
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
@@ -37,6 +41,9 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Close codes sent to paired-device sockets so the UI can explain what happened.
 const CLOSE_DISCONNECTED: u16 = 4001;
 const CLOSE_REVOKED: u16 = 4003;
+/// Wrong pairing codes tolerated per window before every open invitation is withdrawn.
+const CODE_FAILURE_LIMIT: usize = 10;
+const CODE_FAILURE_WINDOW_SECS: u64 = 600;
 
 use config::{Settings, StoredDevice};
 
@@ -52,14 +59,43 @@ struct AppState {
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     files: Arc<RwLock<HashMap<String, Vec<TempFile>>>>,
     pairings: Arc<RwLock<HashMap<String, PairingInvite>>>,
+    /// Times of recent wrong pairing-code attempts (brute-force brake).
+    code_failures: Arc<Mutex<Vec<u64>>>,
     devices: Arc<RwLock<HashMap<String, StoredDevice>>>,
     /// Open paired-device sockets per device id.
     device_connections: Arc<RwLock<HashMap<String, usize>>>,
     settings: Arc<RwLock<Settings>>,
     env_public_url: Option<String>,
+    /// Extra origins allowed on the paired-device surface (PI_COMPANION_ALLOWED_ORIGINS).
+    extra_origins: Vec<String>,
     browser_tx: broadcast::Sender<Value>,
     kick_tx: broadcast::Sender<Kick>,
     temp_root: PathBuf,
+    data_dir: PathBuf,
+}
+
+impl AppState {
+    fn new(persisted: config::Persisted, temp_root: PathBuf, data_dir: PathBuf, env_public_url: Option<String>, extra_origins: Vec<String>) -> Self {
+        let settings = persisted.settings.validate().unwrap_or_default();
+        let devices = persisted.devices.into_iter().map(|d| (d.id.clone(), d)).collect();
+        let (browser_tx, _) = broadcast::channel(1024);
+        let (kick_tx, _) = broadcast::channel(64);
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            files: Arc::new(RwLock::new(HashMap::new())),
+            pairings: Arc::new(RwLock::new(HashMap::new())),
+            code_failures: Arc::new(Mutex::new(Vec::new())),
+            devices: Arc::new(RwLock::new(devices)),
+            device_connections: Arc::new(RwLock::new(HashMap::new())),
+            settings: Arc::new(RwLock::new(settings)),
+            env_public_url,
+            extra_origins,
+            browser_tx,
+            kick_tx,
+            temp_root,
+            data_dir,
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -74,6 +110,7 @@ struct TempFile {
     name: String,
     path: String,
     size: u64,
+    mime: String,
     #[serde(rename = "createdAt")]
     created_at: u64,
 }
@@ -81,6 +118,8 @@ struct TempFile {
 #[derive(Clone)]
 struct PairingInvite {
     expires_at: u64,
+    /// The short code shown next to the QR, normalized (8 uppercase hex chars).
+    code: String,
 }
 
 #[derive(Serialize)]
@@ -90,6 +129,7 @@ struct DeviceView {
     name: String,
     paired_at: u64,
     last_seen: u64,
+    user_agent: String,
     connected: bool,
     connections: usize,
 }
@@ -102,9 +142,13 @@ struct BrowserEnvelope {
 }
 
 
+/// Exactly one of `invite` (QR link token) or `code` (short code typed by hand).
 #[derive(Deserialize)]
 struct PairClaim {
-    invite: String,
+    #[serde(default)]
+    invite: Option<String>,
+    #[serde(default)]
+    code: Option<String>,
     #[serde(rename = "deviceName")]
     device_name: String,
 }
@@ -156,27 +200,18 @@ async fn main() {
     fs::create_dir_all(&temp_root).await.expect("create temp root");
     set_private_dir_permissions(&temp_root).await;
 
-    let persisted = config::load().await;
-    let settings = persisted.settings.validate().unwrap_or_default();
-    let devices = persisted.devices.into_iter().map(|d| (d.id.clone(), d)).collect();
-
-    let (browser_tx, _) = broadcast::channel(1024);
-    let (kick_tx, _) = broadcast::channel(64);
-    let state = AppState {
-        sessions: Arc::new(RwLock::new(HashMap::new())),
-        files: Arc::new(RwLock::new(HashMap::new())),
-        pairings: Arc::new(RwLock::new(HashMap::new())),
-        devices: Arc::new(RwLock::new(devices)),
-        device_connections: Arc::new(RwLock::new(HashMap::new())),
-        settings: Arc::new(RwLock::new(settings)),
-        env_public_url: std::env::var("PI_COMPANION_PUBLIC_URL")
-            .ok()
-            .map(|value| value.trim().trim_end_matches('/').to_string())
-            .filter(|value| !value.is_empty()),
-        browser_tx,
-        kick_tx,
-        temp_root,
-    };
+    let data_dir = config::data_dir();
+    let persisted = config::load(&data_dir).await;
+    let env_public_url = std::env::var("PI_COMPANION_PUBLIC_URL")
+        .ok()
+        .map(|value| value.trim().trim_end_matches('/').to_string())
+        .filter(|value| !value.is_empty());
+    let extra_origins = std::env::var("PI_COMPANION_ALLOWED_ORIGINS")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(origin_of)
+        .collect();
+    let state = AppState::new(persisted, temp_root, data_dir, env_public_url, extra_origins);
 
     let local = local_router(state.clone());
     let remote = remote_router(state.clone());
@@ -211,9 +246,10 @@ async fn main() {
 
     print_banner(&state).await;
 
+    // Small, latency-sensitive frames (questions, answers, deltas): disable Nagle.
     let (local_result, remote_result) = tokio::join!(
-        axum::serve(local_listener, local),
-        axum::serve(remote_listener, remote)
+        axum::serve(local_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), local),
+        axum::serve(remote_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), remote)
     );
     local_result.expect("local server failed");
     remote_result.expect("remote server failed");
@@ -233,6 +269,7 @@ fn local_router(state: AppState) -> Router {
         .route("/ws/browser", get(browser_ws))
         .route("/ws/bridge/{session_id}", get(bridge_ws))
         .fallback(get(assets::serve))
+        .layer(middleware::from_fn_with_state(state.clone(), require_console_origin))
         .layer(DefaultBodyLimit::max(body_limit()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -247,9 +284,81 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
         .fallback(get(assets::serve))
+        .layer(middleware::from_fn_with_state(state.clone(), require_device_origin))
         .layer(DefaultBodyLimit::max(body_limit()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Normalized `scheme://host[:port]` of an http(s) URL; default ports dropped.
+fn origin_of(url: &str) -> Option<String> {
+    let url = url.trim().to_ascii_lowercase();
+    let (scheme, rest) = url.split_once("://")?;
+    let default_port = match scheme {
+        "http" => ":80",
+        "https" => ":443",
+        _ => return None,
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.is_empty() || authority.contains('@') {
+        return None;
+    }
+    let authority = authority.strip_suffix(default_port).unwrap_or(authority);
+    Some(format!("{scheme}://{authority}"))
+}
+
+fn loopback_origins(addr: &str) -> impl Iterator<Item = String> + '_ {
+    let port = addr.rsplit(':').next().unwrap_or_default();
+    ["127.0.0.1", "localhost", "[::1]"].into_iter().map(move |host| format!("http://{host}:{port}"))
+}
+
+/// Origins a paired-device browser may use: the public address and the loopback device port.
+async fn device_origins(state: &AppState) -> Vec<String> {
+    let mut origins: Vec<String> = loopback_origins(REMOTE_ADDR).collect();
+    origins.extend(origin_of(&public_url(state).await));
+    origins.extend(state.extra_origins.iter().cloned());
+    origins
+}
+
+fn forbidden_origin() -> Response {
+    (StatusCode::FORBIDDEN, "Origin not allowed. Open Pi Companion from its own address.").into_response()
+}
+
+/// `None`: no Origin header; `Some(None)`: present but unusable (`null`, non-http).
+fn request_origin(request: &Request) -> Option<Option<String>> {
+    request.headers().get(header::ORIGIN).map(|value| value.to_str().ok().and_then(origin_of))
+}
+
+/// Strict Origin policy for the paired-device surface. A browser always sends Origin on
+/// WebSocket upgrades and on POST/DELETE, so those must carry an allowed one; plain GETs
+/// (page loads, same-origin fetches) may omit it, but a foreign Origin is always refused.
+async fn require_device_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let upgrade = request.headers().contains_key(header::UPGRADE);
+    let safe = matches!(*request.method(), Method::GET | Method::HEAD) && !upgrade;
+    let allowed = match request_origin(&request) {
+        None => safe,
+        Some(None) => false,
+        Some(Some(origin)) => device_origins(&state).await.contains(&origin),
+    };
+    if !allowed {
+        return forbidden_origin();
+    }
+    next.run(request).await
+}
+
+/// The console has no credentials, so a web page from any other origin must never reach
+/// it (cross-site WebSocket would let it steer Pi). Requests without Origin come from
+/// non-browser clients such as the Pi bridge and stay allowed.
+async fn require_console_origin(State(state): State<AppState>, request: Request, next: Next) -> Response {
+    let allowed = match request_origin(&request) {
+        None => true,
+        Some(None) => false,
+        Some(Some(origin)) => loopback_origins(LOCAL_ADDR).any(|allowed| allowed == origin) || state.extra_origins.contains(&origin),
+    };
+    if !allowed {
+        return forbidden_origin();
+    }
+    next.run(request).await
 }
 
 /// Always printed, independent of RUST_LOG, so `npm run serve` / `cargo run` show where to go.
@@ -269,7 +378,7 @@ async fn print_banner(state: &AppState) {
     println!("  Console          http://{LOCAL_ADDR}");
     println!("  Paired devices   http://{REMOTE_ADDR}");
     println!("  Pairing links    {public}  ({public_note})");
-    println!("  Data             {}  ({devices} paired)", config::data_dir().display());
+    println!("  Data             {}  ({devices} paired)", state.data_dir.display());
     println!();
     println!("  Open the console in your browser. Press Ctrl+C to stop.");
     println!();
@@ -301,7 +410,7 @@ async fn persist(state: &AppState) {
         settings: state.settings.read().await.clone(),
         devices: state.devices.read().await.values().cloned().collect(),
     };
-    if let Err(error) = config::save(&snapshot).await {
+    if let Err(error) = config::save(&state.data_dir, &snapshot).await {
         tracing::warn!("could not save state: {error}");
     }
 }
@@ -319,7 +428,7 @@ async fn get_settings(State(state): State<AppState>) -> Json<Value> {
             "version": VERSION,
             "adminUrl": format!("http://{LOCAL_ADDR}"),
             "deviceUrl": format!("http://{REMOTE_ADDR}"),
-            "dataDir": config::data_dir().to_string_lossy(),
+            "dataDir": state.data_dir.to_string_lossy(),
             "tempDir": state.temp_root.to_string_lossy(),
         }
     }))
@@ -372,6 +481,7 @@ async fn list_devices(State(state): State<AppState>) -> Json<DevicesResponse> {
                 name: device.name.clone(),
                 paired_at: device.paired_at,
                 last_seen: device.last_seen,
+                user_agent: device.user_agent.clone(),
                 connected: open > 0,
                 connections: open,
             }
@@ -393,7 +503,7 @@ async fn start_pairing(State(state): State<AppState>) -> ApiResult<Json<PairingR
         let mut pairings = state.pairings.write().await;
         let now = now_secs();
         pairings.retain(|_, invite| invite.expires_at >= now);
-        pairings.insert(token, PairingInvite { expires_at });
+        pairings.insert(token, PairingInvite { expires_at, code: compact[0..8].to_string() });
     }
 
     let qr_svg = QrCode::new(url.as_bytes())
@@ -405,26 +515,68 @@ async fn start_pairing(State(state): State<AppState>) -> ApiResult<Json<PairingR
     Ok(Json(PairingResponse { code, url, qr_svg, expires_at }))
 }
 
+/// Uppercase alphanumerics of a typed code (`ab12-cd34`, `AB12 CD34` → `AB12CD34`).
+fn normalize_code(code: &str) -> String {
+    code.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_uppercase()).collect()
+}
+
+/// Take the invitation a claim refers to. Typed codes are short, so wrong ones are counted:
+/// after CODE_FAILURE_LIMIT misses in the window every open invitation is withdrawn and code
+/// claims are refused until the window passes.
+async fn take_invite(state: &AppState, claim: &PairClaim) -> ApiResult<PairingInvite> {
+    match (claim.invite.as_deref(), claim.code.as_deref()) {
+        (Some(invite), None) => state
+            .pairings
+            .write()
+            .await
+            .remove(invite)
+            .ok_or((StatusCode::UNAUTHORIZED, "Pairing invitation is invalid or already used.".into())),
+        (None, Some(code)) => {
+            let now = now_secs();
+            let mut failures = state.code_failures.lock().await;
+            failures.retain(|at| now.saturating_sub(*at) < CODE_FAILURE_WINDOW_SECS);
+            if failures.len() >= CODE_FAILURE_LIMIT {
+                return Err((StatusCode::TOO_MANY_REQUESTS, "Too many wrong codes. Create a new invitation on the computer later.".into()));
+            }
+            let code = normalize_code(code);
+            let mut pairings = state.pairings.write().await;
+            let token = pairings.iter().find(|(_, invite)| code.len() == 8 && invite.code == code).map(|(token, _)| token.clone());
+            if let Some(invite) = token.and_then(|token| pairings.remove(&token)) {
+                return Ok(invite);
+            }
+            failures.push(now);
+            if failures.len() >= CODE_FAILURE_LIMIT {
+                pairings.clear();
+                tracing::warn!("too many wrong pairing codes; withdrew all open invitations");
+            }
+            Err((StatusCode::UNAUTHORIZED, "That code is not valid or has already been used.".into()))
+        }
+        _ => Err((StatusCode::BAD_REQUEST, "Send either an invitation or a pairing code.".into())),
+    }
+}
+
 async fn claim_pairing(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(claim): Json<PairClaim>,
 ) -> ApiResult<Json<PairClaimResponse>> {
-    let invite = state
-        .pairings
-        .write()
-        .await
-        .remove(&claim.invite)
-        .ok_or((StatusCode::UNAUTHORIZED, "Pairing invitation is invalid or already used.".into()))?;
+    let name = claim.device_name.trim();
+    if name.is_empty() || name.chars().count() > 80 {
+        return Err((StatusCode::BAD_REQUEST, "Device name must be 1-80 characters.".into()));
+    }
 
+    let invite = take_invite(&state, &claim).await?;
     if invite.expires_at < now_secs() {
         return Err((StatusCode::UNAUTHORIZED, "Pairing invitation expired.".into()));
     }
 
-    let name = claim.device_name.trim();
-    if name.is_empty() || name.len() > 80 {
-        return Err((StatusCode::BAD_REQUEST, "Device name must be 1-80 characters.".into()));
-    }
-
+    let user_agent: String = headers
+        .get(header::USER_AGENT)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .chars()
+        .take(160)
+        .collect();
     let device_id = Uuid::new_v4().to_string();
     let token = Uuid::new_v4().simple().to_string() + &Uuid::new_v4().simple().to_string();
     let timestamp = now_secs();
@@ -436,6 +588,7 @@ async fn claim_pairing(
             token_hash: hash_token(&token),
             paired_at: timestamp,
             last_seen: timestamp,
+            user_agent,
         },
     );
     persist(&state).await;
@@ -505,24 +658,56 @@ async fn upload_file_remote(
     store_upload(&state, &session_id, multipart).await.map(Json)
 }
 
+/// Session ids come from URL paths and become directory names: allow only a safe alphabet.
+fn valid_session_id(session_id: &str) -> bool {
+    (1..=64).contains(&session_id.len())
+        && session_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+fn check_session_id(session_id: &str) -> ApiResult<()> {
+    if valid_session_id(session_id) { Ok(()) } else { Err((StatusCode::BAD_REQUEST, "Invalid session id.".into())) }
+}
+
+/// Last path component of a client file name, without separators or control characters.
+fn safe_file_name(original: &str) -> String {
+    let last = original.rsplit(['/', '\\']).next().unwrap_or_default();
+    let cleaned: String = last.chars().filter(|c| !c.is_control()).take(120).collect();
+    let trimmed = cleaned.trim().trim_start_matches('.');
+    if trimmed.is_empty() { "upload.bin".to_string() } else { trimmed.to_string() }
+}
+
+/// MIME type an upload is judged by: guessed from the file name, falling back to the
+/// declared Content-Type. With an allowlist, both the guess and any specific declared type
+/// must be allowed, so a renamed file cannot slip through on either side.
+fn upload_mime(settings: &Settings, name: &str, declared: Option<&str>) -> ApiResult<String> {
+    let guessed = mime_guess::from_path(name).first().map(|mime| mime.essence_str().to_string());
+    let declared = declared
+        .map(|value| value.split(';').next().unwrap_or_default().trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty() && value != "application/octet-stream");
+    let mime = guessed.clone().or(declared.clone()).unwrap_or_else(|| "application/octet-stream".into());
+    let allowed = settings.allows_upload_type(&mime)
+        && declared.as_deref().is_none_or(|value| settings.allows_upload_type(value));
+    if !allowed {
+        return Err((StatusCode::UNSUPPORTED_MEDIA_TYPE, format!("Files of type {mime} are not allowed here.")));
+    }
+    Ok(mime)
+}
+
 async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipart) -> ApiResult<TempFile> {
+    check_session_id(session_id)?;
     if !state.sessions.read().await.contains_key(session_id) {
         return Err((StatusCode::NOT_FOUND, "Session not found.".into()));
     }
 
-    let max_bytes = (state.settings.read().await.max_upload_mb as usize) * 1024 * 1024;
-    while let Some(mut field) = multipart.next_field().await.map_err(internal_error)? {
+    let settings = state.settings.read().await.clone();
+    let max_bytes = (settings.max_upload_mb as usize) * 1024 * 1024;
+    while let Some(mut field) = multipart.next_field().await.map_err(bad_upload)? {
         if field.name() != Some("file") {
             continue;
         }
 
-        let original_name = field.file_name().unwrap_or("upload.bin");
-        let safe_name = FsPath::new(original_name)
-            .file_name()
-            .and_then(|v| v.to_str())
-            .filter(|v| !v.is_empty() && *v != "." && *v != "..")
-            .unwrap_or("upload.bin")
-            .to_string();
+        let safe_name = safe_file_name(field.file_name().unwrap_or("upload.bin"));
+        let mime = upload_mime(&settings, &safe_name, field.content_type())?;
 
         let session_dir = state.temp_root.join(session_id);
         fs::create_dir_all(&session_dir).await.map_err(internal_error)?;
@@ -533,25 +718,32 @@ async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipa
         let mut output = fs::File::create(&disk_path).await.map_err(internal_error)?;
         let mut size: usize = 0;
 
-        while let Some(chunk) = field.chunk().await.map_err(internal_error)? {
-            size += chunk.len();
-            if size > max_bytes {
-                drop(output);
-                let _ = fs::remove_file(&disk_path).await;
-                return Err((
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    format!("File is larger than the {} MiB limit.", max_bytes / 1024 / 1024),
-                ));
+        let written: ApiResult<()> = async {
+            while let Some(chunk) = field.chunk().await.map_err(bad_upload)? {
+                size += chunk.len();
+                if size > max_bytes {
+                    return Err((
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        format!("File is larger than the {} MiB limit.", max_bytes / 1024 / 1024),
+                    ));
+                }
+                output.write_all(&chunk).await.map_err(internal_error)?;
             }
-            output.write_all(&chunk).await.map_err(internal_error)?;
+            output.flush().await.map_err(internal_error)
         }
-        output.flush().await.map_err(internal_error)?;
+        .await;
+        drop(output);
+        if let Err(error) = written {
+            let _ = fs::remove_file(&disk_path).await;
+            return Err(error);
+        }
 
         let file = TempFile {
             id,
             name: safe_name,
             path: disk_path.to_string_lossy().to_string(),
             size: size as u64,
+            mime,
             created_at: now_secs(),
         };
         state.files.write().await.entry(session_id.to_string()).or_default().push(file.clone());
@@ -560,6 +752,15 @@ async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipa
     }
 
     Err((StatusCode::BAD_REQUEST, "Expected multipart field named file.".into()))
+}
+
+/// Multipart stream errors: the body limit surfaces here as well.
+fn bad_upload(error: axum::extract::multipart::MultipartError) -> ApiError {
+    let status = error.status();
+    if status == StatusCode::PAYLOAD_TOO_LARGE {
+        return (status, "File is larger than the upload limit.".into());
+    }
+    (status, error.body_text())
 }
 
 async fn delete_file_local(
@@ -582,6 +783,7 @@ async fn delete_file_remote(
 }
 
 async fn delete_temp_file(state: &AppState, session_id: &str, file_id: &str) -> ApiResult<()> {
+    check_session_id(session_id)?;
     let file = {
         let mut files = state.files.write().await;
         let session_files = files.get_mut(session_id)
@@ -708,8 +910,12 @@ async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<St
                         if remote && !visible_to_device(&writer_state, &value).await { continue; }
                         if sender.send(Message::Text(value.to_string().into())).await.is_err() { break; }
                     }
-                    // A slow tab missed some events; keep streaming rather than dropping it.
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    // A slow tab missed some events; tell it to re-fetch state so nothing it
+                    // missed (a question, a status change) waits for the next reconnect.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {
+                        let resync = serde_json::json!({ "type": "resync" }).to_string();
+                        if sender.send(Message::Text(resync.into())).await.is_err() { break; }
+                    }
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
             }
@@ -761,8 +967,9 @@ async fn bridge_ws(
     ws: WebSocketUpgrade,
     Path(session_id): Path<String>,
     State(state): State<AppState>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| bridge_socket(socket, session_id, state))
+) -> ApiResult<impl IntoResponse> {
+    check_session_id(&session_id)?;
+    Ok(ws.on_upgrade(move |socket| bridge_socket(socket, session_id, state)))
 }
 
 async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {

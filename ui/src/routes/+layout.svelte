@@ -488,16 +488,21 @@
       justify-items: center;
       gap: 2px;
       min-height: 52px;
-      padding-top: 6px;
-      border-radius: 10px;
+      margin: 3px 2px;
+      padding: 4px 8px;
+      border-radius: 16px;
       color: var(--text-3);
       font-size: 0.72rem;
       font-weight: 600;
       text-decoration: none;
+      transition: background-color 150ms ease-out, color 150ms ease-out, box-shadow 150ms ease-out;
     }
 
     .tabbar a.active {
+      border-radius: 999px;
       color: var(--accent-text);
+      background: var(--clay-surface);
+      box-shadow: var(--clay-pressed);
     }
 
     .tab-icon {

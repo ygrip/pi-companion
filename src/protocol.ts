@@ -3,6 +3,7 @@ export type TempFile = {
   name: string;
   path: string;
   size: number;
+  mime?: string;
   createdAt: string;
 };
 

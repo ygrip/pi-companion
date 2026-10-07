@@ -5,7 +5,6 @@ export type AskInput = Omit<AskRequest, "requestId" | "createdAt">;
 
 /** What the dialog relay needs from the bridge. */
 export interface AskChannel {
-  isConnected(): boolean;
   /** Resolves with the answers, or null when withdrawn (signal) or dismissed in the companion UI. */
   ask(request: AskInput, signal?: AbortSignal): Promise<AskAnswers | null>;
 }
@@ -86,7 +85,6 @@ async function race<T>(
 ): Promise<T> {
   const controller = new AbortController();
   const signal = outer ? AbortSignal.any([outer, controller.signal]) : controller.signal;
-  if (!channel.isConnected()) return await local(signal);
   try {
     const outcome = await Promise.race([
       local(signal).then(value => ({ value })),
@@ -185,9 +183,13 @@ export class ToolDialogRelay {
 
   start(toolName: string, toolCallId: string, args: unknown) {
     const adapter = TOOL_ADAPTERS[toolName];
-    if (!adapter || this.active || !this.channel.isConnected()) return;
+    if (!adapter) return;
     const questions = adapter.questions(args);
     if (!questions?.length) return;
+    // A previous relayed tool that never reported its end must not block this question.
+    this.active?.controller.abort();
+    // Published even while the daemon is unreachable: pending questions are part of the
+    // session snapshot that is re-registered on reconnect, so they show up the moment it is back.
     const active: ActiveToolAsk = { toolCallId, adapter, questions, next: 0, current: -1, controller: new AbortController() };
     this.active = active;
     void this.channel.ask({ source: "tool", questions }, active.controller.signal).then(answers => {

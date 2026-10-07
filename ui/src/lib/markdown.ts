@@ -13,12 +13,6 @@ export function renderMarkdown(text: string) {
   return DOMPurify.sanitize(marked.parse(text, { async: false }));
 }
 
-/** An escaped <pre><code> block for the `prettify` action to highlight. */
-export function codeBlock(text: string, lang: string) {
-  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  return '<pre><code class="language-' + lang + '">' + escaped + '</code></pre>';
-}
-
 type Hljs = HLJSApi;
 
 let hljs: Promise<Hljs> | null = null;
@@ -89,24 +83,4 @@ export function prettify(node: HTMLElement, params: { text: string; final: boole
     update: run,
     destroy: () => clearTimeout(timer)
   };
-}
-
-/** Highlight a whole text blob as JSON when it parses, for tool arguments and results. */
-export function looksLikeJson(text: string) {
-  const trimmed = text.trim();
-  if (!/^[[{]/.test(trimmed)) return false;
-  try {
-    JSON.parse(trimmed);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-export function prettyJson(text: string) {
-  try {
-    return JSON.stringify(JSON.parse(text.trim()), null, 2);
-  } catch {
-    return text;
-  }
 }

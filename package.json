@@ -40,7 +40,10 @@
     "ui:dev": "cd ui && vite dev",
     "ui:build": "cd ui && vite build",
     "check": "tsc --noEmit && npm run ui:check",
-    "ui:check": "cd ui && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
+    "ui:check": "cd ui && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "test": "npm run test:extension && npm run test:server",
+    "test:extension": "node --test --experimental-transform-types --no-warnings test/*.test.ts",
+    "test:server": "cargo test --manifest-path server/Cargo.toml"
   },
   "pi": {
     "extensions": [
@@ -64,6 +67,7 @@
     "@types/ws": "^8.18.1",
     "dompurify": "^3.4.16",
     "highlight.js": "^11.12.0",
+    "jsqr": "^1.4.0",
     "marked": "^18.1.0",
     "mermaid": "^12.1.0",
     "svelte": "^5.57.2",

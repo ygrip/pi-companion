@@ -1,12 +1,12 @@
 <svelte:head><title>Terms · Pi Companion</title></svelte:head>
 
-<div class="page">
+<div class="page info-page">
   <header class="page-head">
     <div><span class="eyebrow">Terms of use</span><h1>Terms</h1><p>Effective date: 2026-10-07</p></div>
   </header>
 
   <section class="bento" aria-label="Terms of use">
-    <article class="tile span-2">
+    <article class="tile">
       <h2>License</h2>
       <p>Pi Companion is made available under the MIT License. The source and license are available at <a href="https://github.com/ygrip/pi-companion" rel="noreferrer">github.com/ygrip/pi-companion</a>.</p>
     </article>
@@ -22,5 +22,6 @@
 </div>
 
 <style>
+  .bento { grid-template-columns: minmax(0, 1fr); }
   .tile { display: grid; align-content: start; gap: 12px; }
 </style>
