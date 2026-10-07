@@ -44,7 +44,7 @@
       <h1>Sessions</h1>
       <p>
         {#if companion.isAdmin}
-          Every Pi session running on this computer. Ended sessions stay listed until the daemon restarts.
+          Sessions opened with /companion on this computer. Archive ended sessions to remove them from this list, not from your local Pi history.
         {:else}
           Sessions your computer has shared with this device.
         {/if}
@@ -83,10 +83,10 @@
       <span class="empty-icon"><Icon name="sessions" /></span>
       {#if companion.isAdmin}
         <h2>No Pi sessions yet</h2>
-        <p>Start <code>pi</code> in any project folder. Sessions connect to Pi Companion automatically.</p>
+        <p>Start <code>pi</code> in any project folder, then run <code>/companion</code> to start the daemon and connect that session.</p>
       {:else}
         <h2>Nothing shared yet</h2>
-        <p>On your computer, type <code>/remote-control</code> inside a Pi session to share it here.</p>
+        <p>On your computer, type <code>/companion</code> inside a Pi session to share it here.</p>
       {/if}
     </div>
   {/if}

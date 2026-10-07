@@ -124,6 +124,24 @@ class Companion {
     this.devices = result.devices;
   }
 
+  private dropSession(sessionId: string) {
+    this.sessions = this.sessions.filter((session) => session.id !== sessionId);
+    const { [sessionId]: _activity, ...activity } = this.activity;
+    const { [sessionId]: _files, ...files } = this.files;
+    const { [sessionId]: _diffs, ...diffs } = this.diffs;
+    this.activity = activity;
+    this.files = files;
+    this.diffs = diffs;
+  }
+
+  /** Archive only the daemon's ended-session record; never Pi's local history. */
+  async archiveSession(sessionId: string) {
+    const session = this.session(sessionId);
+    if (!session || session.status !== 'stopped') throw new Error('Only ended sessions can be archived.');
+    await this.request('/api/sessions/' + encodeURIComponent(sessionId), { method: 'DELETE' });
+    this.dropSession(sessionId);
+  }
+
   async refreshFiles(sessionId: string) {
     const result = await this.request<{ files: TempFile[] }>(
       '/api/sessions/' + encodeURIComponent(sessionId) + '/files'
@@ -193,6 +211,9 @@ class Companion {
         this.sessions = sortSessions(this.remote && !next.remoteEnabled ? others : [...others, next]);
         break;
       }
+      case 'session.removed':
+        this.dropSession(message.sessionId);
+        break;
       case 'session.update': {
         const patch = message.patch ?? {};
         const known = this.sessions.some((session) => session.id === message.sessionId);

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import ArchiveSession from './ArchiveSession.svelte';
   import { companion } from './companion.svelte.ts';
   import { prettyPath, sessionTitle, statusLabel } from './format.ts';
   import type { Session } from './types.ts';
@@ -8,6 +9,7 @@
   const waiting = $derived(companion.pendingAsks(session.id));
 </script>
 
+<article class="session-tile">
 <a class="session-card tile" class:stopped={session.status === 'stopped'} class:accent={highlighted} href="/sessions/{encodeURIComponent(session.id)}">
   <div class="row top">
     <span class="badge" class:ok={session.status === 'active'} class:danger={session.status === 'stopped'}>
@@ -19,7 +21,7 @@
   </div>
   <div class="title">
     <strong>{sessionTitle(session)}</strong>
-    {#if session.name && session.shortTitle !== session.name}<span class="subtle">{session.shortTitle}</span>{/if}
+    {#if session.shortTitle.trim() && session.shortTitle.trim() !== sessionTitle(session)}<span class="subtle" title={session.shortTitle}>{session.shortTitle}</span>{/if}
   </div>
   <div class="chips">
     <span class="chip"><span>{session.mainModel ?? 'Model not reported'}</span></span>
@@ -27,8 +29,14 @@
   </div>
   <Icon name="chevron" class="chev" />
 </a>
+{#if session.status === 'stopped'}
+  <footer><ArchiveSession {session} /></footer>
+{/if}
+</article>
 
 <style>
+  .session-tile { min-width: 0; }
+  footer { display: flex; justify-content: flex-end; padding: 0 4px; }
   .session-card {
     position: relative;
     display: grid;

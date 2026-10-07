@@ -466,9 +466,9 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
-        max(12px, env(safe-area-inset-left));
+      gap: 8px;
+      padding: calc(4px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 4px
+        max(8px, env(safe-area-inset-left));
       border-bottom: 1px solid var(--border);
       background: var(--bg-sunken);
     }
@@ -498,14 +498,15 @@
     }
 
     .tabbar a {
-      display: grid;
-      justify-items: center;
-      align-content: center;
-      gap: 1px;
-      min-height: 46px;
-      margin: 1px 2px;
-      padding: 2px 8px;
-      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 0;
+      min-height: 44px;
+      margin: 0;
+      padding: 2px 4px;
+      border-radius: 12px;
       color: var(--text-3);
       font-size: 0.68rem;
       font-weight: 600;
@@ -524,8 +525,8 @@
       position: relative;
       display: grid;
       place-items: center;
-      width: 40px;
-      height: 22px;
+      width: 22px;
+      height: 24px;
       border-radius: 999px;
     }
 
@@ -536,7 +537,7 @@
     .pip {
       position: absolute;
       top: 1px;
-      right: 8px;
+      right: 0;
       width: 8px;
       height: 8px;
       border-radius: 50%;
@@ -545,7 +546,7 @@
     }
 
     .toasts {
-      bottom: calc(var(--tabbar) + 16px + env(safe-area-inset-bottom));
+      bottom: calc(48px + 12px + env(safe-area-inset-bottom));
       left: 16px;
       right: 16px;
       width: auto;
@@ -588,22 +589,25 @@
   .topbar, .tabbar { background: var(--clay-surface); box-shadow: var(--clay-raised); }
   @media (max-width: 900px) {
     .topbar {
-      margin: 8px 10px 0;
-      border: 1px solid var(--border);
-      border-radius: var(--clay-radius);
-      box-shadow: var(--clay-raised);
+      margin: 0;
+      border: 0;
+      border-bottom: 1px solid var(--border);
+      border-radius: 0;
+      box-shadow: none;
     }
+    .topbar .brand strong { font-size: 0.9rem; }
     .tabbar {
-      margin: 0 10px max(4px, env(safe-area-inset-bottom));
-      border: 1px solid var(--border);
-      border-radius: 18px;
-      box-shadow: var(--clay-raised);
+      margin: 0;
+      border: 0;
+      border-top: 1px solid var(--border);
+      border-radius: 0;
+      box-shadow: none;
       gap: 2px;
     }
     .tabbar a.active { color: var(--accent-text); background: var(--clay-surface); box-shadow: var(--clay-pressed); }
     .tabbar a:active { transform: scale(0.97); }
     .tab-icon, .tabbar a.active .tab-icon { background: transparent; }
-    .status-trigger.compact { width: auto; min-height: 40px; padding: 0 10px; }
+    .status-trigger.compact { width: auto; min-height: 40px; padding: 0 8px; box-shadow: none; }
   }
   :global(:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
   @media (prefers-reduced-motion: reduce) {

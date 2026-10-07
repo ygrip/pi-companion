@@ -102,13 +102,20 @@
         <dt>Daemon not reachable</dt><dd>Run <code>/companion</code> in the Pi session. The admin service normally listens on port <code>43721</code>.</dd>
         <dt>Custom daemon behavior</dt><dd>Check <code>PI_COMPANION_URL</code>, <code>PI_COMPANION_SERVER</code>, and <code>PI_COMPANION_AUTOSTART=0</code>.</dd>
         <dt>Restarting the daemon</dt><dd>On macOS or Linux, stop it with <code>pkill -f pi-companion-server</code>, then run <code>/companion</code> again.</dd>
-        <dt>Git errors</dt><dd>Git problems on the Changes tab appear as a toast; check the message and your repository state.</dd>
+        <dt>Git errors</dt><dd>Git problems in the Changes panel appear as a toast; check the message and your repository state.</dd>
       </dl>
+    </article>
+    <article class="tile">
+      <span class="topic-icon"><Icon name="devices" /></span>
+      <h2>Install on your phone</h2>
+      <p>Open the secure HTTPS device URL and pair first. On Android, use your browser’s Install app or Add to Home screen menu. On iPhone or iPad, open Safari, choose Share → Add to Home Screen, and enable Open as Web App if offered.</p>
+      <p>Installation keeps the same pairing and session permissions. The public app shell can load offline after it has been visited; live activity, sending messages, pairing and files still require a connection to the daemon. LAN HTTP addresses cannot install the service worker; localhost is allowed for desktop development.</p>
     </article>
     <article class="tile">
       <span class="topic-icon"><Icon name="help" /></span>
       <h2>Frequently asked questions</h2>
       <dl>
+        <dt>Can I archive a session?</dt><dd>Use Archive on the session list or session menu after Pi has disconnected. Active and idle sessions cannot be archived. This removes only the daemon’s session entry, never your Pi history or project files. Uploads follow the normal disconnect cleanup lifecycle.</dd>
         <dt>Why don’t I see every Pi session?</dt><dd>Control is opt-in per session. Run <code>/companion</code> in each session you want to manage.</dd>
         <dt>Can a paired phone see all sessions?</dt><dd>No. It sees sessions that are shared for remote control. Pairing alone does not share sessions.</dd>
         <dt>How do questions work?</dt><dd><code>companion_ask_user</code> can show several questions together, with choices, descriptions, multi-select or free text. Companion also relays other extensions’ select, confirm and input dialogs, including pi-jar’s <code>jar_ask</code>. The first terminal or Companion answer wins.</dd>

@@ -68,11 +68,13 @@ function resultText(result: unknown) {
 }
 
 export default function companionExtension(pi: ExtensionAPI) {
-  const bridge = new CompanionBridge(pi);
+  let bridge = new CompanionBridge(pi);
 
   pi.on("session_start", (_event, ctx) => {
+    // Switching or starting a Pi session must not inherit the previous opt-in.
+    bridge.close();
+    bridge = new CompanionBridge(pi);
     bridge.setContext(ctx);
-    void bridge.connect();
     bridge.emit("session.start", { cwd: ctx.cwd });
   });
   pi.on("session_info_changed", (event, ctx) => {
@@ -131,6 +133,12 @@ export default function companionExtension(pi: ExtensionAPI) {
     parameters: AskParams,
     executionMode: "sequential",
     async execute(_toolCallId, params, signal) {
+      if (!bridge.isActivated()) {
+        return {
+          content: [{ type: "text", text: "Pi Companion is not enabled for this session. Run /companion before asking through the dashboard." }],
+          details: { questions: [], answers: null }
+        };
+      }
       const items = params.questions?.length
         ? params.questions
         : params.question
@@ -196,13 +204,22 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.registerCommand("companion", {
     description: "Enable Pi Companion for this session and show the dashboard address (`/companion off` to stop sharing)",
     handler: async (args, ctx) => {
+      bridge.setContext(ctx);
+      if (args.trim().toLowerCase() === "off") {
+        bridge.setRemoteEnabled(false);
+        ctx.ui.notify("Pi Companion: this session is no longer shared with paired devices.", "info");
+        return;
+      }
+      const currentBridge = bridge;
       const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
       if (!up) {
         ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
         return;
       }
+      if (bridge !== currentBridge) return;
+      bridge.activate();
       void bridge.connect();
-      const enabled = args.trim().toLowerCase() !== "off";
+      const enabled = true;
       bridge.setRemoteEnabled(enabled);
       ctx.ui.notify(
         enabled
@@ -216,6 +233,10 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.registerCommand("remote-control", {
     description: "Toggle remote control for this Pi session",
     handler: async (_args, ctx) => {
+      if (!bridge.isActivated()) {
+        ctx.ui.notify("Run /companion first to enable this session's daemon connection.", "warning");
+        return;
+      }
       const enabled = !bridge.isRemoteEnabled();
       bridge.setRemoteEnabled(enabled);
       ctx.ui.notify(

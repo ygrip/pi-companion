@@ -17,6 +17,8 @@ export class CompanionBridge implements AskChannel {
   private ctx?: ExtensionContext;
   private reconnect?: NodeJS.Timeout;
   private closed = false;
+  private activated = false;
+  private restoreDialogs?: () => void;
   private connecting = false;
   private everConnected = false;
   private downSince = 0;
@@ -40,11 +42,13 @@ export class CompanionBridge implements AskChannel {
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
-    if (ctx.hasUI) relayDialogs(ctx.ui, this, this.toolDialogs);
+    if (this.activated && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs);
+    const name = this.pi.getSessionName() ?? this.snapshot.name;
     this.snapshot = {
       ...this.snapshot,
+      name,
       cwd: ctx.cwd,
-      shortTitle: this.snapshot.name?.trim() || ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
+      shortTitle: name?.trim() || ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
       mainModel: ctx.model?.id,
       effort: ctx.thinkingLevel,
       status: ctx.isIdle() ? "idle" : "active"
@@ -53,7 +57,8 @@ export class CompanionBridge implements AskChannel {
 
   setName(name?: string) {
     this.snapshot.name = name;
-    this.send({ type: "session.update", session: { name } });
+    this.snapshot.shortTitle = name?.trim() || this.snapshot.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
+    this.send({ type: "session.update", session: { name, shortTitle: this.snapshot.shortTitle } });
   }
 
   setRemoteEnabled(remoteEnabled: boolean) {
@@ -69,9 +74,19 @@ export class CompanionBridge implements AskChannel {
     return [...this.tempFiles];
   }
 
-  /** Connect to the shared daemon, launching it only when nothing is listening. */
+  /** Only an explicit /companion command may activate this session's bridge. */
+  activate() {
+    this.activated = true;
+    if (this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs);
+  }
+
+  isActivated() {
+    return this.activated && !this.closed;
+  }
+
+  /** Connect to the shared daemon only after this session opted in. */
   async connect() {
-    if (this.closed || this.connecting) return;
+    if (!this.activated || this.closed || this.connecting) return;
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return; // connecting or already live
     this.connecting = true;
     try {
@@ -116,6 +131,9 @@ export class CompanionBridge implements AskChannel {
 
   close() {
     this.closed = true;
+    this.restoreDialogs?.();
+    this.restoreDialogs = undefined;
+    for (const entry of [...this.asks.values()]) entry.settle(null);
     if (this.reconnect) clearTimeout(this.reconnect);
     this.ws?.close();
   }
@@ -136,7 +154,7 @@ export class CompanionBridge implements AskChannel {
   ask(input: AskInput, signal?: AbortSignal) {
     const request: AskRequest = { ...input, requestId: randomUUID(), createdAt: new Date().toISOString() };
     return new Promise<AskAnswers | null>(resolve => {
-      if (signal?.aborted) return resolve(null);
+      if (!this.isActivated() || signal?.aborted) return resolve(null);
       const onAbort = () => settle(null);
       const settle = (answers: AskAnswers | null) => {
         if (!this.asks.delete(request.requestId)) return;
@@ -157,6 +175,7 @@ export class CompanionBridge implements AskChannel {
   }
 
   async deleteTempFile(fileId: string) {
+    if (!this.isActivated()) return { ok: false, error: "Run /companion first to enable this session." };
     const requestId = randomUUID();
     this.send({ type: "file.delete", requestId, fileId });
     return await new Promise<{ ok: boolean; error?: string }>(resolve => {
@@ -174,7 +193,7 @@ export class CompanionBridge implements AskChannel {
 
   private scheduleReconnect() {
     if (this.reconnect) clearTimeout(this.reconnect);
-    if (this.closed) return;
+    if (!this.activated || this.closed) return;
     this.reconnect = setTimeout(() => void this.connect(), this.retryDelay);
     this.retryDelay = Math.min(this.retryDelay * 2, 10_000);
   }
