@@ -179,6 +179,7 @@
     follow = true;
     unseen = 0;
     if (session && !ended) void companion.refreshFiles(id).catch(() => {});
+    void companion.loadActivity(id).catch(() => {});
   });
 
   // A real end/unshare invalidates uploads; an ordinary outage preserves drafts.

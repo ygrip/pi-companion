@@ -84,3 +84,32 @@ async fn retired_bridge_cannot_stop_or_hide_its_replacement() {
     assert_eq!(delete_session(&state, "session", false).await.unwrap_err().0, StatusCode::CONFLICT);
     replacement.close(None).await.unwrap();
 }
+
+#[tokio::test]
+async fn activity_log_replays_feed_to_reconnecting_browsers() {
+    let state = test_state();
+    let local = local_router(state.clone());
+    let remote = remote_router(state.clone());
+    let (_, token) = pair(&state).await;
+    let addr = serve(local.clone()).await;
+    let mut pi = bridge(addr, "session", false).await;
+    send_json(&mut pi, json!({"type":"event","event":"assistant.delta","payload":{"kind":"text","delta":"Hel"}})).await;
+    send_json(&mut pi, json!({"type":"event","event":"assistant.delta","payload":{"kind":"text","delta":"lo"}})).await;
+    send_json(&mut pi, json!({"type":"git.diff","staged":false,"diff":""})).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let (status, body) = call(&local, request("GET", "/api/sessions/session/activity", Some(CONSOLE_ORIGIN), None).body(Body::empty()).unwrap()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let log: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(log["seq"], 2);
+    assert_eq!(log["messages"].as_array().unwrap().len(), 1, "diffs stay out of the feed; deltas merge");
+    assert_eq!(log["messages"][0]["payload"]["delta"], "Hello");
+
+    // Unshared sessions stay private to the computer.
+    let remote_get = |token: &str| request("GET", "/api/sessions/session/activity", Some(DEVICE_ORIGIN), Some(token)).body(Body::empty()).unwrap();
+    assert_eq!(call(&remote, remote_get(&token)).await.0, StatusCode::FORBIDDEN);
+    state.sessions.write().await.get_mut("session").unwrap().snapshot["remoteEnabled"] = json!(true);
+    assert_eq!(call(&remote, remote_get(&token)).await.0, StatusCode::OK);
+    assert_eq!(call(&remote, remote_get("invalid")).await.0, StatusCode::UNAUTHORIZED);
+    pi.close(None).await.unwrap();
+}

@@ -248,11 +248,15 @@ async fn protocol_relays_registration_updates_and_commands() {
     let command = next_matching(&mut pi, |v| v["type"] == "command").await;
     assert_eq!(command["command"]["type"], "ask_answer");
     assert_eq!(command["command"]["answers"]["q1"][0], "Yes");
+    let echoed = next_matching(&mut browser, |v| v["type"] == "bridge.event").await;
+    assert_eq!(echoed["message"]["event"], "user.message", "answers show up in every companion's feed");
+    assert_eq!(echoed["message"]["payload"]["text"], "Yes");
 
     send_json(&mut pi, json!({ "type": "event", "event": "tool.start", "payload": { "toolName": "bash" } })).await;
     let event = next_matching(&mut browser, |v| v["type"] == "bridge.event").await;
     assert_eq!(event["sessionId"], "s1");
     assert_eq!(event["message"]["payload"]["toolName"], "bash");
+    assert_eq!(event["message"]["seq"], 2, "feed messages carry a replay sequence");
 }
 
 #[tokio::test]

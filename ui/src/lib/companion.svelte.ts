@@ -1,4 +1,4 @@
-import { pushUser, reduceBridgeMessage, type ActivityEntry } from './activity.ts';
+import { reduceBridgeMessage, replayActivity, type ActivityEntry } from './activity.ts';
 import { sortSessions } from './format.ts';
 import { toasts } from './toast.svelte.ts';
 import { LiveConnection, type Connection } from './connection.ts';
@@ -70,6 +70,10 @@ class Companion {
     },
     revoked: () => this.forget()
   });
+  /** Highest activity `seq` applied per session; live frames at or below it are replays. */
+  private activitySeq = new Map<string, number>();
+  /** Live frames that arrived while a session's activity log was being fetched. */
+  private activityBuffer = new Map<string, any[]>();
   private connectionEpoch = 0;
   private retryMs = 1000;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -175,7 +179,36 @@ class Companion {
 
   async refresh() {
     await Promise.all([this.refreshSessions(), this.refreshDevices()]);
-    await Promise.all(Object.keys(this.files).filter((id) => this.session(id)).map((id) => this.refreshFiles(id)));
+    await Promise.all([
+      ...Object.keys(this.files).filter((id) => this.session(id)).map((id) => this.refreshFiles(id)),
+      // Catch up on anything said while this device was offline, asleep or closed.
+      ...[...this.activitySeq.keys()].filter((id) => this.session(id)).map((id) => this.loadActivity(id).catch(() => {}))
+    ]);
+  }
+
+  /**
+   * Load a session's recent activity from the daemon. Called when a session is opened and
+   * after every (re)connect, so the feed survives reloads, closed tabs and dropped sockets.
+   */
+  async loadActivity(sessionId: string) {
+    if (this.activityBuffer.has(sessionId)) return;
+    this.activityBuffer.set(sessionId, []);
+    if (!this.activitySeq.has(sessionId)) this.activitySeq.set(sessionId, 0);
+    try {
+      const log = await this.request<{ seq: number; messages: unknown[] }>('/api/sessions/' + encodeURIComponent(sessionId) + '/activity');
+      if (!log || !Array.isArray(log.messages)) return;
+      let entries = replayActivity(log.messages);
+      let seq = Number(log.seq) || 0;
+      for (const message of this.activityBuffer.get(sessionId) ?? []) {
+        if (typeof message.seq === 'number' && message.seq <= seq) continue;
+        entries = reduceBridgeMessage(entries, message);
+        if (typeof message.seq === 'number') seq = message.seq;
+      }
+      this.activitySeq.set(sessionId, seq);
+      this.activity = { ...this.activity, [sessionId]: entries };
+    } finally {
+      this.activityBuffer.delete(sessionId);
+    }
   }
 
   async refreshSessions() {
@@ -205,6 +238,7 @@ class Companion {
     const { [sessionId]: _files, ...files } = this.files;
     const { [sessionId]: _diffs, ...diffs } = this.diffs;
     this.activity = activity;
+    this.activitySeq.delete(sessionId);
     this.files = files;
     this.diffs = diffs;
   }
@@ -341,6 +375,12 @@ class Companion {
       if (error) toasts.show(error, 'error');
       return;
     }
+    if (typeof inner.seq === 'number') {
+      const pending = this.activityBuffer.get(sessionId);
+      if (pending) { pending.push(inner); return; }
+      if (inner.seq <= (this.activitySeq.get(sessionId) ?? 0)) return;
+      this.activitySeq.set(sessionId, inner.seq);
+    }
     const current = this.activity[sessionId] ?? [];
     const next = reduceBridgeMessage(current, inner);
     if (next !== current) this.activity = { ...this.activity, [sessionId]: next };
@@ -352,9 +392,8 @@ class Companion {
   }
 
   prompt(sessionId: string, text: string, steer: boolean) {
-    if (!this.send(sessionId, { type: steer ? 'steer' : 'prompt', text })) return false;
-    this.activity = { ...this.activity, [sessionId]: pushUser(this.activity[sessionId] ?? [], steer ? 'You · steer' : 'You', text) };
-    return true;
+    // The daemon echoes the message into every companion's feed (including this one).
+    return this.send(sessionId, { type: steer ? 'steer' : 'prompt', text });
   }
 
   /** Drop an ask locally right away; the bridge's session.update confirms it. */
@@ -367,8 +406,6 @@ class Companion {
   answer(sessionId: string, requestId: string, answers: AskAnswers) {
     if (!this.send(sessionId, { type: 'ask_answer', requestId, answers })) return false;
     this.withoutAsk(sessionId, requestId);
-    const summary = Object.values(answers).map((values) => values.join(', ')).join(' · ');
-    this.activity = { ...this.activity, [sessionId]: pushUser(this.activity[sessionId] ?? [], 'You · answer', summary) };
     return true;
   }
 

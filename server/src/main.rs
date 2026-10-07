@@ -1,3 +1,4 @@
+mod activity;
 mod assets;
 mod config;
 #[cfg(test)]
@@ -58,6 +59,8 @@ struct Kick {
 struct AppState {
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     files: Arc<RwLock<HashMap<String, Vec<TempFile>>>>,
+    /// Recent feed per session so reconnecting browsers can catch up.
+    activity: Arc<RwLock<activity::ActivityStore>>,
     pairings: Arc<RwLock<HashMap<String, PairingInvite>>>,
     /// Times of recent wrong pairing-code attempts (brute-force brake).
     code_failures: Arc<Mutex<Vec<u64>>>,
@@ -85,6 +88,7 @@ impl AppState {
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             files: Arc::new(RwLock::new(HashMap::new())),
+            activity: Arc::new(RwLock::new(activity::ActivityStore::default())),
             pairings: Arc::new(RwLock::new(HashMap::new())),
             code_failures: Arc::new(Mutex::new(Vec::new())),
             devices: Arc::new(RwLock::new(devices)),
@@ -267,6 +271,7 @@ fn local_router(state: AppState) -> Router {
         .route("/api/context", get(local_context))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{session_id}", delete(delete_session_local))
+        .route("/api/sessions/{session_id}/activity", get(session_activity))
         .route("/api/sessions/{session_id}/files", get(list_files).post(upload_file))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_local))
         .route("/api/pairing/start", post(start_pairing))
@@ -290,6 +295,7 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/pairing/claim", post(claim_pairing))
         .route("/api/sessions", get(list_sessions_remote))
         .route("/api/sessions/{session_id}", delete(delete_session_remote))
+        .route("/api/sessions/{session_id}/activity", get(session_activity_remote))
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
@@ -511,6 +517,7 @@ async fn delete_session(state: &AppState, session_id: &str, remote: bool) -> Api
     }
     let remote_enabled = session.snapshot.get("remoteEnabled").and_then(Value::as_bool) == Some(true);
     sessions.remove(session_id);
+    state.activity.write().await.remove(session_id);
     // Keep the lock through publication so a concurrent registration cannot be followed
     // by a stale removal event. No filesystem operation is performed by archiving.
     broadcast(state, serde_json::json!({ "type": "session.removed", "sessionId": session_id, "remoteEnabled": remote_enabled }));
@@ -677,6 +684,23 @@ async fn list_files(
     Path(session_id): Path<String>,
 ) -> Json<FilesResponse> {
     Json(FilesResponse { files: session_files(&state, &session_id).await })
+}
+
+async fn session_activity(State(state): State<AppState>, Path(session_id): Path<String>) -> ApiResult<Json<Value>> {
+    if !state.sessions.read().await.contains_key(&session_id) {
+        return Err((StatusCode::NOT_FOUND, "Session not found.".into()));
+    }
+    Ok(Json(state.activity.read().await.snapshot(&session_id)))
+}
+
+async fn session_activity_remote(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    headers: HeaderMap,
+) -> ApiResult<Json<Value>> {
+    authorize_device(&state, bearer_token(&headers)?).await?;
+    require_remote_session(&state, &session_id).await?;
+    Ok(Json(state.activity.read().await.snapshot(&session_id)))
 }
 
 async fn list_files_remote(
@@ -1030,8 +1054,13 @@ async fn forward_browser_command(state: &AppState, text: &str, remote: bool) {
     if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
         return;
     }
-    if let Some(command_tx) = &session.command_tx {
-        let _ = command_tx.send(serde_json::json!({ "type": "command", "command": envelope.command }));
+    let Some(command_tx) = &session.command_tx else { return };
+    if command_tx.send(serde_json::json!({ "type": "command", "command": envelope.command.clone() })).is_err() { return; }
+    // Show what was sent on every open companion (and after a reload), not just the sender's tab.
+    if let Some(entry) = activity::user_message(&envelope.command) {
+        let mut log = state.activity.write().await;
+        let message = log.record(&envelope.session_id, entry);
+        broadcast(state, serde_json::json!({ "type": "bridge.event", "sessionId": envelope.session_id, "message": message }));
     }
 }
 
@@ -1131,10 +1160,13 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                 }));
             }
             _ => {
+                // Hold the log lock while publishing so seq order matches broadcast order.
+                let mut log = state.activity.write().await;
+                let message = if activity::is_activity(&value) { log.record(&session_id, value) } else { value };
                 broadcast(&state, serde_json::json!({
                     "type": "bridge.event",
                     "sessionId": session_id,
-                    "message": value
+                    "message": message
                 }));
             }
         }

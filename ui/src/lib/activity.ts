@@ -26,6 +26,13 @@ export function pushUser(entries: ActivityEntry[], title: string, body: string) 
   return cap([...entries, entry('user', title, body)]);
 }
 
+/** Rebuild a feed from the daemon's activity log (see server/src/activity.rs). */
+export function replayActivity(messages: unknown[]): ActivityEntry[] {
+  let entries: ActivityEntry[] = [];
+  for (const message of messages) entries = reduceBridgeMessage(entries, message);
+  return entries;
+}
+
 /** Reduce one bridge message into the activity feed. Returns the same array when nothing changes. */
 export function reduceBridgeMessage(entries: ActivityEntry[], message: any): ActivityEntry[] {
   if (message?.type === 'error') return cap([...entries, entry('error', 'Something went wrong', String(message.message ?? ''))]);
@@ -70,6 +77,8 @@ export function reduceBridgeMessage(entries: ActivityEntry[], message: any): Act
       next[index] = { ...current, status, body: result ? current.body + (current.body ? '\n→ ' : '') + result : current.body };
       return next;
     }
+    case 'user.message':
+      return cap([...entries, entry('user', String(payload.title ?? 'You'), String(payload.text ?? ''))]);
     case 'agent.start':
       return cap([...entries, entry('lifecycle', 'Pi started working')]);
     case 'agent.end':
