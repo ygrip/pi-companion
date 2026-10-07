@@ -1,472 +1,362 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import DotField from '$lib/DotField.svelte';
-  import { createApi, type PairedDevice, type Session, type TempFile } from '$lib/api';
-  import { pushUser, reduceBridgeMessage, type ActivityEntry, type AskRequest } from '$lib/activity';
-  import '../app.css';
+  import { onMount, type Component } from 'svelte';
+  import piArt from '../assets/morph/pi.png';
+  import computerArt from '../assets/morph/computer.svg';
+  import companionArt from '../assets/morph/companion.svg';
+  import Icon, { type IconName } from '#lib/Icon.svelte';
+  import SessionCard from '#lib/SessionCard.svelte';
+  import { companion } from '#lib/companion.svelte';
 
-  let remote = false;
-  let token: string | null = null;
-  let paired = true;
-  let sessions: Session[] = [];
-  let devices: PairedDevice[] = [];
-  let files: TempFile[] = [];
-  let selectedId: string | null = null;
-  let ws: WebSocket | null = null;
-  let activity: ActivityEntry[] = [];
-  let asks: AskRequest[] = [];
-  let askDrafts: Record<string, string> = {};
-  let connection: 'connecting' | 'online' | 'offline' = 'connecting';
-  let followTail = true;
-  let terminalBody: HTMLDivElement;
-  let prompt = '';
-  let steer = false;
-  let activeTab: 'activity' | 'files' | 'diff' | 'plan' = 'activity';
-  let diff = '';
-  let plan = '';
-  let pairing: { code: string; url: string; qrSvg: string } | null = null;
-  let deviceName = 'Phone';
-  let pairError = '';
-  let uploadInput: HTMLInputElement;
+  // The dot field morphs Pi → computer → companion, on the same loop as Raksara.
+  const art = [piArt, computerArt, companionArt];
+  let visual = $state<HTMLDivElement | null>(null);
+  let DotField = $state<Component<any> | null>(null);
 
-  $: selected = sessions.find((session) => session.id === selectedId) ?? null;
-  $: api = createApi(remote, token);
+  const live = $derived(companion.sessions.filter((s) => s.status !== 'stopped'));
+  const working = $derived(companion.sessions.filter((s) => s.status === 'active').length);
+  const waiting = $derived(Object.values(companion.asks).reduce((n, list) => n + list.length, 0));
+  const connected = $derived(companion.devices.filter((d) => d.connected).length);
+  const recent = $derived(companion.sessions.slice(0, 4));
 
-  function formatBytes(bytes: number) {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KiB';
-    return (bytes / 1024 / 1024).toFixed(1) + ' MiB';
-  }
+  type Stat = { label: string; value: number | string; hint: string; icon: IconName; href: string };
+  const stats = $derived<Stat[]>([
+    { label: 'Live sessions', value: live.length, hint: working ? working + ' working right now' : 'None working right now', icon: 'sessions', href: '/sessions' },
+    { label: 'Waiting on you', value: waiting, hint: waiting ? 'Pi asked a question' : 'No open questions', icon: 'question', href: '/sessions' },
+    ...(companion.isAdmin
+      ? [
+          { label: 'Paired devices', value: companion.devices.length, hint: connected ? connected + ' connected now' : 'None connected', icon: 'devices' as IconName, href: '/devices' },
+          { label: 'Shared sessions', value: companion.sessions.filter((s) => s.remoteEnabled && s.status !== 'stopped').length, hint: 'Visible on your devices', icon: 'link' as IconName, href: '/sessions' }
+        ]
+      : [])
+  ]);
 
-  function sessionLabel(session: Session) {
-    return session.name || session.shortTitle || 'Pi session';
-  }
+  const steps = $derived(
+    companion.isAdmin
+      ? [
+          { title: 'Run Pi as usual', body: 'Every Pi session with the extension shows up here on its own. Nothing to configure.' },
+          { title: 'Pair your phone once', body: 'Scan a code from Devices. The phone stays trusted until you revoke it.' },
+          { title: 'Share what you want', body: 'Type /remote-control inside a Pi session to make it visible on paired devices.' }
+        ]
+      : [
+          { title: 'Pick a session', body: 'Only sessions your computer has chosen to share appear here.' },
+          { title: 'Follow along', body: 'Read Pi’s replies, tool calls and questions as they happen.' },
+          { title: 'Step in when needed', body: 'Answer questions, send a prompt, steer the current turn, or stop it.' }
+        ]
+  );
 
-  function onTerminalScroll() {
-    if (!terminalBody) return;
-    followTail = terminalBody.scrollHeight - terminalBody.scrollTop - terminalBody.clientHeight < 40;
-  }
-
-  function scrollToTail() {
-    if (!followTail || !terminalBody) return;
-    requestAnimationFrame(() => terminalBody && (terminalBody.scrollTop = terminalBody.scrollHeight));
-  }
-
-  function answerAsk(requestId: string, answer: string) {
-    const text = answer.trim();
-    if (!text) return;
-    send({ type: 'ask_answer', requestId, answer: text });
-    asks = asks.filter((ask) => ask.requestId !== requestId);
-    delete askDrafts[requestId];
-    activity = pushUser(activity, 'answer', text);
-  }
-
-  function onTabKey(event: KeyboardEvent) {
-    const order: (typeof activeTab)[] = ['activity', 'files', 'diff', 'plan'];
-    const index = order.indexOf(activeTab);
-    let next = index;
-    if (event.key === 'ArrowRight') next = (index + 1) % order.length;
-    else if (event.key === 'ArrowLeft') next = (index - 1 + order.length) % order.length;
-    else if (event.key === 'Home') next = 0;
-    else if (event.key === 'End') next = order.length - 1;
-    else return;
-    event.preventDefault();
-    switchTab(order[next]);
-    document.getElementById('tab-' + order[next])?.focus();
-  }
-
-  function onComposerKey(event: KeyboardEvent) {
-    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-      event.preventDefault();
-      submitPrompt();
+  onMount(() => {
+    // The canvas is decorative: load it after first paint and when the browser is idle.
+    const load = () => void import('#lib/DotField.svelte').then((module) => (DotField = module.default));
+    if ('requestIdleCallback' in window) {
+      const id = requestIdleCallback(load, { timeout: 800 });
+      return () => cancelIdleCallback(id);
     }
-  }
-
-  async function refreshSessions() {
-    const result = await api.request<{ sessions: Session[] }>('/api/sessions');
-    sessions = result.sessions;
-    if (selectedId && !sessions.some((s) => s.id === selectedId)) selectedId = null;
-    if (!selectedId && sessions.length) selectedId = sessions[0].id;
-  }
-
-  async function refreshDevices() {
-    if (remote) return;
-    const result = await api.request<{ devices: PairedDevice[] }>('/api/devices');
-    devices = result.devices;
-  }
-
-  async function refreshFiles() {
-    if (!selectedId || selected?.status === 'stopped') {
-      files = [];
-      return;
-    }
-    const result = await api.request<{ files: TempFile[] }>(
-      '/api/sessions/' + encodeURIComponent(selectedId) + '/files'
-    );
-    files = result.files;
-  }
-
-  function send(command: Record<string, unknown>) {
-    if (!selectedId || selected?.status === 'stopped' || ws?.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ sessionId: selectedId, command }));
-  }
-
-  async function selectSession(id: string) {
-    selectedId = id;
-    activity = [];
-    asks = [];
-    followTail = true;
-    diff = '';
-    activeTab = 'activity';
-    await refreshFiles().catch(() => {});
-  }
-
-  function connect() {
-    if (remote && !token) return;
-    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    ws = remote
-      ? new WebSocket(proto + '//' + location.host + '/ws/browser', ['pi-companion', 'token.' + token])
-      : new WebSocket(proto + '//' + location.host + '/ws/browser');
-
-    connection = 'connecting';
-    ws.onopen = () => (connection = 'online');
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'session.register') {
-        const next = message.session as Session;
-        if (!remote || next.remoteEnabled) sessions = [...sessions.filter((s) => s.id !== next.id), next];
-      } else if (message.type === 'session.update') {
-        if (remote && message.patch?.remoteEnabled && !sessions.some((s) => s.id === message.sessionId)) {
-          void refreshSessions().catch(() => {});
-        }
-        sessions = sessions
-          .map((s) => s.id === message.sessionId ? { ...s, ...message.patch } : s)
-          .filter((s) => !remote || s.remoteEnabled);
-      } else if (message.type === 'files.update' && message.sessionId === selectedId) {
-        files = message.files;
-      } else if (message.type === 'devices.update') {
-        void refreshDevices();
-      } else if (message.type === 'bridge.event' && message.sessionId === selectedId) {
-        const inner = message.message;
-        if (inner.type === 'git.diff') diff = inner.diff || '(clean)';
-        else if (inner.type === 'ask.request') {
-          asks = [...asks.filter((a) => a.requestId !== inner.requestId), inner as AskRequest];
-        } else {
-          const next = reduceBridgeMessage(activity, inner);
-          if (next !== activity) {
-            activity = next;
-            scrollToTail();
-          }
-        }
-      }
-    };
-    ws.onclose = () => {
-      connection = 'offline';
-      setTimeout(connect, 1500);
-    };
-  }
-
-  async function startPairing() {
-    pairing = await api.request('/api/pairing/start', { method: 'POST' });
-  }
-
-  async function claimPairing(invite: string) {
-    pairError = '';
-    try {
-      const response = await fetch('/api/pairing/claim', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ invite, deviceName })
-      });
-      if (!response.ok) throw new Error(await response.text());
-      const result = await response.json();
-      localStorage.setItem('piCompanionDeviceToken', result.token);
-      location.replace('/');
-    } catch (error) {
-      pairError = String(error instanceof Error ? error.message : error);
-    }
-  }
-
-  async function revokeDevice(id: string) {
-    await api.request('/api/devices/' + encodeURIComponent(id), { method: 'DELETE' });
-    await refreshDevices();
-  }
-
-  async function upload() {
-    const file = uploadInput?.files?.[0];
-    if (!file || !selectedId) return;
-    const data = new FormData();
-    data.append('file', file);
-    await api.request('/api/sessions/' + encodeURIComponent(selectedId) + '/files', {
-      method: 'POST',
-      body: data
-    });
-    uploadInput.value = '';
-    await refreshFiles();
-  }
-
-  async function removeFile(id: string) {
-    if (!selectedId) return;
-    await api.request(
-      '/api/sessions/' + encodeURIComponent(selectedId) + '/files/' + encodeURIComponent(id),
-      { method: 'DELETE' }
-    );
-    await refreshFiles();
-  }
-
-  function submitPrompt() {
-    const text = prompt.trim();
-    if (!text) return;
-    send({ type: steer ? 'steer' : 'prompt', text });
-    activity = pushUser(activity, steer ? 'steer' : 'prompt', text);
-    followTail = true;
-    scrollToTail();
-    prompt = '';
-  }
-
-  function switchTab(tab: typeof activeTab) {
-    activeTab = tab;
-    if (tab === 'files') void refreshFiles();
-    if (tab === 'diff') send({ type: 'git_diff', staged: false });
-  }
-
-  onMount(async () => {
-    const context = await fetch('/api/context').then((r) => r.json());
-    remote = Boolean(context.remote);
-    token = localStorage.getItem('piCompanionDeviceToken');
-
-    const invite = new URLSearchParams(location.search).get('invite');
-    if (remote && invite && !token) {
-      paired = false;
-      deviceName = /Mobile|Android|iPhone/i.test(navigator.userAgent) ? 'Phone' : 'Browser';
-      return;
-    }
-    if (remote && !token) {
-      paired = false;
-      return;
-    }
-
-    await refreshSessions();
-    await refreshDevices();
-    await refreshFiles().catch(() => {});
-    connect();
+    const timer = setTimeout(load, 200);
+    return () => clearTimeout(timer);
   });
 </script>
 
-<svelte:head>
-  <title>Pi Companion</title>
-  <meta name="description" content="Minimal remote control for Pi sessions" />
-</svelte:head>
+<svelte:head><title>Overview · Pi Companion</title></svelte:head>
 
-<a class="skip-link" href="#main">Skip to session</a>
-<div class="app-shell">
-  <section class="hero bento">
-    <DotField />
+<div class="page">
+  <section class="hero card">
+    {#if DotField}
+      <DotField
+        images={art}
+        anchor={visual}
+        className="hero-field"
+        label="Dots shaping the Pi symbol, then a computer, then a phone companion" />
+    {/if}
     <div class="hero-copy">
-      <div class="brand-row">
-        <div class="mark">π</div>
-        <div>
-          <span class="eyebrow">PI COMPANION</span>
-          <h1>Sessions, without the terminal leash.</h1>
-        </div>
+      <span class="eyebrow">{companion.isAdmin ? 'Pi Companion' : 'Paired with your computer'}</span>
+      <h1>Pi keeps working.<br /><span class="accent">You stay in the loop.</span></h1>
+      <p>
+        Watch live Pi sessions, answer its questions, steer the next step and hand over files, from this computer or
+        your phone, without going back to the terminal.
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" href="/sessions"><Icon name="sessions" />Open sessions</a>
+        {#if companion.isAdmin}
+          <a class="btn" href="/devices"><Icon name="devices" />Pair a phone</a>
+        {/if}
       </div>
-      <p>Lightweight remote control for live Pi sessions, plans, diffs, files and user input.</p>
+      <ol class="journey" aria-label="How it connects">
+        <li>Pi</li>
+        <li>Your computer</li>
+        <li>Your companion</li>
+      </ol>
     </div>
-    <div class="hero-status" role="status">
-      <span class="status-dot {connection}" aria-hidden="true"></span>
-      {remote ? 'PAIRED DEVICE' : 'LOCAL ADMIN'} · {connection === 'online' ? 'LIVE' : connection === 'connecting' ? 'CONNECTING' : 'RECONNECTING'}
-    </div>
+    <div class="hero-visual" bind:this={visual} aria-hidden="true"></div>
   </section>
 
-  {#if !paired}
-    <section class="pair-card bento">
-      {#if new URLSearchParams(location.search).get('invite')}
-        <span class="eyebrow">PAIR DEVICE</span>
-        <h2>Connect this device</h2>
-        <p>The invitation is single-use and expires after five minutes.</p>
-        <label class="field-label" for="device-name">Device name</label>
-        <input id="device-name" bind:value={deviceName} maxlength="80" autocomplete="off" />
-        <button class="primary" onclick={() => claimPairing(new URLSearchParams(location.search).get('invite')!)}>Pair device</button>
-        {#if pairError}<p class="error">{pairError}</p>{/if}
-      {:else}
-        <span class="eyebrow">NOT PAIRED</span>
-        <h2>This device needs an invitation.</h2>
-        <p>Open Pi Companion locally and scan a fresh pairing QR.</p>
+  <section class="stats" aria-label="At a glance">
+    {#each stats as stat (stat.label)}
+      <a class="stat card" href={stat.href}>
+        <span class="stat-icon"><Icon name={stat.icon} /></span>
+        <span class="stat-label">{stat.label}</span>
+        <strong>{stat.value}</strong>
+        <span class="subtle">{stat.hint}</span>
+      </a>
+    {/each}
+  </section>
+
+  <section class="recent" aria-labelledby="recent-heading">
+    <div class="section-head">
+      <h2 id="recent-heading">Recent sessions</h2>
+      {#if companion.sessions.length > recent.length}
+        <a class="btn btn-ghost btn-sm" href="/sessions">View all {companion.sessions.length}<Icon name="chevron" size={14} /></a>
       {/if}
-    </section>
-  {:else}
-    {#if !remote}
-      <section class="device-bento">
-        <article class="bento pair-panel">
-          <div class="card-head">
-            <div><span class="eyebrow">PAIRING</span><h2>Devices</h2></div>
-            <button class="primary" onclick={startPairing}>Pair device</button>
-          </div>
-          {#if pairing}
-            <div class="pairing">
-              <div class="qr">{@html pairing.qrSvg}</div>
-              <div>
-                <strong class="pair-code">{pairing.code}</strong>
-                <p>Scan with your phone. The invite expires in five minutes.</p>
-                <code>{pairing.url}</code>
-              </div>
-            </div>
-          {/if}
-          <div class="device-list">
-            {#if devices.length === 0}<p class="muted">No paired devices.</p>{/if}
-            {#each devices as device (device.id)}
-              <div class="device-row">
-                <div><strong>{device.name}</strong><span>seen {new Date(device.lastSeen * 1000).toLocaleString()}</span></div>
-                <button class="danger" aria-label={'Revoke ' + device.name} onclick={() => { if (confirm('Revoke ' + device.name + '? It will need to pair again.')) void revokeDevice(device.id); }}>Revoke</button>
-              </div>
-            {/each}
-          </div>
-        </article>
-      </section>
-    {/if}
-
-    <div class="workspace">
-      <aside class="session-rail bento">
-        <div class="rail-head"><h2 class="eyebrow" id="sessions-heading">SESSIONS</h2><span>{sessions.length}</span></div>
-        <nav class="session-list" aria-labelledby="sessions-heading">
-          {#if sessions.length === 0}<p class="muted">No sessions registered. Start <code>pi</code> with the companion extension.</p>{/if}
-          {#each sessions as session (session.id)}
-            <button aria-current={selectedId === session.id ? 'true' : undefined} class:active={selectedId === session.id} class="session-card" onclick={() => selectSession(session.id)}>
-              <div class="session-top">
-                <span class="state-dot {session.status}" aria-hidden="true"></span>
-                <strong>{session.shortTitle}</strong>
-                <span class="state-label">{session.status}</span>
-              </div>
-              <span class="session-name">{session.name || 'Unnamed session'}</span>
-              <span class="session-model">{session.mainModel || 'model'}{session.effort ? ' · ' + session.effort : ''}</span>
-            </button>
-          {/each}
-        </nav>
-      </aside>
-
-      <main class="session-main" id="main" tabindex="-1">
-        {#if selected}
-          <section class="session-hero bento">
-            <div>
-              <span class="eyebrow">{selected.shortTitle}</span>
-              <h2>{sessionLabel(selected)}</h2>
-              <p>{selected.cwd}</p>
-            </div>
-            <div class="fact-row">
-              <span class="pill"><i class="state-dot {selected.status}"></i>{selected.status}</span>
-              <span class="pill">{selected.mainModel || 'unknown model'}</span>
-              <span class="pill">{selected.effort || 'default effort'}</span>
-              <span class="pill">{selected.remoteEnabled ? 'remote on' : 'local only'}</span>
-            </div>
-          </section>
-
-          <section class="metrics">
-            <article class="metric bento"><span>STATUS</span><strong>{selected.status}</strong><small>pid {selected.pid}</small></article>
-            <article class="metric bento"><span>MODEL</span><strong>{selected.mainModel || 'Unknown'}</strong><small>{selected.effort || 'default effort'}</small></article>
-            <article class="metric bento"><span>FILES</span><strong>{files.length}</strong><small>temporary sandbox</small></article>
-          </section>
-
-          <section class="terminal bento">
-            <div class="terminal-head">
-              <div class="terminal-lights" aria-hidden="true"><i></i><i></i><i></i></div>
-              <div class="tabs" role="tablist" aria-label="Session views" tabindex="-1" onkeydown={onTabKey}>
-                {#each [['activity', 'activity'], ['files', 'files'], ['diff', 'git diff'], ['plan', 'plan']] as [key, label] (key)}
-                  <button
-                    id={'tab-' + key}
-                    role="tab"
-                    aria-selected={activeTab === key}
-                    aria-controls="terminal-panel"
-                    tabindex={activeTab === key ? 0 : -1}
-                    class:active={activeTab === key}
-                    onclick={() => switchTab(key as typeof activeTab)}
-                  >{label}{#if key === 'activity' && asks.length}<span class="badge" aria-label={asks.length + ' pending questions'}>{asks.length}</span>{/if}</button>
-                {/each}
-              </div>
-              <button class="danger compact" disabled={selected.status === 'stopped'} onclick={() => send({ type: 'abort' })}>abort</button>
-            </div>
-
-            {#if asks.length}
-              <div class="ask-stack" role="region" aria-label="Questions from Pi" aria-live="assertive">
-                {#each asks as ask (ask.requestId)}
-                  <form class="ask-card" aria-label="Question from Pi" onsubmit={(event) => { event.preventDefault(); answerAsk(ask.requestId, askDrafts[ask.requestId] ?? ''); }}>
-                    <span class="eyebrow">PI IS ASKING</span>
-                    <p class="ask-question">{ask.question}</p>
-                    {#if ask.options?.length}
-                      <div class="ask-options">
-                        {#each ask.options as option (option)}
-                          <button type="button" onclick={() => answerAsk(ask.requestId, option)}>{option}</button>
-                        {/each}
-                      </div>
-                    {/if}
-                    <div class="ask-input">
-                      <label class="sr-only" for={'ask-' + ask.requestId}>Your answer</label>
-                      <input id={'ask-' + ask.requestId} bind:value={askDrafts[ask.requestId]} placeholder="Type an answer…" autocomplete="off" />
-                      <button class="primary" type="submit">Answer</button>
-                    </div>
-                  </form>
-                {/each}
-              </div>
-            {/if}
-
-            <div class="terminal-body" id="terminal-panel" role="tabpanel" aria-labelledby={'tab-' + activeTab} tabindex="0" bind:this={terminalBody} onscroll={onTerminalScroll}>
-              {#if activeTab === 'activity'}
-                {#if activity.length === 0}<p class="prompt-line"><span>π</span> waiting for activity…</p>{/if}
-                <ol class="feed" aria-live="polite" aria-relevant="additions">
-                  {#each activity as entry (entry.id)}
-                    <li class="feed-entry {entry.kind} {entry.status ?? ''}">
-                      <div class="feed-meta">
-                        <span class="feed-kind">{entry.kind === 'user' ? '›' : entry.kind === 'tool' ? '⚙' : entry.kind === 'error' ? '!' : entry.kind === 'lifecycle' ? '·' : 'π'}</span>
-                        <strong>{entry.title}</strong>
-                        {#if entry.status}<span class="feed-status">{entry.status === 'running' ? 'running…' : entry.status}</span>{/if}
-                        <time datetime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString()}</time>
-                      </div>
-                      {#if entry.body}<pre>{entry.body}</pre>{/if}
-                    </li>
-                  {/each}
-                </ol>
-              {:else if activeTab === 'files'}
-                <div class="file-toolbar">
-                  <label class="sr-only" for="upload-input">File to upload</label>
-                  <input id="upload-input" bind:this={uploadInput} type="file" disabled={selected.status === 'stopped'} />
-                  <button onclick={upload} disabled={selected.status === 'stopped'}>Upload</button>
-                </div>
-                <div class="file-grid">
-                  {#if files.length === 0}<p class="muted">No temporary files.</p>{/if}
-                  {#each files as file (file.id)}
-                    <article class="file-card">
-                      <div><strong>{file.name}</strong><span>{formatBytes(file.size)}</span></div>
-                      <button class="danger compact" aria-label={'Delete ' + file.name} onclick={() => removeFile(file.id)}>Delete</button>
-                    </article>
-                  {/each}
-                </div>
-              {:else if activeTab === 'diff'}
-                <div class="file-toolbar">
-                  <button onclick={() => send({ type: 'git_diff', staged: false })} disabled={selected.status === 'stopped'}>Working tree</button>
-                  <button onclick={() => send({ type: 'git_diff', staged: true })} disabled={selected.status === 'stopped'}>Staged</button>
-                </div>
-                <pre class="diff">{#each (diff || 'No diff loaded.').split('\n') as line, i (i)}<span class:add={line.startsWith('+') && !line.startsWith('+++')} class:del={line.startsWith('-') && !line.startsWith('---')} class:hunk={line.startsWith('@@')}>{line}
-</span>{/each}</pre>
-              {:else}
-                <label class="field-label" for="plan-goal">Plan goal (optional)</label>
-                <textarea id="plan-goal" bind:value={plan} placeholder="Describe what /plan should focus on" disabled={selected.status === 'stopped'}></textarea>
-                <button onclick={() => send({ type: 'plan', text: plan })} disabled={selected.status === 'stopped'}>Run /plan</button>
-              {/if}
-            </div>
-
-            <form class="composer" onsubmit={(event) => { event.preventDefault(); submitPrompt(); }}>
-              <label class="sr-only" for="prompt-input">Prompt</label>
-              <textarea id="prompt-input" bind:value={prompt} onkeydown={onComposerKey} placeholder={selected.status === 'stopped' ? 'Session stopped' : 'Prompt this session…'} disabled={selected.status === 'stopped'}></textarea>
-              <div class="composer-actions">
-                <label class="check"><input type="checkbox" bind:checked={steer} disabled={selected.status === 'stopped'} /> steer active turn</label>
-                <span class="hint">⌘/Ctrl + Enter</span>
-                <button class="primary" disabled={selected.status === 'stopped'}>Send</button>
-              </div>
-            </form>
-          </section>
-        {:else}
-          <section class="empty bento"><div class="mark large">π</div><h2>Select a Pi session.</h2><p>Registered sessions will appear in the rail.</p></section>
-        {/if}
-      </main>
     </div>
-  {/if}
+    {#if recent.length}
+      <div class="session-grid">
+        {#each recent as session (session.id)}<SessionCard {session} />{/each}
+      </div>
+    {:else}
+      <div class="card empty">
+        <span class="empty-icon"><Icon name="sessions" /></span>
+        {#if companion.isAdmin}
+          <h2>No Pi sessions yet</h2>
+          <p>Start <code>pi</code> in any project. With the companion extension installed, the session appears here within a second.</p>
+        {:else}
+          <h2>Nothing shared yet</h2>
+          <p>On your computer, type <code>/remote-control</code> inside a Pi session to share it with this device.</p>
+        {/if}
+      </div>
+    {/if}
+  </section>
+
+  <section class="steps" aria-labelledby="steps-heading">
+    <h2 id="steps-heading" class="sr-only">How it works</h2>
+    {#each steps as step, index (step.title)}
+      <article class="step">
+        <span class="step-index">{index + 1}</span>
+        <h3>{step.title}</h3>
+        <p class="muted">{step.body}</p>
+      </article>
+    {/each}
+  </section>
 </div>
+
+<style>
+  .hero {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+    display: grid;
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    min-height: 400px;
+    background:
+      radial-gradient(circle at 78% 50%, var(--accent-soft), transparent 55%),
+      var(--surface);
+  }
+
+  .hero :global(.hero-field) {
+    --accent: var(--dot-color);
+    z-index: 0;
+    -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 30%, #000 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 30%, #000 100%);
+  }
+
+  .hero-copy {
+    position: relative;
+    z-index: 1;
+    display: grid;
+    align-content: center;
+    gap: 16px;
+    padding: 40px;
+  }
+
+  .hero h1 {
+    font-size: clamp(2rem, 3.6vw, 3rem);
+    letter-spacing: -0.035em;
+    line-height: 1.04;
+  }
+
+  .accent {
+    color: var(--accent-text);
+  }
+
+  .hero p {
+    color: var(--text-2);
+    font-size: 1.02rem;
+    max-width: 48ch;
+  }
+
+  .cta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 4px;
+  }
+
+  .journey {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin: 6px 0 0;
+    padding: 0;
+    list-style: none;
+    font: 600 0.72rem/1 var(--mono);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-3);
+  }
+
+  .journey li:not(:last-child)::after {
+    content: '→';
+    margin-left: 6px;
+    color: var(--accent-text);
+  }
+
+  .hero-visual {
+    position: relative;
+    z-index: 1;
+    min-height: 360px;
+    margin: 20px 28px 20px 0;
+    pointer-events: none;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 12px;
+  }
+
+  .stat {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    grid-template-areas: 'icon label' 'value value' 'hint hint';
+    align-items: center;
+    gap: 4px 10px;
+    padding: 16px;
+    text-decoration: none;
+    transition: border-color 150ms var(--ease);
+  }
+
+  .stat:hover {
+    border-color: var(--accent-line);
+  }
+
+  .stat-icon {
+    grid-area: icon;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 9px;
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+
+  .stat-label {
+    grid-area: label;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-2);
+  }
+
+  .stat strong {
+    grid-area: value;
+    margin-top: 8px;
+    font-size: 1.9rem;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .stat .subtle {
+    grid-area: hint;
+    font-size: 0.82rem;
+  }
+
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .session-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  .steps {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .step {
+    display: grid;
+    gap: 6px;
+    padding: 18px;
+    border: 1px dashed var(--border-strong);
+    border-radius: var(--radius-lg);
+  }
+
+  .step-index {
+    display: grid;
+    place-items: center;
+    width: 26px;
+    height: 26px;
+    margin-bottom: 4px;
+    border-radius: 50%;
+    background: var(--surface-3);
+    font: 700 0.8rem/1 var(--mono);
+    color: var(--accent-text);
+  }
+
+  .step p {
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 900px) {
+    .hero {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-rows: 240px auto;
+      min-height: 0;
+    }
+
+    .hero :global(.hero-field) {
+      -webkit-mask-image: linear-gradient(180deg, #000 0, #000 45%, transparent 75%);
+      mask-image: linear-gradient(180deg, #000 0, #000 45%, transparent 75%);
+    }
+
+    .hero-visual {
+      grid-row: 1;
+      min-height: 0;
+      margin: 16px 16px 0;
+    }
+
+    .hero-copy {
+      grid-row: 2;
+      padding: 8px 20px 24px;
+      gap: 12px;
+    }
+
+    .steps {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 520px) {
+    .stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .stat {
+      padding: 12px;
+    }
+
+    .stat strong {
+      font-size: 1.5rem;
+    }
+
+    .cta .btn {
+      flex: 1;
+    }
+  }
+</style>

@@ -33,7 +33,7 @@ export function pushUser(entries: ActivityEntry[], title: string, body: string) 
 
 /** Reduce one bridge message into the activity feed. Returns the same array when nothing changes. */
 export function reduceBridgeMessage(entries: ActivityEntry[], message: any): ActivityEntry[] {
-  if (message?.type === 'error') return cap([...entries, entry('error', 'error', String(message.message ?? ''))]);
+  if (message?.type === 'error') return cap([...entries, entry('error', 'Something went wrong', String(message.message ?? ''))]);
   if (message?.type !== 'event') return entries;
 
   const payload = message.payload ?? {};
@@ -45,7 +45,7 @@ export function reduceBridgeMessage(entries: ActivityEntry[], message: any): Act
         const updated = { ...last, body: last.body + String(payload.delta ?? '') };
         return [...entries.slice(0, -1), updated];
       }
-      return cap([...entries, entry(kind, kind === 'thinking' ? 'thinking' : 'assistant', String(payload.delta ?? ''))]);
+      return cap([...entries, entry(kind, kind === 'thinking' ? 'Thinking' : 'Pi', String(payload.delta ?? ''))]);
     }
     case 'tool.start':
       return cap([
@@ -71,13 +71,13 @@ export function reduceBridgeMessage(entries: ActivityEntry[], message: any): Act
       return next;
     }
     case 'agent.start':
-      return cap([...entries, entry('lifecycle', 'turn started')]);
+      return cap([...entries, entry('lifecycle', 'Pi started working')]);
     case 'agent.end':
-      return cap([...entries, entry('lifecycle', 'turn finished')]);
+      return cap([...entries, entry('lifecycle', 'Pi finished and is waiting')]);
     case 'session.start':
-      return cap([...entries, entry('lifecycle', 'session started', String(payload.cwd ?? ''))]);
+      return cap([...entries, entry('lifecycle', 'Session started', String(payload.cwd ?? ''))]);
     case 'session.shutdown':
-      return cap([...entries, entry('lifecycle', 'session stopped')]);
+      return cap([...entries, entry('lifecycle', 'Session ended')]);
     default:
       return entries;
   }
