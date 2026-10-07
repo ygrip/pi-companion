@@ -1,0 +1,8 @@
+{
+  "name": "@ygrip/pi-companion-ui",
+  "private": true,
+  "type": "module",
+  "imports": {
+    "#lib/*": "./src/lib/*"
+  }
+}

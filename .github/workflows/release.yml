@@ -1,0 +1,149 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          NPM_VERSION="$(node -p "require('./package.json').version")"
+          CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' server/Cargo.toml | head -1)"
+          test "$VERSION" = "$NPM_VERSION" || { echo "tag $VERSION != package.json $NPM_VERSION"; exit 1; }
+          test "$VERSION" = "$CARGO_VERSION" || { echo "tag $VERSION != server/Cargo.toml $CARGO_VERSION"; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+  test:
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm install
+      - run: npm run check
+      - run: npm run ui:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-web-ui
+          path: server/web-dist
+          if-no-files-found: error
+      - run: cargo check --manifest-path server/Cargo.toml --locked || cargo check --manifest-path server/Cargo.toml
+
+  rust:
+    needs: [validate, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact: pi-companion-server-linux-x86_64
+            binary: pi-companion-server
+          - os: macos-14
+            target: aarch64-apple-darwin
+            artifact: pi-companion-server-darwin-arm64
+            binary: pi-companion-server
+          - os: macos-14
+            target: x86_64-apple-darwin
+            artifact: pi-companion-server-darwin-x86_64
+            binary: pi-companion-server
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact: pi-companion-server-windows-x86_64
+            binary: pi-companion-server.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: companion-web-ui
+          path: server/web-dist
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+          key: ${{ matrix.target }}
+      - run: cargo build --release --manifest-path server/Cargo.toml --target ${{ matrix.target }}
+      - name: Package Unix binary
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir dist
+          cp "server/target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/pi-companion-server"
+          tar -C dist -czf "${{ matrix.artifact }}.tar.gz" pi-companion-server
+      - name: Package Windows binary
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item "server/target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/pi-companion-server.exe"
+          Compress-Archive -Path "dist/pi-companion-server.exe" -DestinationPath "${{ matrix.artifact }}.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}.tar.gz
+            ${{ matrix.artifact }}.zip
+          if-no-files-found: error
+
+  npm:
+    needs: [validate, test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - run: npm install
+      - name: Publish npm package
+        if: env.NODE_AUTH_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+      - name: Explain skipped npm publication
+        if: env.NODE_AUTH_TOKEN == ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: echo "NPM_TOKEN is not configured; native release artifacts will still be published."
+
+  release:
+    needs: [validate, rust, npm]
+    if: always() && needs.validate.result == 'success' && needs.rust.result == 'success' && (needs.npm.result == 'success' || needs.npm.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: pi-companion-server-*
+          merge-multiple: true
+          path: dist
+      - name: Checksums
+        working-directory: dist
+        run: sha256sum * > SHA256SUMS
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/*             --repo "${GITHUB_REPOSITORY}"             --generate-notes             --title "Pi Companion ${{ needs.validate.outputs.version }}"

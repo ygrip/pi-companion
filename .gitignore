@@ -1,0 +1,11 @@
+node_modules/
+server/target/
+.DS_Store
+.env
+
+server/web-dist/
+ui/.svelte-kit/
+
+# local tooling
+.shots/
+.preview/
