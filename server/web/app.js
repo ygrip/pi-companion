@@ -31,7 +31,7 @@ function renderSessions() {
     const title = document.createElement("strong");
     title.textContent = session.name || session.cwd.split("/").pop() || "Pi";
     const meta = document.createElement("span");
-    meta.textContent = (session.idle ? "idle" : "running") + " · " + (session.model || "model") + (session.remoteEnabled ? " · remote" : "");
+    meta.textContent = session.status + " · " + (session.mainModel || "model") + (session.effort ? " · " + session.effort : "") + (session.remoteEnabled ? " · remote" : "");
     button.append(title, meta);
     button.onclick = () => {
       state.selected = session.id;
@@ -48,9 +48,18 @@ function renderDetail() {
   byId("empty").hidden = Boolean(session);
   byId("detail").hidden = !session;
   if (!session) return;
-  byId("title").textContent = session.name || session.cwd;
+  byId("title").textContent = session.name || session.shortTitle;
+  byId("shortTitle").textContent = session.shortTitle;
+  byId("sessionStatus").textContent = session.status;
+  byId("sessionStatus").dataset.status = session.status;
+  byId("sessionModel").textContent = session.mainModel || "unknown model";
+  byId("sessionEffort").textContent = session.effort || "default effort";
   byId("meta").textContent = session.cwd + " · pid " + session.pid;
   byId("remoteState").textContent = session.remoteEnabled ? "remote enabled" : "local only";
+  const stopped = session.status === "stopped";
+  byId("abort").disabled = stopped;
+  byId("prompt").disabled = stopped;
+  byId("steer").disabled = stopped;
 }
 
 function append(text) {
