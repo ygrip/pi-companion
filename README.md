@@ -296,7 +296,7 @@ Running the daemon manually with npm run serve and the extension side by side ju
 
 ## Releases
 
-The package carries the pi-package keyword, so published npm versions appear in the Pi package gallery (https://pi.dev/packages). Host-provided packages (@earendil-works/pi-coding-agent, typebox) are peer dependencies, as Pi requires.
+The package carries the required `pi-package` keyword, which makes the published npm package eligible for discovery in the Pi package gallery (https://pi.dev/packages). The manifest also includes focused discovery keywords such as `pi-extension`, `pi-coding-agent`, `remote-control`, and `session-dashboard`. Host-provided packages (@earendil-works/pi-coding-agent, typebox) are peer dependencies, as Pi requires.
 
 GitHub Actions run only for release tags. Pushing ordinary commits or opening pull requests does not trigger any workflow; CI can also be started manually with workflow_dispatch.
 
@@ -304,7 +304,7 @@ A tag matching vX.Y.Z triggers both the CI and release workflows.
 
 Before publishing, the workflow requires X.Y.Z to match both package.json and server/Cargo.toml. It then runs TypeScript and Rust checks, builds native daemon archives for Linux x86_64, macOS arm64, macOS x86_64, and Windows x86_64, generates SHA-256 checksums, and creates a GitHub Release.
 
-Only after the GitHub Release exists, and only if the repository has an NPM_TOKEN secret, the same tag publishes @yunazgr/pi-companion to npm with provenance, so an npm install never looks for a daemon binary that is not uploaded yet. Git installs need no token.
+Only after the GitHub Release exists, the same tag publishes @yunazgr/pi-companion to npm with provenance through npm Trusted Publishing (GitHub OIDC). No long-lived NPM_TOKEN is required. The trusted publisher should point to GitHub owner ygrip, repository pi-companion, workflow release.yml. Git installs need no npm credential.
 
 On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. A git install from a branch that is ahead of the newest tag falls back to the latest release.
 
