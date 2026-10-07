@@ -1,3 +1,11 @@
+export type TempFile = {
+  id: string;
+  name: string;
+  path: string;
+  size: number;
+  createdAt: string;
+};
+
 export type SessionSnapshot = {
   id: string;
   name?: string;
@@ -6,6 +14,7 @@ export type SessionSnapshot = {
   model?: string;
   thinkingLevel?: string;
   idle: boolean;
+  remoteEnabled: boolean;
   connectedAt: string;
 };
 
@@ -23,8 +32,11 @@ export type BridgeMessage =
   | { type: "event"; event: string; payload: unknown }
   | { type: "ask.request"; requestId: string; question: string; options?: string[] }
   | { type: "git.diff"; staged: boolean; diff: string }
+  | { type: "file.delete"; requestId: string; fileId: string }
   | { type: "error"; message: string };
 
 export type ServerMessage =
   | { type: "command"; command: BrowserCommand }
+  | { type: "temp.files"; files: TempFile[] }
+  | { type: "file.delete.result"; requestId: string; ok: boolean; error?: string }
   | { type: "ping" };
