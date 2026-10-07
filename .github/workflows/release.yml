@@ -22,9 +22,13 @@ jobs:
             echo "v0.2.2 release already exists"
             exit 0
           fi
-          gh release create "v0.2.2"             --repo "${GITHUB_REPOSITORY}"             --target "${GITHUB_SHA}"             --draft             --generate-notes             --title "Pi Companion 0.2.2"
+          gh release create "v0.2.2" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
+            --draft \
+            --generate-notes \
+            --title "Pi Companion 0.2.2"
 
-  validate:
   validate:
     needs: reserve
     runs-on: ubuntu-latest
