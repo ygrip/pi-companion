@@ -31,14 +31,15 @@
     "LICENSE"
   ],
   "engines": {
-    "node": ">=22"
+    "node": ">=22.17"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsc --noEmit && npm run ui:check",
     "ui:dev": "cd ui && vite dev",
     "ui:build": "cd ui && vite build",
     "server:dev": "npm run ui:build && cargo run --manifest-path server/Cargo.toml",
-    "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml"
+    "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml",
+    "ui:check": "cd ui && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "pi": {
     "extensions": [
@@ -54,15 +55,25 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@sveltejs/adapter-static": "^3.0.8",
-    "@sveltejs/kit": "^2.48.0",
-    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@earendil-works/pi-coding-agent": "*",
+    "@sveltejs/adapter-static": "^4.0.0",
+    "@sveltejs/kit": "^3.0.1",
+    "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@types/node": "^24.7.0",
     "@types/ws": "^8.18.1",
-    "svelte": "^5.43.0",
-    "typescript": "^5.9.3",
-    "vite": "^7.1.12",
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "^1.0.13"
+    "svelte": "^5.57.2",
+    "svelte-check": "^4.7.6",
+    "typebox": "^1.0.13",
+    "typescript": "^6.0.0",
+    "vite": "^8.0.12"
+  },
+  "overrides": {
+    "node-domexception": "file:./tools/shims/node-domexception"
+  },
+  "allowScripts": {
+    "esbuild": true,
+    "@google/genai": false,
+    "protobufjs": false,
+    "fsevents": false
   }
 }
