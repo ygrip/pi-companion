@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, and browser fan-out.
+Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, browser fan-out, and the embedded web UI.
+
+The UI is a static SvelteKit application. There is no Node runtime in production and no Tauri shell. Rust embeds the generated frontend into the daemon binary.
 
 ## Architecture
 
@@ -126,6 +128,19 @@ Every registered Pi session publishes a compact display model to the daemon:
 
 Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period.
 
+## UI
+
+The dashboard uses a compact bento + shell visual system:
+
+- bento cards for sessions, status, model/effort, files, and paired devices
+- shell-like activity surface for prompts, steering, plan, and git diff
+- responsive session rail that becomes horizontally scrollable on narrow screens
+- warm amber visual language aligned with Raksara/Punakawan
+- lightweight canvas dotfield inspired by Raksara, with focal density and smooth edge falloff
+- dotfield start deferred until browser idle time, paused while hidden, and reduced under prefers-reduced-motion
+
+SvelteKit is compiled with adapter-static to server/web-dist. CI builds that bundle once and Rust embeds it using rust-embed. Generated web-dist files are not committed.
+
 ## Browser controls
 
 The initial slice supports:
@@ -150,6 +165,10 @@ Requirements: Node 22+ and stable Rust.
 
     npm install
     npm run server:dev
+
+For frontend-only development:
+
+    npm run ui:dev
 
 In another shell:
 
