@@ -4,10 +4,13 @@
   "description": "Local-first remote control companion for Pi sessions",
   "type": "module",
   "main": "src/index.ts",
+  "files": ["src", "README.md", "SECURITY.md"],
   "scripts": {
     "check": "tsc --noEmit",
-    "server:dev": "cargo run --manifest-path server/Cargo.toml",
-    "server:check": "cargo check --manifest-path server/Cargo.toml"
+    "ui:dev": "vite dev --config ui/vite.config.ts",
+    "ui:build": "vite build --config ui/vite.config.ts",
+    "server:dev": "npm run ui:build && cargo run --manifest-path server/Cargo.toml",
+    "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml"
   },
   "pi": { "extensions": ["./src/index.ts"] },
   "dependencies": {
@@ -16,8 +19,13 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.8",
+    "@sveltejs/kit": "^2.48.0",
+    "@sveltejs/vite-plugin-svelte": "^6.2.1",
     "@types/node": "^24.7.0",
     "@types/ws": "^8.18.1",
-    "typescript": "^5.9.3"
+    "svelte": "^5.43.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.1.12"
   }
 }
