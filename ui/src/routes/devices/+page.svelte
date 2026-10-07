@@ -126,7 +126,7 @@
         <h2 id="pair-heading">Scan with your phone’s camera</h2>
         <ol>
           <li>Open the camera and point it at the code.</li>
-          <li>Open the link, name the device and tap <strong>Pair device</strong>.</li>
+          <li>Open the link, name the device and tap <strong>Connect device</strong>.</li>
           <li>Share a session by typing <code>/remote-control</code> in Pi.</li>
         </ol>
         <div class="code-block" aria-label="One-time pairing code">
