@@ -42,9 +42,7 @@ export class CompanionBridge {
 
   setName(name?: string) {
     this.snapshot.name = name;
-    const shortTitle = name?.trim() || this.snapshot.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
-    this.snapshot.shortTitle = shortTitle;
-    this.send({ type: "session.update", session: { name, shortTitle } });
+    this.send({ type: "session.update", session: { name } });
   }
 
   setRemoteEnabled(remoteEnabled: boolean) {
