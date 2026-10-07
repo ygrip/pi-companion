@@ -7,8 +7,8 @@
   "files": ["src", "README.md", "SECURITY.md"],
   "scripts": {
     "check": "tsc --noEmit",
-    "ui:dev": "vite dev --config ui/vite.config.ts",
-    "ui:build": "vite build --config ui/vite.config.ts",
+    "ui:dev": "cd ui && vite dev",
+    "ui:build": "cd ui && vite build",
     "server:dev": "npm run ui:build && cargo run --manifest-path server/Cargo.toml",
     "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml"
   },
