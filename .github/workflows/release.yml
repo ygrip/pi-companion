@@ -41,6 +41,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm install
       - run: npm run check
+      - run: npm run ui:build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: companion-web-ui
+          path: server/web-dist
+          if-no-files-found: error
       - run: cargo check --manifest-path server/Cargo.toml --locked || cargo check --manifest-path server/Cargo.toml
 
   rust:
@@ -68,6 +74,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: companion-web-ui
+          path: server/web-dist
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
