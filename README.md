@@ -21,7 +21,11 @@ or straight from git:
 
     pi install git:github.com/ygrip/pi-companion
 
-Then start pi as usual and run /companion in each session you want to follow from the dashboard or your phone. It starts the daemon if needed, prints the dashboard address and shares that session with paired devices (`/companion off` stops sharing). Nothing else to configure: the extension finds or starts the daemon on its own, downloading the matching sha256-verified daemon binary from GitHub Releases on first use (see Daemon).
+Then start Pi as usual. Installing the Pi extension is enough for normal use: when a Pi session starts, the extension probes the local admin port and automatically starts the daemon if needed. On first use it downloads the matching sha256-verified daemon binary from GitHub Releases, caches it under `~/.pi/agent/pi-companion/bin/<version>/`, and reuses the same daemon across Pi sessions.
+
+Use `/companion` in each session you want to share with paired devices. It enables remote access for that session and prints the local dashboard address. `/companion off` stops sharing that session.
+
+You do **not** need to run `pi-companion-server` manually for a normal npm install. Manual daemon startup is mainly for local development, debugging, or when `PI_COMPANION_AUTOSTART=0` is set.
 
 ## Architecture
 
@@ -56,7 +60,23 @@ Then start pi as usual and run /companion in each session you want to follow fro
 
 The local administration surface and paired-device surface are separate listeners. If you expose Pi Companion through a tunnel, target only port 43722. Never expose port 43721.
 
-## Daemon
+## How the daemon runs
+
+For a normal install:
+
+    pi install npm:@yunazgr/pi-companion
+
+That is enough. Start Pi normally; the extension will start the daemon on demand. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
+
+The lifecycle is:
+
+1. A Pi session loads the extension.
+2. The extension probes `http://127.0.0.1:43721`.
+3. If the daemon is already running, the session connects to it.
+4. If not, the extension resolves the daemon binary, downloading the matching GitHub Release on first use if necessary.
+5. It starts the daemon detached in the background.
+6. Other Pi sessions reuse the same daemon.
+7. The daemon keeps running independently until it is stopped or the machine restarts.
 
 There is exactly one daemon per machine, shared by every Pi session. The extension manages it with no configuration:
 
@@ -255,16 +275,20 @@ The initial slice supports:
 
 There is deliberately no arbitrary shell, arbitrary tool invocation, or arbitrary filesystem API.
 
-## Development
+## Running locally from source
+
+Use this only when developing Pi Companion itself. A published install does not require these steps.
 
 Requirements: Node 22.17+ and stable Rust.
+
+Clone the repository, then:
 
     npm install
     npm run serve
 
-This builds the UI, starts the daemon and prints where it is listening:
+`npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.2.1
+      Pi Companion v0.2.2
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722
@@ -287,13 +311,21 @@ Then, in another shell, start Pi with the extension from this checkout:
 
     pi -e ./src/index.ts
 
+Because the development daemon is already listening on port 43721, the extension detects it and does not launch another daemon.
+
 For hot-reloading UI work, keep the daemon running and use:
 
     npm run ui:dev
 
 which proxies /api and /ws to the daemon on 43721.
 
-Running the daemon manually with npm run serve and the extension side by side just works: the extension sees the running daemon and connects to it. If you don't run it, the extension launches your local cargo build automatically.
+If you start Pi from the checkout without running `npm run serve`, the extension can still auto-start a local daemon build if one exists under `server/target/debug` or `server/target/release`. For predictable UI work, prefer `npm run serve` in one terminal and `pi -e ./src/index.ts` in another.
+
+To test the same behavior as a published install, stop any development daemon first and install the package normally:
+
+    pi install npm:@yunazgr/pi-companion
+
+Then start Pi. The extension downloads and starts the released daemon automatically.
 
 ## Releases
 
