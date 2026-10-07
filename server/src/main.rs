@@ -397,7 +397,7 @@ fn body_limit() -> usize {
 }
 
 async fn local_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": false, "version": VERSION }))
+    Json(serde_json::json!({ "remote": false, "version": VERSION, "pid": std::process::id() }))
 }
 
 async fn remote_context() -> Json<Value> {
