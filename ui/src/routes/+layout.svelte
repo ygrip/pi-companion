@@ -491,7 +491,7 @@
       display: grid;
       grid-auto-flow: column;
       grid-auto-columns: 1fr;
-      padding: 4px max(8px, env(safe-area-inset-right)) calc(4px + env(safe-area-inset-bottom))
+      padding: 2px max(8px, env(safe-area-inset-right)) calc(2px + env(safe-area-inset-bottom))
         max(8px, env(safe-area-inset-left));
       border-top: 1px solid var(--border);
       background: var(--bg-sunken);
@@ -500,13 +500,14 @@
     .tabbar a {
       display: grid;
       justify-items: center;
-      gap: 2px;
-      min-height: 52px;
-      margin: 3px 2px;
-      padding: 4px 8px;
-      border-radius: 16px;
+      align-content: center;
+      gap: 1px;
+      min-height: 46px;
+      margin: 1px 2px;
+      padding: 2px 8px;
+      border-radius: 14px;
       color: var(--text-3);
-      font-size: 0.72rem;
+      font-size: 0.68rem;
       font-weight: 600;
       text-decoration: none;
       transition: background-color 150ms ease-out, color 150ms ease-out, box-shadow 150ms ease-out;
@@ -523,8 +524,8 @@
       position: relative;
       display: grid;
       place-items: center;
-      width: 44px;
-      height: 26px;
+      width: 40px;
+      height: 22px;
       border-radius: 999px;
     }
 
@@ -593,11 +594,11 @@
       box-shadow: var(--clay-raised);
     }
     .tabbar {
-      margin: 0 10px max(8px, env(safe-area-inset-bottom));
+      margin: 0 10px max(4px, env(safe-area-inset-bottom));
       border: 1px solid var(--border);
-      border-radius: var(--clay-radius);
+      border-radius: 18px;
       box-shadow: var(--clay-raised);
-      gap: 4px;
+      gap: 2px;
     }
     .tabbar a.active { color: var(--accent-text); background: var(--clay-surface); box-shadow: var(--clay-pressed); }
     .tabbar a:active { transform: scale(0.97); }
