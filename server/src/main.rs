@@ -1,3 +1,6 @@
+mod assets;
+mod config;
+
 use std::{
     collections::HashMap,
     path::{Path as FsPath, PathBuf},
@@ -8,16 +11,15 @@ use std::{
 use axum::{
     extract::{
         DefaultBodyLimit, Multipart, Path, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
+        ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode, Uri, header},
-    response::{IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
     routing::{delete, get, post},
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use qrcode::{render::svg, QrCode};
-use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -31,22 +33,33 @@ use uuid::Uuid;
 
 const LOCAL_ADDR: &str = "127.0.0.1:43721";
 const REMOTE_ADDR: &str = "127.0.0.1:43722";
-const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
-const PAIRING_TTL_SECS: u64 = 300;
+const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Close codes sent to paired-device sockets so the UI can explain what happened.
+const CLOSE_DISCONNECTED: u16 = 4001;
+const CLOSE_REVOKED: u16 = 4003;
 
-#[derive(RustEmbed)]
-#[folder = "web-dist/"]
-struct WebAssets;
+use config::{Settings, StoredDevice};
+
+#[derive(Clone, Debug)]
+struct Kick {
+    device_id: String,
+    code: u16,
+    reason: &'static str,
+}
 
 #[derive(Clone)]
 struct AppState {
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     files: Arc<RwLock<HashMap<String, Vec<TempFile>>>>,
     pairings: Arc<RwLock<HashMap<String, PairingInvite>>>,
-    devices: Arc<RwLock<HashMap<String, PairedDevice>>>,
+    devices: Arc<RwLock<HashMap<String, StoredDevice>>>,
+    /// Open paired-device sockets per device id.
+    device_connections: Arc<RwLock<HashMap<String, usize>>>,
+    settings: Arc<RwLock<Settings>>,
+    env_public_url: Option<String>,
     browser_tx: broadcast::Sender<Value>,
+    kick_tx: broadcast::Sender<Kick>,
     temp_root: PathBuf,
-    public_url: String,
 }
 
 #[derive(Clone)]
@@ -67,21 +80,18 @@ struct TempFile {
 
 #[derive(Clone)]
 struct PairingInvite {
-    token: String,
-    code: String,
     expires_at: u64,
 }
 
-#[derive(Clone, Serialize)]
-struct PairedDevice {
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeviceView {
     id: String,
     name: String,
-    #[serde(skip_serializing)]
-    token_hash: String,
-    #[serde(rename = "pairedAt")]
     paired_at: u64,
-    #[serde(rename = "lastSeen")]
     last_seen: u64,
+    connected: bool,
+    connections: usize,
 }
 
 #[derive(Deserialize)]
@@ -128,7 +138,7 @@ struct FilesResponse {
 
 #[derive(Serialize)]
 struct DevicesResponse {
-    devices: Vec<PairedDevice>,
+    devices: Vec<DeviceView>,
 }
 
 type ApiError = (StatusCode, String);
@@ -144,18 +154,26 @@ async fn main() {
     fs::create_dir_all(&temp_root).await.expect("create temp root");
     set_private_dir_permissions(&temp_root).await;
 
-    let (browser_tx, _) = broadcast::channel(256);
+    let persisted = config::load().await;
+    let settings = persisted.settings.validate().unwrap_or_default();
+    let devices = persisted.devices.into_iter().map(|d| (d.id.clone(), d)).collect();
+
+    let (browser_tx, _) = broadcast::channel(1024);
+    let (kick_tx, _) = broadcast::channel(64);
     let state = AppState {
         sessions: Arc::new(RwLock::new(HashMap::new())),
         files: Arc::new(RwLock::new(HashMap::new())),
         pairings: Arc::new(RwLock::new(HashMap::new())),
-        devices: Arc::new(RwLock::new(HashMap::new())),
+        devices: Arc::new(RwLock::new(devices)),
+        device_connections: Arc::new(RwLock::new(HashMap::new())),
+        settings: Arc::new(RwLock::new(settings)),
+        env_public_url: std::env::var("PI_COMPANION_PUBLIC_URL")
+            .ok()
+            .map(|value| value.trim().trim_end_matches('/').to_string())
+            .filter(|value| !value.is_empty()),
         browser_tx,
+        kick_tx,
         temp_root,
-        public_url: std::env::var("PI_COMPANION_PUBLIC_URL")
-            .unwrap_or_else(|_| "http://127.0.0.1:43722".to_string())
-            .trim_end_matches('/')
-            .to_string(),
     };
 
     let local = local_router(state.clone());
@@ -200,10 +218,12 @@ fn local_router(state: AppState) -> Router {
         .route("/api/pairing/start", post(start_pairing))
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{device_id}", delete(revoke_device))
+        .route("/api/devices/{device_id}/disconnect", post(disconnect_device))
+        .route("/api/settings", get(get_settings).put(put_settings))
         .route("/ws/browser", get(browser_ws))
         .route("/ws/bridge/{session_id}", get(bridge_ws))
-        .fallback(get(web_asset))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .fallback(get(assets::serve))
+        .layer(DefaultBodyLimit::max(body_limit()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
@@ -216,34 +236,71 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
-        .fallback(get(web_asset))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .fallback(get(assets::serve))
+        .layer(DefaultBodyLimit::max(body_limit()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
+fn body_limit() -> usize {
+    (config::MAX_UPLOAD_MB_LIMIT as usize) * 1024 * 1024 + 64 * 1024
+}
+
 async fn local_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": false }))
+    Json(serde_json::json!({ "remote": false, "version": VERSION }))
 }
 
 async fn remote_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": true }))
+    Json(serde_json::json!({ "remote": true, "version": VERSION }))
 }
 
-async fn web_asset(uri: Uri) -> Response {
-    let requested = uri.path().trim_start_matches('/');
-    let path = if requested.is_empty() || !requested.contains('.') { "index.html" } else { requested };
-
-    match WebAssets::get(path).or_else(|| WebAssets::get("index.html")) {
-        Some(asset) => {
-            let mime = mime_guess::from_path(path).first_or_octet_stream();
-            (
-                [(header::CONTENT_TYPE, mime.as_ref())],
-                asset.data.into_owned(),
-            ).into_response()
-        }
-        None => (StatusCode::NOT_FOUND, "UI bundle not built").into_response(),
+async fn public_url(state: &AppState) -> String {
+    if let Some(url) = &state.env_public_url {
+        return url.clone();
     }
+    let configured = state.settings.read().await.public_url.clone();
+    if configured.is_empty() { config::DEFAULT_PUBLIC_URL.to_string() } else { configured }
+}
+
+/// Write settings and device registry to disk. Failures are logged, not fatal.
+async fn persist(state: &AppState) {
+    let snapshot = config::Persisted {
+        settings: state.settings.read().await.clone(),
+        devices: state.devices.read().await.values().cloned().collect(),
+    };
+    if let Err(error) = config::save(&snapshot).await {
+        tracing::warn!("could not save state: {error}");
+    }
+}
+
+async fn get_settings(State(state): State<AppState>) -> Json<Value> {
+    let settings = state.settings.read().await.clone();
+    Json(serde_json::json!({
+        "settings": settings,
+        "effective": {
+            "publicUrl": public_url(&state).await,
+            "publicUrlFromEnv": state.env_public_url.is_some(),
+        },
+        "limits": { "maxUploadMb": config::MAX_UPLOAD_MB_LIMIT },
+        "about": {
+            "version": VERSION,
+            "adminUrl": format!("http://{LOCAL_ADDR}"),
+            "deviceUrl": format!("http://{REMOTE_ADDR}"),
+            "dataDir": config::data_dir().to_string_lossy(),
+            "tempDir": state.temp_root.to_string_lossy(),
+        }
+    }))
+}
+
+async fn put_settings(
+    State(state): State<AppState>,
+    Json(next): Json<Settings>,
+) -> ApiResult<Json<Value>> {
+    let valid = next.validate().map_err(|message| (StatusCode::BAD_REQUEST, message))?;
+    *state.settings.write().await = valid;
+    persist(&state).await;
+    broadcast(&state, serde_json::json!({ "type": "settings.update" }));
+    Ok(get_settings(State(state)).await)
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<SessionsResponse> {
@@ -269,22 +326,42 @@ async fn list_sessions_remote(
 }
 
 async fn list_devices(State(state): State<AppState>) -> Json<DevicesResponse> {
-    Json(DevicesResponse {
-        devices: state.devices.read().await.values().cloned().collect(),
-    })
+    let connections = state.device_connections.read().await;
+    let mut devices: Vec<DeviceView> = state
+        .devices
+        .read()
+        .await
+        .values()
+        .map(|device| {
+            let open = connections.get(&device.id).copied().unwrap_or(0);
+            DeviceView {
+                id: device.id.clone(),
+                name: device.name.clone(),
+                paired_at: device.paired_at,
+                last_seen: device.last_seen,
+                connected: open > 0,
+                connections: open,
+            }
+        })
+        .collect();
+    devices.sort_by(|a, b| b.connected.cmp(&a.connected).then(b.last_seen.cmp(&a.last_seen)));
+    Json(DevicesResponse { devices })
 }
 
 async fn start_pairing(State(state): State<AppState>) -> ApiResult<Json<PairingResponse>> {
     let token = Uuid::new_v4().simple().to_string() + &Uuid::new_v4().simple().to_string();
     let compact = Uuid::new_v4().simple().to_string().to_uppercase();
     let code = format!("{}-{}", &compact[0..4], &compact[4..8]);
-    let expires_at = now_secs() + PAIRING_TTL_SECS;
-    let url = format!("{}/pair?invite={}", state.public_url, token);
+    let ttl = state.settings.read().await.pairing_ttl_minutes * 60;
+    let expires_at = now_secs() + ttl;
+    let url = format!("{}/pair?invite={}", public_url(&state).await, token);
 
-    state.pairings.write().await.insert(
-        token.clone(),
-        PairingInvite { token, code: code.clone(), expires_at },
-    );
+    {
+        let mut pairings = state.pairings.write().await;
+        let now = now_secs();
+        pairings.retain(|_, invite| invite.expires_at >= now);
+        pairings.insert(token, PairingInvite { expires_at });
+    }
 
     let qr_svg = QrCode::new(url.as_bytes())
         .map_err(internal_error)?
@@ -320,7 +397,7 @@ async fn claim_pairing(
     let timestamp = now_secs();
     state.devices.write().await.insert(
         device_id.clone(),
-        PairedDevice {
+        StoredDevice {
             id: device_id.clone(),
             name: name.to_string(),
             token_hash: hash_token(&token),
@@ -328,6 +405,7 @@ async fn claim_pairing(
             last_seen: timestamp,
         },
     );
+    persist(&state).await;
     broadcast(&state, serde_json::json!({ "type": "devices.update" }));
     Ok(Json(PairClaimResponse { device_id, token }))
 }
@@ -336,12 +414,26 @@ async fn revoke_device(
     State(state): State<AppState>,
     Path(device_id): Path<String>,
 ) -> StatusCode {
-    if state.devices.write().await.remove(&device_id).is_some() {
-        broadcast(&state, serde_json::json!({ "type": "devices.update" }));
-        StatusCode::NO_CONTENT
-    } else {
-        StatusCode::NOT_FOUND
+    if state.devices.write().await.remove(&device_id).is_none() {
+        return StatusCode::NOT_FOUND;
     }
+    persist(&state).await;
+    let _ = state.kick_tx.send(Kick { device_id, code: CLOSE_REVOKED, reason: "revoked" });
+    broadcast(&state, serde_json::json!({ "type": "devices.update" }));
+    StatusCode::NO_CONTENT
+}
+
+/// End the device's live connections without forgetting it. The device keeps its
+/// credential and can reconnect when its user chooses to.
+async fn disconnect_device(
+    State(state): State<AppState>,
+    Path(device_id): Path<String>,
+) -> StatusCode {
+    if !state.devices.read().await.contains_key(&device_id) {
+        return StatusCode::NOT_FOUND;
+    }
+    let _ = state.kick_tx.send(Kick { device_id, code: CLOSE_DISCONNECTED, reason: "disconnected" });
+    StatusCode::NO_CONTENT
 }
 
 async fn list_files(
@@ -385,6 +477,7 @@ async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipa
         return Err((StatusCode::NOT_FOUND, "Session not found.".into()));
     }
 
+    let max_bytes = (state.settings.read().await.max_upload_mb as usize) * 1024 * 1024;
     while let Some(mut field) = multipart.next_field().await.map_err(internal_error)? {
         if field.name() != Some("file") {
             continue;
@@ -409,9 +502,13 @@ async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipa
 
         while let Some(chunk) = field.chunk().await.map_err(internal_error)? {
             size += chunk.len();
-            if size > MAX_UPLOAD_BYTES {
+            if size > max_bytes {
+                drop(output);
                 let _ = fs::remove_file(&disk_path).await;
-                return Err((StatusCode::PAYLOAD_TOO_LARGE, "Upload exceeds 25 MiB.".into()));
+                return Err((
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    format!("File is larger than the {} MiB limit.", max_bytes / 1024 / 1024),
+                ));
             }
             output.write_all(&chunk).await.map_err(internal_error)?;
         }
@@ -496,7 +593,7 @@ async fn notify_session_files(state: &AppState, session_id: &str) {
 }
 
 async fn browser_ws(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| browser_socket(socket, state, false))
+    ws.on_upgrade(move |socket| browser_socket(socket, state, None))
 }
 
 async fn browser_ws_remote(
@@ -505,54 +602,126 @@ async fn browser_ws_remote(
     headers: HeaderMap,
 ) -> ApiResult<impl IntoResponse> {
     let token = websocket_token(&headers)?;
-    authorize_device(&state, token).await?;
-    Ok(ws.protocols(["pi-companion"]).on_upgrade(move |socket| browser_socket(socket, state, true)))
+    let device_id = authorize_device(&state, token).await?;
+    Ok(ws
+        .protocols(["pi-companion"])
+        .on_upgrade(move |socket| browser_socket(socket, state, Some(device_id))))
 }
 
-async fn browser_socket(socket: WebSocket, state: AppState, remote: bool) {
+/// Whether a broadcast event may be shown to a paired device.
+async fn visible_to_device(state: &AppState, value: &Value) -> bool {
+    let session_id = value
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("session").and_then(|s| s.get("id")).and_then(Value::as_str));
+    let Some(session_id) = session_id else { return false };
+    // Let devices learn that a session stopped being shared, so they can hide it.
+    if value.get("type").and_then(Value::as_str) == Some("session.update")
+        && value.get("patch").and_then(|p| p.get("remoteEnabled")).is_some()
+    {
+        return true;
+    }
+    state
+        .sessions
+        .read()
+        .await
+        .get(session_id)
+        .and_then(|s| s.snapshot.get("remoteEnabled"))
+        .and_then(Value::as_bool)
+        == Some(true)
+}
+
+async fn set_device_connection(state: &AppState, device_id: &str, delta: isize) {
+    {
+        let mut connections = state.device_connections.write().await;
+        let entry = connections.entry(device_id.to_string()).or_insert(0);
+        *entry = (*entry as isize + delta).max(0) as usize;
+        if *entry == 0 {
+            connections.remove(device_id);
+        }
+    }
+    if delta < 0 {
+        if let Some(device) = state.devices.write().await.get_mut(device_id) {
+            device.last_seen = now_secs();
+        }
+        persist(state).await;
+    }
+    broadcast(state, serde_json::json!({ "type": "devices.update" }));
+}
+
+async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<String>) {
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.browser_tx.subscribe();
-    let event_state = state.clone();
-    let send_task = tokio::spawn(async move {
-        while let Ok(value) = events.recv().await {
-            if remote {
-                let session_id = value
-                    .get("sessionId")
-                    .and_then(Value::as_str)
-                    .or_else(|| value.get("session").and_then(|s| s.get("id")).and_then(Value::as_str));
-                let Some(session_id) = session_id else { continue };
-                let sessions = event_state.sessions.read().await;
-                let allowed = sessions
-                    .get(session_id)
-                    .and_then(|s| s.snapshot.get("remoteEnabled"))
-                    .and_then(Value::as_bool)
-                    == Some(true);
-                if !allowed { continue; }
-            }
-            if sender.send(Message::Text(value.to_string().into())).await.is_err() {
-                break;
+    let mut kicks = state.kick_tx.subscribe();
+    let (close_tx, mut close_rx) = mpsc::unbounded_channel::<(u16, &'static str)>();
+    if let Some(id) = &device_id {
+        set_device_connection(&state, id, 1).await;
+    }
+
+    let writer_state = state.clone();
+    let remote = device_id.is_some();
+    let mut send_task = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                close = close_rx.recv() => {
+                    if let Some((code, reason)) = close {
+                        let frame = CloseFrame { code, reason: reason.into() };
+                        let _ = sender.send(Message::Close(Some(frame))).await;
+                    }
+                    break;
+                }
+                event = events.recv() => match event {
+                    Ok(value) => {
+                        if remote && !visible_to_device(&writer_state, &value).await { continue; }
+                        if sender.send(Message::Text(value.to_string().into())).await.is_err() { break; }
+                    }
+                    // A slow tab missed some events; keep streaming rather than dropping it.
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                },
             }
         }
     });
 
-    while let Some(Ok(Message::Text(text))) = receiver.next().await {
-        if let Ok(envelope) = serde_json::from_str::<BrowserEnvelope>(&text) {
-            let sessions = state.sessions.read().await;
-            if let Some(session) = sessions.get(&envelope.session_id) {
-                if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
-                    continue;
+    let mut kicked = false;
+    loop {
+        tokio::select! {
+            message = receiver.next() => match message {
+                Some(Ok(Message::Text(text))) => forward_browser_command(&state, &text, remote).await,
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                Some(Ok(_)) => continue,
+            },
+            kick = kicks.recv(), if remote => match kick {
+                Ok(kick) if Some(&kick.device_id) == device_id.as_ref() => {
+                    let _ = close_tx.send((kick.code, kick.reason));
+                    kicked = true;
+                    break;
                 }
-                if let Some(command_tx) = &session.command_tx {
-                    let _ = command_tx.send(serde_json::json!({
-                        "type": "command",
-                        "command": envelope.command
-                    }));
-                }
-            }
+                Err(broadcast::error::RecvError::Closed) => break,
+                _ => continue,
+            },
         }
     }
 
+    if kicked {
+        let _ = tokio::time::timeout(Duration::from_secs(1), &mut send_task).await;
+    }
     send_task.abort();
+    if let Some(id) = &device_id {
+        set_device_connection(&state, id, -1).await;
+    }
+}
+
+async fn forward_browser_command(state: &AppState, text: &str, remote: bool) {
+    let Ok(envelope) = serde_json::from_str::<BrowserEnvelope>(text) else { return };
+    let sessions = state.sessions.read().await;
+    let Some(session) = sessions.get(&envelope.session_id) else { return };
+    if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
+        return;
+    }
+    if let Some(command_tx) = &session.command_tx {
+        let _ = command_tx.send(serde_json::json!({ "type": "command", "command": envelope.command }));
+    }
 }
 
 async fn bridge_ws(
@@ -671,12 +840,12 @@ async fn require_remote_session(state: &AppState, session_id: &str) -> ApiResult
     }
 }
 
-async fn authorize_device(state: &AppState, token: &str) -> ApiResult<()> {
+async fn authorize_device(state: &AppState, token: &str) -> ApiResult<String> {
     let hash = hash_token(token);
     let mut devices = state.devices.write().await;
     if let Some(device) = devices.values_mut().find(|d| d.token_hash == hash) {
         device.last_seen = now_secs();
-        return Ok(());
+        return Ok(device.id.clone());
     }
     Err((StatusCode::UNAUTHORIZED, "Invalid device token.".into()))
 }
