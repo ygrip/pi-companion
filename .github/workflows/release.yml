@@ -10,7 +10,23 @@ permissions:
   id-token: write
 
 jobs:
+  reserve:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reserve v0.2.2 release for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "v0.2.2" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            echo "v0.2.2 release already exists"
+            exit 0
+          fi
+          gh release create "v0.2.2"             --repo "${GITHUB_REPOSITORY}"             --target "${GITHUB_SHA}"             --draft             --generate-notes             --title "Pi Companion 0.2.2"
+
   validate:
+  validate:
+    needs: reserve
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -143,8 +159,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v0.2.2" dist/* \
+          gh release upload "v0.2.2" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --target "${GITHUB_SHA}" \
-            --generate-notes \
+            --clobber
+          gh release edit "v0.2.2" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --draft=false \
             --title "Pi Companion ${{ needs.validate.outputs.version }}"
