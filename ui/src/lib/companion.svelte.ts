@@ -1,6 +1,8 @@
 import { pushUser, reduceBridgeMessage, type ActivityEntry } from './activity.ts';
 import { sortSessions } from './format.ts';
 import { toasts } from './toast.svelte.ts';
+import { LiveConnection, type Connection } from './connection.ts';
+export type { Connection } from './connection.ts';
 import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
 
 /**
@@ -12,11 +14,7 @@ import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsRe
  * - `revoked`: the computer removed this device (close 4003 or HTTP 401). The stored
  *   credential is deleted and the device must pair again.
  */
-export type Connection = 'connecting' | 'online' | 'offline' | 'disconnected' | 'revoked';
-
 const TOKEN_KEY = 'piCompanionDeviceToken';
-const CLOSE_DISCONNECTED = 4001;
-const CLOSE_REVOKED = 4003;
 
 export class ApiError extends Error {
   constructor(
@@ -44,10 +42,26 @@ class Companion {
   files = $state.raw<Record<string, TempFile[]>>({});
   diffs = $state.raw<Record<string, Diff>>({});
 
-  private ws: WebSocket | null = null;
-  private retryMs = 1000;
-  private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private live = new LiveConnection({
+    enabled: () => this.booted && this.paired,
+    create: () => {
+      const url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/browser';
+      return this.remote ? new WebSocket(url, ['pi-companion', 'token.' + this.token]) : new WebSocket(url);
+    },
+    state: (state) => { this.connection = state; },
+    online: () => { void this.refresh().catch(() => {}); },
+    message: (data) => {
+      try { this.handle(JSON.parse(data)); } catch { /* ignore malformed frames */ }
+    },
+    lost: () => {
+      // Upgrade rejection has no readable HTTP status in the WebSocket API.
+      // Only a confirmed 401 removes credentials; network/daemon failures do not.
+      if (this.remote) void this.request('/api/sessions').catch(() => {});
+    },
+    revoked: () => this.forget()
+  });
   private devicesTimer: ReturnType<typeof setTimeout> | undefined;
+  private booting = false;
 
   get isAdmin() {
     return !this.remote;
@@ -75,9 +89,11 @@ class Companion {
   }
 
   async boot() {
-    if (this.booted) return;
+    if (this.booted || this.booting) return;
+    this.booting = true;
     try {
-      const response = await fetch('/api/context', { cache: 'no-store' });
+      const response = await fetch('/api/context', { cache: 'no-store', signal: AbortSignal.timeout(15_000) });
+      if (!response.ok) throw new ApiError(response.status, 'Daemon context unavailable.');
       const context = await response.json();
       this.remote = Boolean(context.remote);
       this.version = String(context.version ?? '');
@@ -92,18 +108,26 @@ class Companion {
         void this.boot();
       }, 3000);
       return;
+    } finally {
+      this.booting = false;
     }
     this.booted = true;
     if (!this.paired) return;
-    await this.refresh().catch(() => {});
     this.connect();
   }
 
   async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
-    if (this.remote && this.token) headers.set('authorization', 'Bearer ' + this.token);
-    const response = await fetch(path, { ...init, headers, cache: 'no-store' });
-    if (response.status === 401 && this.remote) this.forget();
+    const token = this.token;
+    if (this.remote && token) headers.set('authorization', 'Bearer ' + token);
+    // Bound snapshot reads, not uploads or mutations which may legitimately take longer.
+    let signal = init.signal;
+    if (!init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase())) {
+      const timeout = AbortSignal.timeout(15_000);
+      signal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+    }
+    const response = await fetch(path, { ...init, headers, signal, cache: 'no-store' });
+    if (response.status === 401 && this.remote && this.token === token) this.forget();
     if (!response.ok) throw new ApiError(response.status, (await response.text()) || response.statusText);
     if (response.status === 204) return undefined as T;
     return (await response.json()) as T;
@@ -111,6 +135,8 @@ class Companion {
 
   async refresh() {
     await Promise.all([this.refreshSessions(), this.refreshDevices()]);
+    // Upload notifications missed while offline are not replayed by the daemon.
+    await Promise.all(Object.keys(this.files).filter((id) => this.session(id)).map((id) => this.refreshFiles(id)));
   }
 
   async refreshSessions() {
@@ -132,44 +158,37 @@ class Companion {
   }
 
   connect() {
-    clearTimeout(this.retryTimer);
-    if (!this.paired) return;
-    const url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/browser';
-    const ws = this.remote ? new WebSocket(url, ['pi-companion', 'token.' + this.token]) : new WebSocket(url);
-    this.ws = ws;
-    this.connection = 'connecting';
-
-    ws.onopen = () => {
-      this.connection = 'online';
-      this.retryMs = 1000;
-      void this.refresh().catch(() => {});
-    };
-    ws.onmessage = (event) => {
-      try {
-        this.handle(JSON.parse(event.data));
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-    ws.onclose = (event) => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      if (event.code === CLOSE_REVOKED) return this.forget();
-      if (event.code === CLOSE_DISCONNECTED) {
-        this.connection = 'disconnected';
-        return;
-      }
-      this.connection = 'offline';
-      // An upgrade rejected with 401 looks like a plain close; confirm over HTTP.
-      if (this.remote) void this.request('/api/sessions').catch(() => {});
-      this.retryTimer = setTimeout(() => this.connect(), this.retryMs);
-      this.retryMs = Math.min(this.retryMs * 2, 15_000);
-    };
+    this.live.start();
   }
 
   reconnect() {
-    this.retryMs = 1000;
-    this.connect();
+    if (this.bootError) {
+      this.booted = false;
+      this.bootError = '';
+      void this.boot();
+      return;
+    }
+    this.live.reconnect();
+  }
+
+  /** Install once in the root layout; backgrounded PWAs resume without re-pairing. */
+  watchConnectivity() {
+    const resume = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (this.bootError) this.reconnect();
+      else if (!this.booted) void this.boot();
+      else this.live.resume();
+    };
+    window.addEventListener('online', resume);
+    window.addEventListener('pageshow', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => {
+      window.removeEventListener('online', resume);
+      window.removeEventListener('pageshow', resume);
+      document.removeEventListener('visibilitychange', resume);
+      this.live.stop();
+      clearTimeout(this.devicesTimer);
+    };
   }
 
   /** Drop this device's credential (revoked or explicitly unpaired). */
@@ -178,10 +197,7 @@ class Companion {
     localStorage.removeItem(TOKEN_KEY);
     this.token = null;
     this.connection = 'revoked';
-    clearTimeout(this.retryTimer);
-    const ws = this.ws;
-    this.ws = null;
-    ws?.close();
+    this.live.revoke();
     this.sessions = [];
   }
 
@@ -240,9 +256,7 @@ class Companion {
   }
 
   send(sessionId: string, command: Record<string, unknown>) {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ sessionId, command }));
-    return true;
+    return this.live.send(JSON.stringify({ sessionId, command }));
   }
 
   prompt(sessionId: string, text: string, steer: boolean) {
@@ -302,7 +316,7 @@ class Companion {
     localStorage.setItem(TOKEN_KEY, result.token);
     this.token = result.token;
     await this.refresh().catch(() => {});
-    this.connect();
+    this.reconnect();
   }
 
   async revokeDevice(id: string) {

@@ -93,3 +93,38 @@ pub async fn serve(uri: Uri, request_headers: HeaderMap) -> Response {
 
     (headers, asset.data.into_owned()).into_response()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use http_body_util::BodyExt;
+
+    #[tokio::test]
+    async fn pwa_assets_are_served_with_correct_types_and_revalidation() {
+        for (path, expected_type) in [
+            ("/manifest.webmanifest", "application/manifest+json"),
+            ("/icon-192.png", "image/png"),
+            ("/icon-512.png", "image/png"),
+        ] {
+            let response = serve(path.parse().unwrap(), HeaderMap::new()).await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], expected_type);
+            assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+            let mut headers = HeaderMap::new();
+            headers.insert(header::IF_NONE_MATCH, response.headers()[header::ETAG].clone());
+            assert_eq!(serve(path.parse().unwrap(), headers).await.status(), StatusCode::NOT_MODIFIED);
+            let bytes = response.into_body().collect().await.unwrap().to_bytes();
+            assert!(!bytes.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn nested_routes_include_the_install_manifest() {
+        let response = serve("/sessions/example".parse().unwrap(), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let html = std::str::from_utf8(&bytes).unwrap();
+        assert!(html.contains("/manifest.webmanifest"));
+        assert!(html.contains("apple-mobile-web-app-capable"));
+    }
+}

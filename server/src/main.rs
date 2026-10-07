@@ -896,8 +896,18 @@ async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<St
     let writer_state = state.clone();
     let remote = device_id.is_some();
     let mut send_task = tokio::spawn(async move {
+        // Subscribe before prompting the client to refresh: registrations during its
+        // initial HTTP fetch must not disappear between the fetch and socket upgrade.
+        if sender.send(Message::Text(serde_json::json!({ "type": "resync" }).to_string().into())).await.is_err() { return; }
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
         loop {
             tokio::select! {
+                _ = heartbeat.tick() => {
+                    // Browsers automatically pong at the protocol level. The text frame
+                    // also lets the UI detect a silent/half-open socket in JavaScript.
+                    if sender.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                    if sender.send(Message::Text(serde_json::json!({ "type": "ping" }).to_string().into())).await.is_err() { break; }
+                }
                 close = close_rx.recv() => {
                     if let Some((code, reason)) = close {
                         let frame = CloseFrame { code, reason: reason.into() };
@@ -923,12 +933,21 @@ async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<St
     });
 
     let mut kicked = false;
+    let mut last_received = tokio::time::Instant::now();
+    let mut liveness = tokio::time::interval(Duration::from_secs(15));
     loop {
         tokio::select! {
+            _ = &mut send_task => break,
+            _ = liveness.tick() => {
+                if last_received.elapsed() >= Duration::from_secs(45) { break; }
+            }
             message = receiver.next() => match message {
-                Some(Ok(Message::Text(text))) => forward_browser_command(&state, &text, remote).await,
+                Some(Ok(Message::Text(text))) => {
+                    last_received = tokio::time::Instant::now();
+                    forward_browser_command(&state, &text, remote).await;
+                }
                 Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
-                Some(Ok(_)) => continue,
+                Some(Ok(_)) => { last_received = tokio::time::Instant::now(); }
             },
             kick = kicks.recv(), if remote => match kick {
                 Ok(kick) if Some(&kick.device_id) == device_id.as_ref() => {
@@ -975,42 +994,71 @@ async fn bridge_ws(
 async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Value>();
-    let send_task = tokio::spawn(async move {
-        while let Some(command) = command_rx.recv().await {
-            if sender.send(Message::Text(command.to_string().into())).await.is_err() {
-                break;
+    let mut send_task = tokio::spawn(async move {
+        let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+        loop {
+            tokio::select! {
+                _ = heartbeat.tick() => {
+                    if sender.send(Message::Ping(Vec::new().into())).await.is_err() { break; }
+                }
+                command = command_rx.recv() => {
+                    let Some(command) = command else { break };
+                    if sender.send(Message::Text(command.to_string().into())).await.is_err() { break; }
+                }
             }
         }
     });
 
-    while let Some(Ok(Message::Text(text))) = receiver.next().await {
+    let mut last_received = tokio::time::Instant::now();
+    let mut liveness = tokio::time::interval(Duration::from_secs(15));
+    loop {
+        let message = tokio::select! {
+            _ = &mut send_task => break,
+            _ = liveness.tick() => {
+                if last_received.elapsed() >= Duration::from_secs(45) { break; }
+                continue;
+            }
+            message = receiver.next() => message,
+        };
+        let text = match message {
+            Some(Ok(Message::Text(text))) => text,
+            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+            Some(Ok(_)) => { last_received = tokio::time::Instant::now(); continue; }
+        };
+        last_received = tokio::time::Instant::now();
         let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
+        // An old socket can finish closing after a replacement already registered.
+        if value.get("type").and_then(Value::as_str) != Some("register") {
+            let sessions = state.sessions.read().await;
+            let owns_session = sessions.get(&session_id).and_then(|s| s.command_tx.as_ref())
+                .is_some_and(|tx| tx.same_channel(&command_tx));
+            if !owns_session { continue; }
+        }
         match value.get("type").and_then(Value::as_str) {
             Some("register") => {
                 let snapshot = value.get("session").cloned().unwrap_or(Value::Null);
-                state.sessions.write().await.insert(
-                    session_id.clone(),
-                    Session { snapshot: snapshot.clone(), command_tx: Some(command_tx.clone()) },
-                );
-                broadcast(&state, serde_json::json!({ "type": "session.register", "session": snapshot }));
+                {
+                    let mut sessions = state.sessions.write().await;
+                    sessions.insert(session_id.clone(), Session { snapshot: snapshot.clone(), command_tx: Some(command_tx.clone()) });
+                    broadcast(&state, serde_json::json!({ "type": "session.register", "session": snapshot }));
+                }
                 notify_session_files(&state, &session_id).await;
             }
             Some("session.update") => {
                 if let Some(patch) = value.get("session").and_then(Value::as_object) {
                     let mut sessions = state.sessions.write().await;
-                    if let Some(session) = sessions.get_mut(&session_id) {
+                    if let Some(session) = sessions.get_mut(&session_id)
+                        && session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) {
                         if let Some(snapshot) = session.snapshot.as_object_mut() {
                             for (key, value) in patch {
                                 snapshot.insert(key.clone(), value.clone());
                             }
                         }
+                        broadcast(&state, serde_json::json!({
+                            "type": "session.update", "sessionId": session_id, "patch": value.get("session")
+                        }));
                     }
                 }
-                broadcast(&state, serde_json::json!({
-                    "type": "session.update",
-                    "sessionId": session_id,
-                    "patch": value.get("session")
-                }));
             }
             Some("file.delete") => {
                 let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1037,20 +1085,22 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
         }
     }
 
-    {
+    let stopped = {
         let mut sessions = state.sessions.write().await;
-        if let Some(session) = sessions.get_mut(&session_id) {
+        if let Some(session) = sessions.get_mut(&session_id)
+            && session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) {
             if let Some(snapshot) = session.snapshot.as_object_mut() {
                 snapshot.insert("status".into(), Value::String("stopped".into()));
             }
             session.command_tx = None;
-        }
-    }
-    broadcast(&state, serde_json::json!({
-        "type": "session.update",
-        "sessionId": session_id,
-        "patch": { "status": "stopped" }
-    }));
+            broadcast(&state, serde_json::json!({
+                "type": "session.update", "sessionId": session_id, "patch": { "status": "stopped" }
+            }));
+            true
+        } else { false }
+    };
+    send_task.abort();
+    if !stopped { return; }
 
     let cleanup_state = state.clone();
     let cleanup_session = session_id.clone();

@@ -1,6 +1,6 @@
 {
   "name": "@yunazgr/pi-companion",
-  "version": "0.2.0",
+  "version": "0.2.4",
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",
@@ -69,7 +69,7 @@
     "highlight.js": "^11.12.0",
     "jsqr": "^1.4.0",
     "marked": "^18.1.0",
-    "mermaid": "^12.1.0",
+    "mermaid": "^10.9.8",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",
     "typebox": "^1.0.13",
@@ -77,7 +77,10 @@
     "vite": "^8.0.12"
   },
   "overrides": {
-    "node-domexception": "file:./tools/shims/node-domexception"
+    "node-domexception": "file:./tools/shims/node-domexception",
+    "mermaid": {
+      "katex": "^0.18.2"
+    }
   },
   "allowScripts": {
     "esbuild": true,

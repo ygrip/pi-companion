@@ -16,6 +16,7 @@ export class CompanionBridge implements AskChannel {
   private ws?: WebSocket;
   private ctx?: ExtensionContext;
   private reconnect?: NodeJS.Timeout;
+  private heartbeat?: NodeJS.Timeout;
   private closed = false;
   private connecting = false;
   private everConnected = false;
@@ -81,6 +82,9 @@ export class CompanionBridge implements AskChannel {
       if (allowSpawn) await ensureDaemon((message, level = "info") => this.log(message, level));
       if (this.closed) return;
       this.open();
+    } catch (error) {
+      this.log("Could not reconnect to Pi Companion: " + String(error), "warning");
+      this.scheduleReconnect();
     } finally {
       this.connecting = false;
     }
@@ -88,20 +92,33 @@ export class CompanionBridge implements AskChannel {
 
   private open() {
     const base = process.env.PI_COMPANION_URL ?? "ws://127.0.0.1:43721";
-    const ws = new WebSocket(base.replace(/\/$/, "") + "/ws/bridge/" + this.sessionId);
+    const ws = new WebSocket(base.replace(/\/$/, "") + "/ws/bridge/" + this.sessionId, { handshakeTimeout: 15_000 });
     this.ws = ws;
+    const alive = () => {
+      if (this.ws !== ws || this.closed) return;
+      if (this.heartbeat) clearTimeout(this.heartbeat);
+      this.heartbeat = setTimeout(() => ws.terminate(), 45_000);
+      this.heartbeat.unref();
+    };
+    ws.on("ping", alive); // ws automatically pongs; the watchdog detects silent loss.
     ws.on("open", () => {
+      if (this.ws !== ws || this.closed) return ws.terminate();
+      alive();
       this.everConnected = true;
       this.downSince = 0;
       this.retryDelay = 1000;
       this.send({ type: "register", session: this.snapshot });
     });
     ws.on("message", raw => {
-      try { void this.handle(JSON.parse(raw.toString()) as ServerMessage); }
-      catch (error) { this.send({ type: "error", message: "Invalid server message: " + String(error) }); }
+      if (this.ws !== ws || this.closed) return;
+      alive();
+      const failure = (error: unknown) => this.send({ type: "error", message: "Invalid server message: " + String(error) });
+      try { void this.handle(JSON.parse(raw.toString()) as ServerMessage).catch(failure); }
+      catch (error) { failure(error); }
     });
     ws.on("close", () => {
       if (this.ws !== ws) return;
+      if (this.heartbeat) clearTimeout(this.heartbeat);
       if (!this.downSince) this.downSince = Date.now();
       this.scheduleReconnect();
     });
@@ -117,6 +134,7 @@ export class CompanionBridge implements AskChannel {
   close() {
     this.closed = true;
     if (this.reconnect) clearTimeout(this.reconnect);
+    if (this.heartbeat) clearTimeout(this.heartbeat);
     this.ws?.close();
   }
 

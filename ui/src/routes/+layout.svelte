@@ -60,6 +60,7 @@
 
   onMount(() => {
     theme.init();
+    const stopConnectivity = companion.watchConnectivity();
     void companion.boot();
 
     // A file dropped outside a drop zone would make the browser navigate to file:///…,
@@ -72,6 +73,7 @@
     addEventListener('dragover', swallow);
     addEventListener('drop', swallow);
     return () => {
+      stopConnectivity();
       removeEventListener('dragover', swallow);
       removeEventListener('drop', swallow);
     };

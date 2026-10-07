@@ -8,6 +8,7 @@
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
+  import { splitDiff, diffLineClass } from '#lib/diff.ts';
 
   /** A tool entry's body is its arguments, then "\n→ " and the result once it finishes. */
   function toolParts(entry: ActivityEntry) {
@@ -295,24 +296,12 @@
     user: '❯'
   };
 
-  const diffStats = $derived.by(() => {
-    if (!diff?.text) return { add: 0, del: 0, files: 0 };
-    let add = 0, del = 0, filesChanged = 0;
-    for (const line of diff.text.split('\n')) {
-      if (line.startsWith('diff --git')) filesChanged++;
-      else if (line.startsWith('+') && !line.startsWith('+++')) add++;
-      else if (line.startsWith('-') && !line.startsWith('---')) del++;
-    }
-    return { add, del, files: filesChanged };
+  const diffFiles = $derived(splitDiff(diff?.text ?? ''));
+  const diffStats = $derived({
+    add: diffFiles.reduce((sum, file) => sum + file.add, 0),
+    del: diffFiles.reduce((sum, file) => sum + file.del, 0),
+    files: diffFiles.length
   });
-
-  function lineClass(line: string) {
-    if (line.startsWith('diff --git')) return 'file';
-    if (line.startsWith('@@')) return 'hunk';
-    if (line.startsWith('+') && !line.startsWith('+++')) return 'add';
-    if (line.startsWith('-') && !line.startsWith('---')) return 'del';
-    return '';
-  }
 </script>
 
 <svelte:head><title>{session ? sessionTitle(session) : 'Session'} · Pi Companion</title></svelte:head>
@@ -470,7 +459,8 @@
             {/if}
           </div>
         {:else if tab === 'files'}
-          <div class="pane scroll">
+          <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll this region) -->
+          <div class="pane scroll" tabindex="0" role="region" aria-label="Session files">
             <div
               class="tile sunken dropzone"
               class:dragging
@@ -518,7 +508,8 @@
               {/if}
               <button class="btn btn-ghost btn-icon refresh" aria-label="Refresh changes" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={16} /></button>
             </div>
-            <div class="diff scroll">
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll this region) -->
+            <div class="diff scroll" tabindex="0" role="region" aria-label="Changed files">
               {#if !diff}
                 <p class="subtle none">Loading changes…</p>
               {:else if diff.error}
@@ -526,7 +517,20 @@
               {:else if !diff.text.trim()}
                 <p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
               {:else}
-                <pre>{#each diff.text.split('\n') as line, index (index)}<span class={lineClass(line)}>{line || ' '}</span>{/each}</pre>
+                {#each diffFiles as file, fileIndex (file.header + fileIndex)}
+                  <details class="diff-file" open>
+                    <summary>
+                      <Icon name="chevron" size={16} class="diff-caret" />
+                      <span class="diff-path">{file.path}</span>
+                      <span class="diff-count plus">+{file.add}</span>
+                      <span class="diff-count minus">−{file.del}</span>
+                    </summary>
+                    <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll long patch lines) -->
+                    <div class="diff-code scroll-x" tabindex="0" role="region" aria-label="Patch for {file.path}">
+                      <pre>{#each file.lines as line, index (index)}<span class="diff-line {diffLineClass(line)}">{line || ' '}</span>{/each}</pre>
+                    </div>
+                  </details>
+                {/each}
               {/if}
             </div>
           </div>
@@ -602,6 +606,8 @@
     flex-direction: column;
     gap: 12px;
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
   }
 
   .head {
@@ -669,8 +675,9 @@
   }
 
   .panel {
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 10px;
@@ -720,8 +727,9 @@
 
   .body {
     position: relative;
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border);
@@ -1309,8 +1317,10 @@
   /* ---------- Changes ---------- */
 
   .changes {
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
+    overflow: hidden;
     display: flex;
     flex-direction: column;
   }
@@ -1320,6 +1330,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
     padding: 10px 12px;
     border-bottom: 1px solid var(--border);
   }
@@ -1337,10 +1348,35 @@
   }
 
   .diff {
-    flex: 1;
+    flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
     background: var(--code-bg);
   }
+
+  .diff-file {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .diff-file summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 48px;
+    padding: 10px 14px;
+    background: var(--surface);
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .diff-file summary::-webkit-details-marker { display: none; }
+  .diff-file summary:hover { background: var(--surface-2); }
+  .diff-file[open] :global(.diff-caret) { rotate: 90deg; }
+  .diff-path { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 0.8rem; }
+  .diff-count { flex: none; font: 600 0.75rem var(--mono); }
+  .diff-count.plus { color: var(--ok); }
+  .diff-count.minus { color: var(--danger); }
+  .diff-code { min-width: 0; }
 
   .diff pre {
     margin: 0;
@@ -1351,7 +1387,7 @@
     line-height: 1.55;
   }
 
-  .diff span {
+  .diff-line {
     display: block;
     padding: 0 20px;
     white-space: pre;
@@ -1371,10 +1407,7 @@
     color: var(--accent-text);
   }
 
-  .diff .file {
-    margin-top: 10px;
-    padding-top: 6px;
-    border-top: 1px solid var(--border);
+  .diff .file-header {
     color: var(--text);
     font-weight: 700;
   }

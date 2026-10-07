@@ -136,6 +136,14 @@ Paired devices (name, browser user agent, pairing and last-seen times, credentia
 
 A phone pairs once with the daemon. Individual Pi sessions still opt in using /companion.
 
+Network loss and daemon restarts reconnect automatically with bounded backoff. Heartbeats detect silent connections, and returning to the foreground or restoring network access retries immediately. Pairing credentials and unsent drafts survive outages; session snapshots, pending questions, and previously loaded upload lists refresh on reconnect. Missed activity is not replayed, and prompts/answers are never automatically resent. A deliberate **Disconnect** waits for the device’s explicit retry; **Revoke** removes access and requires pairing again.
+
+## Install as a mobile app
+
+Open the paired-device dashboard over **HTTPS** (through your tunnel or reverse proxy). On Android Chrome, choose **Install app** / **Add to Home screen** from the browser menu. On iPhone or iPad, use Safari’s **Share → Add to Home Screen** and enable **Open as Web App** if offered.
+
+Plain HTTP LAN addresses are not eligible for PWA installation. Use the HTTPS public address configured in Settings, and open it in a full browser rather than an in-app browser. The installed app still needs a connection to the daemon; session data is not cached for offline access.
+
 ## Settings
 
 The **Settings** page (local console only) covers:

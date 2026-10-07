@@ -96,6 +96,17 @@
       <p>For a remote connection, use the device URL shown in Settings—not the local-only admin URL.</p>
     </article>
     <article class="tile">
+      <span class="topic-icon"><Icon name="download" /></span>
+      <h2>Install on your phone</h2>
+      <p>Open the paired-device dashboard using its HTTPS address in your phone’s browser, then install Pi Companion to launch it as an app.</p>
+      <dl>
+        <dt>iPhone or iPad</dt><dd>In Safari, tap Share → Add to Home Screen. Enable Open as Web App if offered, then tap Add.</dd>
+        <dt>Android</dt><dd>In Chrome, open the browser menu → Install app or Add to Home screen.</dd>
+        <dt>No install option?</dt><dd>Use HTTPS, not a plain HTTP LAN address. Open the link in Safari or Chrome rather than an in-app browser. Ask your administrator for the HTTPS tunnel or reverse-proxy address configured in Settings.</dd>
+      </dl>
+      <p class="muted">An internet or local-network connection to the daemon is still required. Installing does not enable offline session access.</p>
+    </article>
+    <article class="tile">
       <span class="topic-icon"><Icon name="alert" /></span>
       <h2>Troubleshooting</h2>
       <dl>

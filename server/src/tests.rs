@@ -417,6 +417,66 @@ async fn bridge_reconnect_keeps_the_session_and_its_files() {
 }
 
 #[tokio::test]
+async fn superseded_bridge_cannot_stop_or_overwrite_the_working_session() {
+    let state = test_state();
+    let addr = serve(local_router(state.clone())).await;
+    let mut browser = ws_connect(addr, "/ws/browser", Some(CONSOLE_ORIGIN), None).await.unwrap();
+    let mut old = bridge(addr, "s1", true).await;
+    let mut current = bridge(addr, "s1", true).await;
+    send_json(&mut old, json!({ "type": "session.update", "session": { "status": "stopped", "remoteEnabled": false } })).await;
+    old.close(None).await.unwrap();
+    assert_no_frame(&mut browser, 100, |v| v["type"] == "session.update" && v["patch"]["status"] == "stopped").await;
+    let sessions = state.sessions.read().await;
+    assert_eq!(sessions["s1"].snapshot["status"], "idle");
+    assert_eq!(sessions["s1"].snapshot["remoteEnabled"], true);
+    drop(sessions);
+    send_json(&mut browser, json!({ "sessionId": "s1", "command": { "type": "prompt", "text": "current only" } })).await;
+    let command = next_matching(&mut current, |v| v["type"] == "command").await;
+    assert_eq!(command["command"]["text"], "current only");
+}
+
+#[tokio::test]
+async fn heartbeat_control_frames_do_not_end_a_bridge_session() {
+    let state = test_state();
+    let addr = serve(local_router(state.clone())).await;
+    let mut browser = ws_connect(addr, "/ws/browser", Some(CONSOLE_ORIGIN), None).await.unwrap();
+    next_matching(&mut browser, |v| v["type"] == "resync").await;
+    next_matching(&mut browser, |v| v["type"] == "ping").await;
+    let mut pi = bridge(addr, "s1", true).await;
+    pi.send(WsMessage::Pong(Vec::new().into())).await.unwrap();
+    send_json(&mut pi, json!({ "type": "session.update", "session": { "status": "active" } })).await;
+    next_matching(&mut browser, |v| v["type"] == "session.update" && v["patch"]["status"] == "active").await;
+    send_json(&mut browser, json!({ "sessionId": "s1", "command": { "type": "prompt", "text": "still working" } })).await;
+    let command = next_matching(&mut pi, |v| v["type"] == "command").await;
+    assert_eq!(command["command"]["text"], "still working");
+}
+
+#[tokio::test]
+async fn paired_device_recovers_working_session_and_questions_after_daemon_restart() {
+    let state = test_state();
+    let (_, token) = pair(&state).await;
+    let persisted = config::load(&state.data_dir).await;
+    let restarted = AppState::new(persisted, scratch("restart-tmp"), state.data_dir.clone(), None, Vec::new());
+    let local_addr = serve(local_router(restarted.clone())).await;
+    let remote = remote_router(restarted.clone());
+    let device_addr = serve(remote.clone()).await;
+    let mut pi = bridge(local_addr, "working", true).await;
+    send_json(&mut pi, json!({ "type": "session.update", "session": { "status": "active", "asks": [{ "requestId": "pending", "questions": [] }] } })).await;
+    // This phone keeps the same credential across daemon restart, never re-pairs.
+    let protocols = format!("pi-companion, token.{token}");
+    let mut phone = ws_connect(device_addr, "/ws/browser", Some(DEVICE_ORIGIN), Some(&protocols)).await.unwrap();
+    next_matching(&mut phone, |v| v["type"] == "resync").await;
+    let (status, body) = call(&remote, get("/api/sessions", Some(DEVICE_ORIGIN), Some(&token))).await;
+    assert_eq!(status, StatusCode::OK);
+    let sessions: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(sessions["sessions"][0]["status"], "active");
+    assert_eq!(sessions["sessions"][0]["asks"][0]["requestId"], "pending");
+    send_json(&mut phone, json!({ "sessionId": "working", "command": { "type": "ask_answer", "requestId": "pending", "answers": {} } })).await;
+    let command = next_matching(&mut pi, |v| v["type"] == "command").await;
+    assert_eq!(command["command"]["requestId"], "pending");
+}
+
+#[tokio::test]
 async fn device_reconnects_after_disconnect_but_not_after_revoke() {
     let state = test_state();
     let (device_id, token) = pair(&state).await;
