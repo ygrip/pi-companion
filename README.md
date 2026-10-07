@@ -257,3 +257,7 @@ The current paired-device registry is process-local. Persistent encrypted/restri
 6. Add proper transcript rendering instead of raw event JSON.
 7. Package signed/notarized daemon binaries and service installation for macOS/Linux/Windows.
 8. Add protocol, pairing expiry, reconnect, traversal, upload-limit, and multi-session isolation tests.
+
+## License
+
+MIT. See [LICENSE](LICENSE).

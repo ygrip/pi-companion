@@ -21,12 +21,14 @@
     "url": "https://github.com/ygrip/pi-companion/issues"
   },
   "author": "ygrip <yunaz.gilang@gmail.com>",
+  "license": "MIT",
   "type": "module",
   "main": "src/index.ts",
   "files": [
     "src",
     "README.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22"
