@@ -10,13 +10,14 @@ use axum::{
         DefaultBodyLimit, Multipart, Path, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse},
+    http::{HeaderMap, StatusCode, Uri, header},
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use qrcode::{render::svg, QrCode};
+use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -32,6 +33,10 @@ const LOCAL_ADDR: &str = "127.0.0.1:43721";
 const REMOTE_ADDR: &str = "127.0.0.1:43722";
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
 const PAIRING_TTL_SECS: u64 = 300;
+
+#[derive(RustEmbed)]
+#[folder = "web-dist/"]
+struct WebAssets;
 
 #[derive(Clone)]
 struct AppState {
@@ -172,9 +177,7 @@ async fn main() {
 
 fn local_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(index))
-        .route("/app.js", get(app_js))
-        .route("/styles.css", get(styles))
+        .route("/api/context", get(local_context))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{session_id}/files", get(list_files).post(upload_file))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_local))
@@ -183,40 +186,48 @@ fn local_router(state: AppState) -> Router {
         .route("/api/devices/{device_id}", delete(revoke_device))
         .route("/ws/browser", get(browser_ws))
         .route("/ws/bridge/{session_id}", get(bridge_ws))
+        .fallback(get(web_asset))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
 fn remote_router(state: AppState) -> Router {
     Router::new()
-        .route("/", get(remote_index))
-        .route("/pair", get(remote_index))
-        .route("/app.js", get(app_js))
-        .route("/styles.css", get(styles))
+        .route("/api/context", get(remote_context))
         .route("/api/pairing/claim", post(claim_pairing))
         .route("/api/sessions", get(list_sessions_remote))
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
+        .fallback(get(web_asset))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
-async fn index() -> Html<&'static str> {
-    Html(include_str!("../web/index.html"))
+async fn local_context() -> Json<Value> {
+    Json(serde_json::json!({ "remote": false }))
 }
 
-async fn remote_index() -> Html<String> {
-    Html(include_str!("../web/index.html").replace("<body>", "<body data-remote=\"true\">"))
+async fn remote_context() -> Json<Value> {
+    Json(serde_json::json!({ "remote": true }))
 }
 
-async fn app_js() -> impl IntoResponse {
-    ([("content-type", "text/javascript; charset=utf-8")], include_str!("../web/app.js"))
-}
+async fn web_asset(uri: Uri) -> Response {
+    let requested = uri.path().trim_start_matches('/');
+    let path = if requested.is_empty() || !requested.contains('.') { "index.html" } else { requested };
 
-async fn styles() -> impl IntoResponse {
-    ([("content-type", "text/css; charset=utf-8")], include_str!("../web/styles.css"))
+    match WebAssets::get(path).or_else(|| WebAssets::get("index.html")) {
+        Some(asset) => {
+            let mime = mime_guess::from_path(path).first_or_octet_stream();
+            (
+                [(header::CONTENT_TYPE, mime.as_ref())],
+                asset.data.into_owned(),
+            ).into_response()
+        }
+        None => (StatusCode::NOT_FOUND, "UI bundle not built").into_response(),
+    }
 }
 
 async fn list_sessions(State(state): State<AppState>) -> Json<SessionsResponse> {
