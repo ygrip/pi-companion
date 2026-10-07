@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Pi Companion</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<main class="shell">
+  <header>
+    <div><span class="eyebrow">PI COMPANION</span><h1>Remote control, locally.</h1></div>
+    <span id="connection" class="pill">connecting</span>
+  </header>
+  <section class="layout">
+    <aside><h2>Sessions</h2><div id="sessions" class="sessions"></div></aside>
+    <section class="panel">
+      <div id="empty" class="empty">Select a Pi session.</div>
+      <div id="detail" hidden>
+        <div class="session-head">
+          <div><h2 id="title"></h2><p id="meta"></p></div>
+          <button id="abort" class="danger">Abort</button>
+        </div>
+        <div class="tabs">
+          <button data-tab="activity" class="active">Activity</button>
+          <button data-tab="diff">Git diff</button>
+          <button data-tab="plan">Plan</button>
+        </div>
+        <pre id="activity" class="surface"></pre>
+        <pre id="diff" class="surface" hidden></pre>
+        <div id="plan" class="surface" hidden>
+          <textarea id="planText" placeholder="Optional plan goal"></textarea>
+          <button id="planRun">Run /plan</button>
+        </div>
+        <div id="ask" class="ask" hidden></div>
+        <form id="promptForm" class="composer">
+          <textarea id="prompt" placeholder="Prompt or steer the selected session"></textarea>
+          <div><label><input id="steer" type="checkbox"> steer active turn</label><button>Send</button></div>
+        </form>
+      </div>
+    </section>
+  </section>
+</main>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
