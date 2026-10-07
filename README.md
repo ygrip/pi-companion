@@ -6,6 +6,18 @@ Pi Companion is deliberately not another agent runtime. Pi owns execution and co
 
 The UI is a static SvelteKit application. There is no Node runtime in production and no Tauri shell. Rust embeds the generated frontend into the daemon binary.
 
+![Pi Companion dashboard](docs/dashboard.png)
+
+## Install
+
+    pi install npm:@ygrip/pi-companion
+
+or straight from git:
+
+    pi install git:github.com/ygrip/pi-companion
+
+Then start pi as usual and run /companion to get the dashboard address. Nothing else to configure: the extension finds or starts the daemon on its own (see Daemon).
+
 ## Architecture
 
     local browser :43721
@@ -41,7 +53,31 @@ The local administration surface and paired-device surface are separate listener
 
 ## Daemon
 
-The extension connects to the shared daemon automatically. If it is not running, the first extension instance starts pi-companion-server as a detached process. Later Pi sessions reuse the same daemon.
+There is exactly one daemon per machine, shared by every Pi session. The extension manages it with no configuration:
+
+1. It probes http://127.0.0.1:43721. If anything answers (a daemon started by another session, or one you ran yourself with cargo run), it just connects. It never starts a second copy.
+2. If nothing answers, one Pi session takes a lock (so several sessions starting at once don't race), launches the daemon detached, and waits for it to be ready. The others wait for that daemon.
+3. If a live connection drops, the extension waits 20 seconds before launching a replacement, so restarting a dev daemon doesn't get pre-empted.
+4. The daemon also refuses to run twice: if its ports are taken it prints a message and exits 0.
+
+The daemon binary is resolved in this order:
+
+| Order | Source |
+|---|---|
+| 1 | PI_COMPANION_SERVER (explicit path override) |
+| 2 | a cargo build inside the package checkout: newest of server/target/release and server/target/debug |
+| 3 | cached download: ~/.pi/agent/pi-companion/bin/<version>/ |
+| 4 | pi-companion-server on PATH |
+| 5 | download of the GitHub release matching the package version, verified against SHA256SUMS, then cached |
+
+Optional environment variables (none are required):
+
+| Variable | Effect |
+|---|---|
+| PI_COMPANION_SERVER | use this daemon binary |
+| PI_COMPANION_URL | daemon WebSocket URL (default ws://127.0.0.1:43721); autostart only happens for loopback URLs |
+| PI_COMPANION_AUTOSTART=0 | never launch a daemon, only connect |
+| PI_COMPANION_PUBLIC_URL | daemon-side: public URL embedded in pairing QR codes |
 
 Local admin:
 
@@ -170,19 +206,21 @@ Requirements: Node 22+ and stable Rust.
     npm install
     npm run server:dev
 
-For frontend-only development:
-
-    npm run ui:dev
-
-In another shell:
+Then, in another shell, start Pi with the extension from this checkout:
 
     pi -e ./src/index.ts
 
-For extension work while running the server manually:
+For hot-reloading UI work, keep the daemon running and use:
 
-    PI_COMPANION_AUTOSTART=0 pi -e ./src/index.ts
+    npm run ui:dev
+
+which proxies /api and /ws to the daemon on 43721.
+
+Running the daemon manually with npm run server:dev and the extension side by side just works: the extension sees the running daemon and connects to it. If you don't run it, the extension launches your local cargo build automatically.
 
 ## Releases
+
+The package carries the pi-package keyword, so published npm versions appear in the Pi package gallery (https://pi.dev/packages). Host-provided packages (@earendil-works/pi-coding-agent, typebox) are peer dependencies, as Pi requires.
 
 GitHub Actions run only for release tags. Pushing ordinary commits or opening pull requests does not trigger any workflow; CI can also be started manually with workflow_dispatch.
 
