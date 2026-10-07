@@ -247,7 +247,7 @@ Type checks cover the extension (`tsc`) and the UI (`svelte-check`, warnings fai
 
     npm run check
 
-UI modules import shared code through the `#lib/*` subpath import declared in `ui/package.json` (SvelteKit 3 replaced `$lib`).
+UI modules import shared code through the `#lib/*` subpath import declared in `ui/package.json` (SvelteKit 3 replaced `$lib`). Subpath imports do not guess extensions, so always write the full file name: `#lib/format.ts`, `#lib/companion.svelte.ts`, `#lib/Icon.svelte`. `ui/tsconfig.json` extends SvelteKit's generated `$app/tsconfig`.
 
 Then, in another shell, start Pi with the extension from this checkout:
 

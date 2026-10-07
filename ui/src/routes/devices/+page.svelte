@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onDestroy } from 'svelte';
   import Icon from '#lib/Icon.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { relativeTime, shortDate } from '#lib/format';
-  import { errorMessage, toasts } from '#lib/toast.svelte';
-  import type { PairedDevice, Pairing } from '#lib/types';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { relativeTime, shortDate } from '#lib/format.ts';
+  import { errorMessage, toasts } from '#lib/toast.svelte.ts';
+  import type { PairedDevice, Pairing } from '#lib/types.ts';
 
   let pairing = $state<Pairing | null>(null);
   let starting = $state(false);

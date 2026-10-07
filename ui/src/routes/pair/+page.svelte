@@ -3,8 +3,8 @@
   import { page } from '$app/state';
   import logo from '../../assets/pi-companion.webp';
   import Icon from '#lib/Icon.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { errorMessage } from '#lib/toast.svelte';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { errorMessage } from '#lib/toast.svelte.ts';
 
   const invite = $derived(page.url.searchParams.get('invite'));
   let name = $state(guessName());

@@ -5,9 +5,9 @@
   import { page, updated } from '$app/state';
   import logo from '../assets/pi-companion.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { theme, type ThemePreference } from '#lib/theme.svelte';
-  import { toasts } from '#lib/toast.svelte';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
+  import { toasts } from '#lib/toast.svelte.ts';
 
   let { children } = $props();
 

@@ -1,9 +1,9 @@
 <script lang="ts">
   import Icon from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { prettyPath, sessionTitle } from '#lib/format';
-  import type { SessionStatus } from '#lib/types';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { prettyPath, sessionTitle } from '#lib/format.ts';
+  import type { SessionStatus } from '#lib/types.ts';
 
   type Filter = 'all' | SessionStatus;
   let filter = $state<Filter>('all');

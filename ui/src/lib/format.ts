@@ -1,4 +1,4 @@
-import type { Session, SessionStatus } from './types';
+import type { Session, SessionStatus } from './types.ts';
 
 export function formatBytes(bytes: number) {
   if (bytes < 1024) return bytes + ' B';

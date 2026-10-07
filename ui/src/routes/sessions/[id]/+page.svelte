@@ -2,10 +2,10 @@
   import { tick } from 'svelte';
   import { page } from '$app/state';
   import Icon, { type IconName } from '#lib/Icon.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format';
-  import { errorMessage, toasts } from '#lib/toast.svelte';
-  import type { ActivityEntry } from '#lib/activity';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
+  import { errorMessage, toasts } from '#lib/toast.svelte.ts';
+  import type { ActivityEntry } from '#lib/activity.ts';
 
   type Tab = 'activity' | 'files' | 'changes' | 'plan';
 

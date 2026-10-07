@@ -1,8 +1,8 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
-  import { companion } from './companion.svelte';
-  import { prettyPath, relativeTime, sessionTitle, statusLabel } from './format';
-  import type { Session } from './types';
+  import { companion } from './companion.svelte.ts';
+  import { prettyPath, relativeTime, sessionTitle, statusLabel } from './format.ts';
+  import type { Session } from './types.ts';
 
   let { session }: { session: Session } = $props();
   const waiting = $derived(companion.pendingAsks(session.id));

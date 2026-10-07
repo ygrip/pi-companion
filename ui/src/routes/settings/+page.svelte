@@ -1,10 +1,10 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
-  import { companion } from '#lib/companion.svelte';
-  import { theme, type ThemePreference } from '#lib/theme.svelte';
-  import { errorMessage, toasts } from '#lib/toast.svelte';
-  import type { Settings, SettingsResponse } from '#lib/types';
+  import { companion } from '#lib/companion.svelte.ts';
+  import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
+  import { errorMessage, toasts } from '#lib/toast.svelte.ts';
+  import type { Settings, SettingsResponse } from '#lib/types.ts';
 
   let data = $state<SettingsResponse | null>(null);
   let draft = $state<Settings>({ publicUrl: '', pairingTtlMinutes: 5, maxUploadMb: 25 });

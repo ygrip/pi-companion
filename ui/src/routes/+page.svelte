@@ -5,7 +5,7 @@
   import companionArt from '../assets/morph/companion.svg';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
-  import { companion } from '#lib/companion.svelte';
+  import { companion } from '#lib/companion.svelte.ts';
 
   // The dot field morphs Pi → computer → companion, on the same loop as Raksara.
   const art = [piArt, computerArt, companionArt];

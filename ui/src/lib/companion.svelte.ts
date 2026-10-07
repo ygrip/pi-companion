@@ -1,6 +1,6 @@
-import { pushUser, reduceBridgeMessage, type ActivityEntry, type AskRequest } from './activity';
-import { sortSessions } from './format';
-import type { PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types';
+import { pushUser, reduceBridgeMessage, type ActivityEntry, type AskRequest } from './activity.ts';
+import { sortSessions } from './format.ts';
+import type { PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
 
 /**
  * Single live connection to the daemon, shared by every page.

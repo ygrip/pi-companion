@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { globeTone, imageTonePixels, morphFrame, morphPairs } from '#lib/dot-field';
+  import { globeTone, imageTonePixels, morphFrame, morphPairs } from '#lib/dot-field.ts';
   /**
    * Full-bleed halftone dot field. Every dot sits on one shared grid that spans
    * the host; dots inside the `anchor` element's box are sized from the portrait
