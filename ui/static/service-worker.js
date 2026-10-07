@@ -1,5 +1,5 @@
 // Cache only the public application shell. Tokens, API data and uploads stay online-only.
-const CACHE = 'pi-companion-shell-v3';
+const CACHE = 'pi-companion-shell-v4';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png', '/pwa-icon.svg', '/pwa-maskable.svg', '/pwa-192.png', '/pwa-512.png', '/pwa-maskable-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -24,6 +24,9 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith(
       fetch(request)
+        // A closed tunnel can answer with a gateway HTML page, not just a fetch rejection.
+        // Keep the public app shell so it can explain the failed API connection and offer retry.
+        .then(async (response) => response.status >= 500 ? (await caches.match('/')) || response : response)
         .catch(async () => (await caches.match('/')) || Response.error())
     );
     return;

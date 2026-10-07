@@ -78,6 +78,30 @@ fn upload(path: &str, origin: Option<&str>, token: Option<&str>, file_name: &str
         .unwrap()
 }
 
+#[tokio::test]
+async fn context_exposes_current_upload_policy_without_private_settings() {
+    let state = test_state();
+    {
+        let mut settings = state.settings.write().await;
+        settings.max_upload_mb = 7;
+        settings.allowed_upload_types = vec!["image/*".into(), "application/pdf".into()];
+    }
+    for (router, origin, remote) in [
+        (local_router(state.clone()), CONSOLE_ORIGIN, false),
+        (remote_router(state.clone()), DEVICE_ORIGIN, true),
+    ] {
+        let (status, text) = call(&router, get("/api/context", Some(origin), None)).await;
+        assert_eq!(status, StatusCode::OK);
+        let context: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(context["remote"], remote);
+        assert_eq!(context["uploadPolicy"]["maxUploadMb"], 7);
+        assert_eq!(context["uploadPolicy"]["allowedUploadTypes"], json!(["image/*", "application/pdf"]));
+        assert!(context.get("devices").is_none());
+        assert!(context.get("settings").is_none());
+        assert!(context.get("dataDir").is_none());
+    }
+}
+
 async fn add_session(state: &AppState, id: &str, remote: bool) {
     state.sessions.write().await.insert(
         id.to_string(),

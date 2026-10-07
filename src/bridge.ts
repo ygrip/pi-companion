@@ -42,7 +42,7 @@ export class CompanionBridge implements AskChannel {
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
-    if (this.activated && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs);
+    if (this.activated && this.snapshot.remoteEnabled && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs);
     const name = this.pi.getSessionName() ?? this.snapshot.name;
     this.snapshot = {
       ...this.snapshot,
@@ -63,7 +63,26 @@ export class CompanionBridge implements AskChannel {
 
   setRemoteEnabled(remoteEnabled: boolean) {
     this.snapshot.remoteEnabled = remoteEnabled;
-    this.send({ type: "session.update", session: { remoteEnabled } });
+    this.snapshot.status = remoteEnabled ? (this.ctx?.isIdle() === false ? "active" : "idle") : "stopped";
+    this.send({ type: "session.update", session: { remoteEnabled, status: this.snapshot.status } });
+    if (remoteEnabled) {
+      if (this.isActivated()) { this.activate(); void this.connect(); }
+      return;
+    }
+    // End only Companion sharing: Pi itself and its local history keep running.
+    this.restoreDialogs?.();
+    this.restoreDialogs = undefined;
+    for (const entry of [...this.asks.values()]) entry.settle(null);
+    for (const pending of this.pendingDeletes.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve({ ok: false, error: "Session sharing ended." });
+    }
+    this.pendingDeletes.clear();
+    if (this.reconnect) clearTimeout(this.reconnect);
+    this.reconnect = undefined;
+    const ws = this.ws;
+    this.ws = undefined;
+    ws?.close();
   }
 
   isRemoteEnabled() {
@@ -77,7 +96,7 @@ export class CompanionBridge implements AskChannel {
   /** Only an explicit /companion command may activate this session's bridge. */
   activate() {
     this.activated = true;
-    if (this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs);
+    if (this.snapshot.remoteEnabled && this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs);
   }
 
   isActivated() {
@@ -86,7 +105,7 @@ export class CompanionBridge implements AskChannel {
 
   /** Connect to the shared daemon only after this session opted in. */
   async connect() {
-    if (!this.activated || this.closed || this.connecting) return;
+    if (!this.activated || !this.snapshot.remoteEnabled || this.closed || this.connecting) return;
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return; // connecting or already live
     this.connecting = true;
     try {
@@ -94,7 +113,7 @@ export class CompanionBridge implements AskChannel {
       // period to come back before launching a replacement.
       const allowSpawn = !this.everConnected || (this.downSince > 0 && Date.now() - this.downSince > 20_000);
       if (allowSpawn) await ensureDaemon((message, level = "info") => this.log(message, level));
-      if (this.closed) return;
+      if (this.closed || !this.snapshot.remoteEnabled) return;
       this.open();
     } finally {
       this.connecting = false;
@@ -106,12 +125,14 @@ export class CompanionBridge implements AskChannel {
     const ws = new WebSocket(base.replace(/\/$/, "") + "/ws/bridge/" + this.sessionId);
     this.ws = ws;
     ws.on("open", () => {
+      if (this.ws !== ws || this.closed || !this.snapshot.remoteEnabled) { ws.close(); return; }
       this.everConnected = true;
       this.downSince = 0;
       this.retryDelay = 1000;
       this.send({ type: "register", session: this.snapshot });
     });
     ws.on("message", raw => {
+      if (this.ws !== ws || this.closed || !this.snapshot.remoteEnabled) return;
       try { void this.handle(JSON.parse(raw.toString()) as ServerMessage); }
       catch (error) { this.send({ type: "error", message: "Invalid server message: " + String(error) }); }
     });
@@ -154,7 +175,7 @@ export class CompanionBridge implements AskChannel {
   ask(input: AskInput, signal?: AbortSignal) {
     const request: AskRequest = { ...input, requestId: randomUUID(), createdAt: new Date().toISOString() };
     return new Promise<AskAnswers | null>(resolve => {
-      if (!this.isActivated() || signal?.aborted) return resolve(null);
+      if (!this.isActivated() || !this.snapshot.remoteEnabled || signal?.aborted) return resolve(null);
       const onAbort = () => settle(null);
       const settle = (answers: AskAnswers | null) => {
         if (!this.asks.delete(request.requestId)) return;
@@ -193,7 +214,7 @@ export class CompanionBridge implements AskChannel {
 
   private scheduleReconnect() {
     if (this.reconnect) clearTimeout(this.reconnect);
-    if (!this.activated || this.closed) return;
+    if (!this.activated || !this.snapshot.remoteEnabled || this.closed) return;
     this.reconnect = setTimeout(() => void this.connect(), this.retryDelay);
     this.retryDelay = Math.min(this.retryDelay * 2, 10_000);
   }

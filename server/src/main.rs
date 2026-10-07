@@ -398,12 +398,17 @@ fn body_limit() -> usize {
     (config::MAX_UPLOAD_MB_LIMIT as usize) * 1024 * 1024 + 64 * 1024
 }
 
-async fn local_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": false, "version": VERSION, "pid": std::process::id() }))
+async fn upload_policy(state: &AppState) -> Value {
+    let settings = state.settings.read().await;
+    serde_json::json!({ "maxUploadMb": settings.max_upload_mb, "allowedUploadTypes": settings.allowed_upload_types })
 }
 
-async fn remote_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": true, "version": VERSION }))
+async fn local_context(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({ "remote": false, "version": VERSION, "pid": std::process::id(), "uploadPolicy": upload_policy(&state).await }))
+}
+
+async fn remote_context(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({ "remote": true, "version": VERSION, "uploadPolicy": upload_policy(&state).await }))
 }
 
 /// Local-admin only. Used by the extension to replace an older daemon after a package upgrade.
@@ -1044,21 +1049,21 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                 notify_session_files(&state, &session_id).await;
             }
             Some("session.update") => {
-                if let Some(patch) = value.get("session").and_then(Value::as_object) {
-                    let mut sessions = state.sessions.write().await;
-                    if let Some(session) = sessions.get_mut(&session_id) {
-                        if let Some(snapshot) = session.snapshot.as_object_mut() {
-                            for (key, value) in patch {
-                                snapshot.insert(key.clone(), value.clone());
-                            }
-                        }
+                // Validate ownership under the same lock as mutation/publication:
+                // a retired socket must never stop or hide its replacement.
+                let mut sessions = state.sessions.write().await;
+                let Some(session) = sessions.get_mut(&session_id) else { break };
+                if !session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) { break; }
+                if let (Some(patch), Some(snapshot)) = (value.get("session").and_then(Value::as_object), session.snapshot.as_object_mut()) {
+                    for (key, value) in patch {
+                        snapshot.insert(key.clone(), value.clone());
                     }
+                    broadcast(&state, serde_json::json!({
+                        "type": "session.update",
+                        "sessionId": session_id,
+                        "patch": patch
+                    }));
                 }
-                broadcast(&state, serde_json::json!({
-                    "type": "session.update",
-                    "sessionId": session_id,
-                    "patch": value.get("session")
-                }));
             }
             Some("file.delete") => {
                 let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or_default().to_string();

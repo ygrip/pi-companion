@@ -74,7 +74,7 @@
           <thead><tr><th>Command</th><th>What it does</th></tr></thead>
           <tbody>
             <tr><th><code>/companion</code></th><td>Starts the daemon if needed, prints the dashboard URL and enables remote control for the current session.</td></tr>
-            <tr><th><code>/remote-control</code></th><td>Toggles sharing for the current session off or on.</td></tr>
+            <tr><th><code>/remote-control</code></th><td>Toggles sharing after the first /companion opt-in. Off ends this session in Companion and removes it from paired devices; Pi continues locally. Toggle again to resume sharing.</td></tr>
           </tbody>
         </table>
       </div>
@@ -99,10 +99,12 @@
       <span class="topic-icon"><Icon name="alert" /></span>
       <h2>Troubleshooting</h2>
       <dl>
+        <dt>Tunnel closed or workspace unreachable</dt><dd>Use Retry now in the connection notice. Check your internet, restart the tunnel on your computer, keep the workspace running, and open the new HTTPS device URL if it changed. Connection failures keep your pairing and unsent draft; messages and uploads are not automatically resent.</dd>
         <dt>Daemon not reachable</dt><dd>Run <code>/companion</code> in the Pi session. The admin service normally listens on port <code>43721</code>.</dd>
+        <dt>Invalid attachment</dt><dd>The composer shows file name, size, upload status and a preview when safe. Empty, oversized or disallowed files show an inline explanation. Upload policy comes from the daemon; remove failed attachments before sending. Removing a draft preview does not delete the shared upload.</dd>
         <dt>Custom daemon behavior</dt><dd>Check <code>PI_COMPANION_URL</code>, <code>PI_COMPANION_SERVER</code>, and <code>PI_COMPANION_AUTOSTART=0</code>.</dd>
         <dt>Restarting the daemon</dt><dd>On macOS or Linux, stop it with <code>pkill -f pi-companion-server</code>, then run <code>/companion</code> again.</dd>
-        <dt>Git errors</dt><dd>Git problems in the Changes panel appear as a toast; check the message and your repository state.</dd>
+        <dt>Git errors</dt><dd>Git problems in the Changes panel appear as a toast; check the message and your repository state. Each changed file has its own labeled section; use Filter changed files to narrow the list by path.</dd>
       </dl>
     </article>
     <article class="tile">

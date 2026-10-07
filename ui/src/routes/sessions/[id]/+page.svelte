@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { page } from '$app/state';
   import AskSheet from '#lib/AskSheet.svelte';
   import Icon from '#lib/Icon.svelte';
@@ -9,6 +9,9 @@
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
+  import type { TempFile } from '#lib/types.ts';
+  import { attachmentPrompt, canPreviewAttachment, validateAttachment } from '#lib/attachments.ts';
+  import { filterChangedFiles, splitChangedFiles } from '#lib/diff.ts';
 
   /** A tool entry's body is its arguments, then "\n→ " and the result once it finishes. */
   function toolParts(entry: ActivityEntry) {
@@ -119,7 +122,39 @@
   let staged = $state(false);
   let infoOpen = $state(false);
   let askOpen = $state(false);
-  let uploading = $state(0);
+  type DraftAttachment = { key: number; sessionId: string; file: File; preview: string; previewUnavailable?: boolean; status: 'uploading' | 'ready' | 'error'; error: string; uploaded?: TempFile };
+  let attachmentKey = 0;
+  let draftGeneration = 0;
+  let disposed = false;
+  let attachments = $state<DraftAttachment[]>([]);
+  const uploading = $derived(attachments.filter((attachment) => attachment.status === 'uploading').length);
+  const invalidAttachments = $derived(attachments.some((attachment) => attachment.status === 'error'));
+  let diffFilter = $state('');
+  const changedFiles = $derived(splitChangedFiles(diff?.text ?? ''));
+  const shownChangedFiles = $derived(filterChangedFiles(changedFiles, diffFilter));
+
+  function releasePreviews(items = attachments) {
+    for (const item of items) if (item.preview) URL.revokeObjectURL(item.preview);
+  }
+  onDestroy(() => { disposed = true; releasePreviews(); });
+
+  function updateAttachment(key: number, patch: Partial<DraftAttachment>) {
+    attachments = attachments.map((item) => item.key === key ? { ...item, ...patch } : item);
+  }
+
+  function markPreviewUnavailable(key: number) {
+    const item = attachments.find((attachment) => attachment.key === key);
+    if (!item?.preview) return;
+    URL.revokeObjectURL(item.preview);
+    updateAttachment(key, { preview: '', previewUnavailable: true });
+  }
+
+  function detachAttachment(key: number) {
+    const item = attachments.find((attachment) => attachment.key === key);
+    if (!item || item.status === 'uploading') return;
+    releasePreviews([item]);
+    attachments = attachments.filter((attachment) => attachment.key !== key);
+  }
   let dragging = $state(false);
   let follow = $state(true);
   let unseen = $state(0);
@@ -136,10 +171,24 @@
     prompt = '';
     mode = 'auto';
     steer = false;
+    releasePreviews();
+    attachments = [];
+    draftGeneration += 1;
+    diffFilter = '';
     infoOpen = false;
     follow = true;
     unseen = 0;
     if (session && !ended) void companion.refreshFiles(id).catch(() => {});
+  });
+
+  // A real end/unshare invalidates uploads; an ordinary outage preserves drafts.
+  $effect(() => {
+    if (!ended && (session || companion.connection !== 'online')) return;
+    if (!attachments.length) return;
+    releasePreviews();
+    attachments = [];
+    draftGeneration += 1;
+    toasts.show('Session ended or is no longer shared. Draft attachments were cleared; message text was kept.', 'info');
   });
 
   // Follow the newest activity unless the reader scrolled up.
@@ -224,8 +273,9 @@
   });
 
   function submit() {
-    const text = prompt.trim();
-    if (ended || (mode === 'auto' && !text)) return;
+    const uploaded = attachments.flatMap((attachment) => attachment.status === 'ready' && attachment.uploaded ? [attachment.uploaded] : []);
+    const text = attachmentPrompt(prompt, uploaded);
+    if (ended || uploading || invalidAttachments || (mode === 'auto' && !text)) return;
     const sent = mode === 'plan'
       ? companion.send(id, { type: 'plan', text })
       : companion.prompt(id, text, steer && session?.status === 'active');
@@ -235,6 +285,8 @@
     }
     if (mode === 'plan') toasts.show('Planning requested. Follow along in Activity.', 'success');
     prompt = '';
+    releasePreviews();
+    attachments = [];
     steer = false;
     follow = true;
     tab = 'activity';
@@ -264,26 +316,43 @@
 
   async function uploadFiles(list: FileList | File[] | null | undefined) {
     if (!list || ended) return;
-    for (const file of Array.from(list)) {
-      uploading += 1;
+    const targetSession = id;
+    const generation = draftGeneration;
+    const picker = fileInput;
+    const items: DraftAttachment[] = Array.from(list).map((file) => ({ key: ++attachmentKey, sessionId: targetSession, file, preview: '', status: 'uploading', error: '' }));
+    attachments = [...attachments, ...items];
+    let policyError = '';
+    try { await companion.refreshUploadPolicy(); }
+    catch (error) { policyError = errorMessage(error); }
+    for (const item of items) {
+      if (disposed || id !== targetSession || generation !== draftGeneration) continue;
+      const error = policyError || validateAttachment(item.file, companion.uploadPolicy) || (companion.connection !== 'online' ? companion.connectionError || 'Reconnect to your workspace before attaching files.' : '');
+      if (error) { updateAttachment(item.key, { status: 'error', error }); continue; }
       try {
-        await companion.upload(id, file);
-        toasts.show(file.name + ' is ready for Pi.', 'success');
+        if (canPreviewAttachment(item.file)) updateAttachment(item.key, { preview: URL.createObjectURL(item.file) });
+        if (canPreviewAttachment(item.file) && typeof createImageBitmap === 'function') {
+          try { const bitmap = await createImageBitmap(item.file); bitmap.close(); }
+          catch { throw new Error('This image could not be read. Choose a valid image file and try again.'); }
+        }
+        if (disposed || id !== targetSession || generation !== draftGeneration) continue;
+        const uploaded = await companion.upload(targetSession, item.file);
+        if (!disposed && id === targetSession && generation === draftGeneration) updateAttachment(item.key, { status: 'ready', uploaded });
       } catch (error) {
-        toasts.show(file.name + ': ' + errorMessage(error), 'error');
-      } finally {
-        uploading -= 1;
+        if (!disposed && id === targetSession && generation === draftGeneration) updateAttachment(item.key, { status: 'error', error: errorMessage(error) });
       }
     }
-    if (fileInput) fileInput.value = '';
+    if (picker && id === targetSession && generation === draftGeneration) picker.value = '';
   }
 
   async function remove(fileId: string, name: string) {
+    const targetSession = id;
     try {
-      await companion.removeFile(id, fileId);
+      await companion.removeFile(targetSession, fileId);
+      if (id !== targetSession || disposed) return;
+      for (const item of attachments.filter((attachment) => attachment.uploaded?.id === fileId)) detachAttachment(item.key);
       toasts.show(name + ' removed.');
     } catch (error) {
-      toasts.show(errorMessage(error), 'error');
+      if (id === targetSession && !disposed) toasts.show(errorMessage(error), 'error');
     }
   }
 
@@ -303,16 +372,7 @@
     user: '❯'
   };
 
-  const diffStats = $derived.by(() => {
-    if (!diff?.text) return { add: 0, del: 0, files: 0 };
-    let add = 0, del = 0, filesChanged = 0;
-    for (const line of diff.text.split('\n')) {
-      if (line.startsWith('diff --git')) filesChanged++;
-      else if (line.startsWith('+') && !line.startsWith('+++')) add++;
-      else if (line.startsWith('-') && !line.startsWith('---')) del++;
-    }
-    return { add, del, files: filesChanged };
-  });
+  const diffStats = $derived({ add: changedFiles.reduce((total, file) => total + file.additions, 0), del: changedFiles.reduce((total, file) => total + file.deletions, 0), files: changedFiles.length });
 
   function lineClass(line: string) {
     if (line.startsWith('diff --git')) return 'file';
@@ -330,8 +390,13 @@
   <div class="page">
     <div class="card empty">
       <span class="empty-icon"><Icon name="sessions" /></span>
-      <h2>Session not found</h2>
-      <p>It may have ended before the daemon restarted{companion.remote ? ', or your computer stopped sharing it' : ''}.</p>
+      {#if companion.connection !== 'online'}
+        <h2>Waiting for workspace connection</h2>
+        <p>We cannot confirm this session’s status until your workspace reconnects.</p>
+      {:else}
+        <h2>Session not found</h2>
+        <p>It may have ended before the daemon restarted{companion.remote ? ', or your computer stopped sharing it' : ''}.</p>
+      {/if}
       <a class="btn btn-sm" href="/sessions"><Icon name="back" size={16} />All sessions</a>
     </div>
   </div>
@@ -340,14 +405,12 @@
     <header class="head">
       <a class="btn btn-ghost btn-icon" href="/sessions" aria-label="All sessions"><Icon name="back" /></a>
       <h1 class="title">
-        <button aria-expanded={infoOpen} aria-controls="session-info" onclick={() => (infoOpen = !infoOpen)}>
+        <button aria-expanded={infoOpen} aria-controls="session-info" aria-label="Session information: {sessionTitle(session)}. Status: {statusLabel[session.status]}" title="Show session information" onclick={() => (infoOpen = !infoOpen)}>
+          <span class="dot {session.status} session-dot" aria-hidden="true"></span>
           <span>{sessionTitle(session)}</span>
           <Icon name="chevron" size={16} class="caret" />
         </button>
       </h1>
-      <span class="badge" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}>
-        <span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}
-      </span>
       {#if asks.length}
         <button class="badge count ask-count" onclick={() => (askOpen = true)} aria-label="{asks.length} {asks.length === 1 ? 'question' : 'questions'} waiting, open">
           {asks.length}
@@ -365,6 +428,7 @@
     </header>
 
     <div class="info chips" id="session-info" hidden={!infoOpen}>
+      <span class="chip"><span class="dot {session.status}" aria-hidden="true"></span><span>Status: {statusLabel[session.status]}</span></span>
       <span class="chip mono" title={session.cwd}><Icon name="folder" size={13} /><span>{prettyPath(session.cwd)}</span></span>
       {#if session.mainModel}<span class="chip"><Icon name="sparkle" size={13} /><span>{session.mainModel}</span></span>{/if}
       {#if session.effort}<span class="chip"><Icon name="brain" size={13} /><span>{session.effort}</span></span>{/if}
@@ -384,7 +448,7 @@
           <button type="button" class="btn btn-ghost btn-icon" aria-label="Close {tab === 'files' ? 'shared files' : 'changes'}" onclick={() => selectTab('activity')}><Icon name="close" size={16} /></button>
         </header>
       {/if}
-      <input bind:this={fileInput} id="file-input" hidden type="file" multiple disabled={ended} onchange={(e) => uploadFiles((e.currentTarget as HTMLInputElement).files)} />
+      <input bind:this={fileInput} id="file-input" hidden type="file" multiple accept={companion.uploadPolicy.allowedUploadTypes.join(',') || undefined} disabled={ended || companion.connection !== 'online'} onchange={(e) => uploadFiles((e.currentTarget as HTMLInputElement).files)} />
       <div class="body" id="panel" role="region" aria-label={tab === 'activity' ? 'Session activity' : tab === 'files' ? 'Shared files' : 'Changes'}>
         {#if tab === 'activity'}
           <div class="term">
@@ -493,8 +557,11 @@
               <span class="empty-icon"><Icon name="upload" /></span>
               <strong>{uploading ? 'Uploading…' : 'Share files with Pi'}</strong>
               <p class="muted">Private to this session and deleted when it ends.</p>
-              <button type="button" class="btn-bento primary pick" class:disabled={ended} disabled={ended || uploading > 0} onclick={() => fileInput?.click()}><Icon name="plus" size={18} />Choose files</button>
+              <button type="button" class="btn-bento primary pick" class:disabled={ended} disabled={ended || uploading > 0 || companion.connection !== 'online'} onclick={() => fileInput?.click()}><Icon name="plus" size={18} />Choose files</button>
             </div>
+            {#if invalidAttachments}
+              <ul class="upload-errors" aria-label="Attachment errors">{#each attachments.filter((attachment) => attachment.status === 'error') as attachment (attachment.key)}<li role="alert"><strong>{attachment.file.name}</strong>: {attachment.error}<button type="button" class="btn btn-sm" onclick={() => detachAttachment(attachment.key)}>Dismiss</button></li>{/each}</ul>
+            {/if}
 
             {#if files.length}
               <ul class="bento file-list">
@@ -526,15 +593,20 @@
               {/if}
               <button class="btn btn-ghost btn-icon refresh" aria-label="Refresh changes" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={16} /></button>
             </div>
+            <div class="diff-filter-bar"><label class="diff-filter"><Icon name="search" size={16} /><span class="sr-only">Filter changed files</span><input class="input" type="search" placeholder="Filter changed files…" bind:value={diffFilter} /></label><span class="diff-count" aria-live="polite">{shownChangedFiles.length} of {changedFiles.length} files</span></div>
             <div class="diff scroll">
               {#if !diff}
-                <p class="subtle none">{ended ? 'Changes are unavailable after the session ends.' : 'Loading changes…'}</p>
-              {:else if diff.error}
-                <p class="subtle none">Changes unavailable. {diff.error}</p>
-              {:else if !diff.text.trim()}
-                <p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
+                <p class="subtle none">{ended ? 'Changes are unavailable after the session ends.' : companion.connection !== 'online' ? 'Reconnect to your workspace to load changes.' : 'Loading changes…'}</p>
+              {:else if diff.error}<p class="subtle none">Changes unavailable. {diff.error}</p>
+              {:else if !diff.text.trim()}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
+              {:else if !shownChangedFiles.length}<div class="none"><p>No changed files match “{diffFilter}”.</p><button type="button" class="btn btn-sm" onclick={() => (diffFilter = '')}>Clear file filter</button></div>
               {:else}
-                <pre>{#each diff.text.split('\n') as line, index (index)}<span class={lineClass(line)}>{line || ' '}</span>{/each}</pre>
+                {#each shownChangedFiles as file (file.id)}
+                  <section class="diff-file" aria-label="Changes in {file.path}">
+                    <header class="diff-file-head"><div><h3><Icon name="file" size={16} /><code>{file.path}</code></h3>{#if file.oldPath && file.newPath && file.oldPath !== file.newPath}<p>Renamed from <code>{file.oldPath}</code></p>{/if}</div><div class="file-change-counts">{#if file.binary}<span class="chip">Binary file</span>{:else}<span class="chip plus">+{file.additions}</span><span class="chip minus">−{file.deletions}</span>{/if}</div></header>
+                    <pre class="scroll">{#each file.lines as line, index (index)}<span class={lineClass(line)}>{line || ' '}</span>{/each}</pre>
+                  </section>
+                {/each}
               {/if}
             </div>
           </div>
@@ -554,6 +626,17 @@
           {#if ended}
             <p class="ended"><span class="glyph">!</span>Session ended. History is read-only.</p>
           {:else}
+            {#if attachments.length}
+              <ul class="selected-attachments" aria-label="Files attached to this message">
+                {#each attachments as attachment (attachment.key)}
+                  <li class="attachment-card" class:invalid={attachment.status === 'error'}>
+                    {#if attachment.preview && attachment.status !== 'error'}<img class="attachment-preview" src={attachment.preview} alt="" onerror={() => markPreviewUnavailable(attachment.key)} />{:else}<span class="attachment-icon"><Icon name={attachment.status === 'error' ? 'alert' : 'file'} size={20} /></span>{/if}
+                    <div class="attachment-copy"><strong title={attachment.file.name}>{attachment.file.name}</strong><span>{formatBytes(attachment.file.size)} · {attachment.status === 'uploading' ? 'Uploading…' : attachment.status === 'ready' ? 'Ready' : 'Not attached'}</span>{#if attachment.error}<p class="attachment-error" role="alert">{attachment.error}</p>{/if}{#if attachment.previewUnavailable && attachment.status === 'ready'}<p class="attachment-preview-note">Preview unavailable. File is still attached.</p>{/if}</div>
+                    <button type="button" class="btn btn-ghost btn-icon attachment-remove" aria-label="Remove attachment: {attachment.file.name}" title="Remove from this message; uploaded files remain in Shared files" disabled={attachment.status === 'uploading'} onclick={() => detachAttachment(attachment.key)}><Icon name="close" size={14} /></button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             <div class="prompt-row">
               <label class="sr-only" for="prompt">{mode === 'plan' ? 'Plan request for Pi' : 'Message Pi'}</label>
               <textarea
@@ -578,13 +661,12 @@
                   Steer
                 </label>
               {/if}
-              <div class="composer-actions">
-                <button type="button" class="btn btn-ghost btn-icon attach" aria-label={uploading ? 'Uploading files' : 'Attach files'} title="Attach files" disabled={uploading > 0} onclick={() => fileInput?.click()}><Icon name="attach" size={18} /></button>
-                <button class="btn btn-primary send" aria-label={mode === 'plan' ? 'Send plan request' : steer && session.status === 'active' ? 'Steer current turn' : 'Send message'} disabled={mode === 'auto' && !prompt.trim()}>
-                  <Icon name="send" size={18} />
-                </button>
-              </div>
+              <div class="composer-actions"><button type="button" class="btn btn-ghost btn-icon attach" aria-label={uploading ? 'Uploading files' : 'Attach files'} title="Attach files" disabled={uploading > 0 || companion.connection !== 'online'} onclick={() => fileInput?.click()}><Icon name="attach" size={20} /></button></div>
             </div>
+            {#if uploading || invalidAttachments}<p class="composer-notice" role="status">{uploading ? 'Wait for attachments to finish uploading before sending.' : 'Fix or remove invalid attachments before sending.'}</p>{/if}
+            <button class="btn btn-primary send" aria-label={mode === 'plan' ? 'Send plan request' : steer && session.status === 'active' ? 'Steer current turn' : 'Send message'} disabled={companion.connection !== 'online' || uploading > 0 || invalidAttachments || (mode === 'auto' && !prompt.trim() && !attachments.some((attachment) => attachment.status === 'ready'))}>
+              <Icon name="send" size={18} /><span>{mode === 'plan' ? !prompt.trim() && !attachments.length ? 'Plan current conversation' : 'Send plan request' : steer && session.status === 'active' ? 'Steer current turn' : 'Send message'}</span>
+            </button>
           {/if}
         </form>
       {/if}
@@ -615,6 +697,8 @@
     min-width: 0;
   }
 
+  .head > .btn-icon { width: 48px; min-width: 48px; min-height: 48px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+
   .title {
     flex: 1;
     min-width: 0;
@@ -626,7 +710,7 @@
     align-items: center;
     gap: 6px;
     max-width: 100%;
-    min-height: 40px;
+    min-height: 48px;
     padding: 0 8px;
     border: 0;
     border-radius: 12px;
@@ -636,9 +720,10 @@
     text-align: left;
   }
 
-  .title button:hover {
-    background: var(--surface-2);
-  }
+  .title button:hover { background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .title .session-dot { flex: none; width: 10px; height: 10px; box-shadow: 0 0 0 4px var(--surface-2), var(--clay-soft); }
+  .info { border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--clay-pressed); }
+  .info:not([hidden]) { padding: 10px; }
 
   .title span {
     overflow: hidden;
@@ -680,7 +765,9 @@
   }
 
   .session-menu { position: relative; flex: none; }
-  .session-menu summary { list-style: none; cursor: pointer; min-width: 44px; min-height: 44px; }
+  .session-menu summary { display: grid; place-items: center; list-style: none; cursor: pointer; width: 48px; min-width: 48px; min-height: 48px; padding: 0; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .session-menu summary:hover { background: var(--surface-3); }
+  .session-menu[open] > summary, .session-menu summary:active { box-shadow: var(--clay-pressed); }
   .session-menu summary::-webkit-details-marker { display: none; }
   .session-menu > summary::before { display: none; }
   .menu-actions {
@@ -695,12 +782,13 @@
     border: 1px solid var(--border-strong);
     border-radius: 16px;
     background: var(--surface);
-    box-shadow: var(--shadow);
+    box-shadow: var(--clay-raised);
   }
   .menu-actions > button { justify-content: flex-start; min-height: 44px; }
   .menu-actions p { margin: 2px 10px 6px; color: var(--text-3); font-size: 0.75rem; }
   .accessory-head { display: flex; align-items: center; gap: 10px; min-height: 44px; }
   .accessory-head h2 { flex: 1; margin: 0; font-size: 0.95rem; }
+  .accessory-head > button { border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); box-shadow: var(--clay-soft); }
 
   .body {
     position: relative;
@@ -1283,6 +1371,7 @@
     display: flex;
     align-items: center;
     gap: 10px;
+    flex-wrap: wrap;
     padding: 10px 12px;
     border-bottom: 1px solid var(--border);
   }
@@ -1305,16 +1394,22 @@
     background: var(--code-bg);
   }
 
-  .diff pre {
-    margin: 0;
-    padding: 12px 0;
-    width: max-content;
-    min-width: 100%;
-    font-size: 0.8rem;
-    line-height: 1.55;
-  }
+  .diff-filter-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
+  .diff-filter { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+  .diff-filter input { width: 100%; min-width: 0; min-height: 44px; }
+  .diff-count { flex: none; color: var(--text-3); font-size: 0.75rem; }
+  .diff-file { margin: 12px; min-width: 0; overflow: hidden; border: 1px solid var(--border-strong); border-top: 3px solid var(--accent-line); border-radius: 16px; background: var(--surface); box-shadow: var(--clay-soft); }
+  .diff-file + .diff-file { margin-top: 20px; }
+  .diff-file-head { display: flex; align-items: center; gap: 12px; padding: 12px; border-bottom: 2px solid var(--border-strong); background: var(--surface-2); box-shadow: var(--clay-pressed); }
+  .diff-file-head > div:first-child { flex: 1; min-width: 0; }
+  .diff-file-head h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 0.85rem; }
+  .diff-file-head h3 :global(svg) { flex: none; color: var(--accent-text); }
+  .diff-file-head code { overflow-wrap: anywhere; white-space: normal; }
+  .diff-file-head p { margin: 4px 0 0; color: var(--text-3); font-size: 0.75rem; }
+  .file-change-counts { display: flex; gap: 6px; flex: none; }
+  .diff pre { margin: 0; padding: 10px 0; max-width: 100%; overflow-x: auto; font-size: 0.8rem; line-height: 1.55; }
 
-  .diff span {
+  .diff pre > span {
     display: block;
     padding: 0 20px;
     white-space: pre;
@@ -1344,9 +1439,10 @@
 
   .composer {
     flex: none;
+    min-width: 0;
     display: grid;
-    gap: 2px;
-    padding: 6px;
+    gap: 6px;
+    padding: 8px;
     border: 1px solid var(--term-line);
     border-radius: 18px;
     background: var(--surface);
@@ -1391,7 +1487,23 @@
   .mode-switch { padding: 2px; border-radius: 12px; }
   .mode-switch button { display: flex; align-items: center; gap: 4px; min-width: 44px; min-height: 44px; padding: 0 10px; font-size: 0.8rem; }
   .composer-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-  .attach, .send { flex: none; width: 44px; min-width: 44px; min-height: 44px; padding: 0; border-radius: 12px; }
+  .attach { flex: none; width: 48px; min-width: 48px; min-height: 48px; padding: 0; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .send { width: 100%; min-height: 48px; gap: 8px; padding: 0 16px; border-radius: 14px; font-weight: 700; }
+  .selected-attachments { display: flex; gap: 8px; min-width: 0; max-height: 144px; margin: 0; padding: 4px 2px; overflow: auto; list-style: none; }
+  .attachment-card { display: flex; align-items: flex-start; gap: 8px; flex: 0 0 230px; min-width: 0; padding: 8px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .attachment-card.invalid { border-color: var(--danger); background: var(--danger-soft); }
+  .attachment-preview, .attachment-icon { flex: none; width: 42px; height: 42px; border-radius: 10px; object-fit: cover; background: var(--surface); }
+  .attachment-icon { display: grid; place-items: center; color: var(--accent-text); }
+  .attachment-copy { flex: 1; min-width: 0; display: grid; gap: 3px; }
+  .attachment-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.78rem; }
+  .attachment-copy > span { color: var(--text-3); font-size: 0.7rem; }
+  .attachment-error { margin: 0; color: var(--danger); font-size: 0.75rem; overflow-wrap: anywhere; }
+  .attachment-preview-note { margin: 0; color: var(--text-2); font-size: 0.75rem; }
+  .attachment-remove { flex: none; min-width: 44px; min-height: 44px; width: 44px; padding: 0; border-radius: 12px; background: var(--surface); box-shadow: var(--clay-soft); }
+  .composer-notice { margin: 0; padding: 0 6px; color: var(--text-2); font-size: 0.75rem; }
+  .upload-errors { margin: 0; padding: 10px; list-style: none; border: 1px solid var(--danger); border-radius: 14px; color: var(--danger); background: var(--danger-soft); font-size: 0.8rem; }
+  .upload-errors li { overflow-wrap: anywhere; }
+  .upload-errors button { margin-left: 8px; }
   .toggle { display: inline-flex; align-items: center; gap: 5px; min-height: 44px; color: var(--text-2); font-size: 0.8rem; cursor: pointer; white-space: nowrap; }
   .toggle input { position: absolute; opacity: 0; width: 1px; height: 1px; }
   .track { position: relative; width: 30px; height: 18px; border-radius: 999px; background: var(--surface-3); box-shadow: var(--clay-pressed); }
@@ -1405,7 +1517,7 @@
     .detail { padding: 4px 8px 8px; gap: 4px; }
     .title { font-size: 0.98rem; }
     .title button { padding: 0 2px; }
-    .head { gap: 2px; }
+    .head { gap: 8px; }
     .panel { gap: 6px; }
     .body { border-radius: 16px; box-shadow: var(--clay-soft); }
     .feed { padding: 12px; font-size: 0.8rem; }

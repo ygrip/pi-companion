@@ -66,3 +66,21 @@ async fn connected_stopped_and_reconnected_sessions_cannot_be_archived() {
     assert_eq!(delete_session(&state, "session", false).await.unwrap_err().0, StatusCode::CONFLICT);
     replacement.close(None).await.unwrap();
 }
+
+#[tokio::test]
+async fn retired_bridge_cannot_stop_or_hide_its_replacement() {
+    let state = test_state();
+    let addr = serve(local_router(state.clone())).await;
+    let mut old = bridge(addr, "session", true).await;
+    let mut replacement = bridge(addr, "session", true).await;
+    send_json(&mut old, json!({"type":"session.update","session":{"remoteEnabled":false,"status":"stopped"}})).await;
+    // The retired channel is dropped once its stale update has been processed.
+    assert!(tokio::time::timeout(Duration::from_secs(2), old.next()).await.is_ok());
+    let sessions = state.sessions.read().await;
+    assert_eq!(sessions["session"].snapshot["remoteEnabled"], true);
+    assert_eq!(sessions["session"].snapshot["status"], "idle");
+    assert!(sessions["session"].command_tx.is_some());
+    drop(sessions);
+    assert_eq!(delete_session(&state, "session", false).await.unwrap_err().0, StatusCode::CONFLICT);
+    replacement.close(None).await.unwrap();
+}

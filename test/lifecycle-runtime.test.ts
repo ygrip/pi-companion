@@ -5,11 +5,16 @@ import ts from 'typescript';
 
 // Execute the real extension and bridge with an in-memory transport and daemon spy.
 const dataModule = (source: string) => 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
-const state = { probes: 0, sockets: [] as any[] };
+const state = { probes: 0, sockets: [] as any[], deferProbe: false, resolveProbe: undefined as (() => void) | undefined };
 (globalThis as any).__companionLifecycleTest = state;
 const daemon = dataModule(`
   export function adminHttpUrl() { return 'http://localhost:43721'; }
-  export async function ensureDaemon() { globalThis.__companionLifecycleTest.probes++; return true; }
+  export async function ensureDaemon() {
+    const state = globalThis.__companionLifecycleTest;
+    state.probes++;
+    if (state.deferProbe) return new Promise(resolve => { state.resolveProbe = () => resolve(true); });
+    return true;
+  }
 `);
 const socket = dataModule(`
   import { EventEmitter } from 'node:events';
@@ -44,6 +49,7 @@ test('real extension remains inert until /companion and resets activation on ses
   const commands: Record<string, any> = {};
   const tools: Record<string, any> = {};
   const notices: string[] = [];
+  let prompts = 0;
   const ctx = {
     cwd: '/project/demo', hasUI: true, isIdle: () => true,
     ui: {
@@ -55,6 +61,7 @@ test('real extension remains inert until /companion and resets activation on ses
   const originalSelect = ctx.ui.select;
   install({
     getSessionName: () => 'Workspace polish',
+    sendUserMessage: async () => { prompts++; },
     on: (name: string, fn: any) => { events[name] = fn; },
     registerCommand: (name: string, command: any) => { commands[name] = command; },
     registerTool: (tool: any) => { tools[tool.name] = tool; }
@@ -85,14 +92,46 @@ test('real extension remains inert until /companion and resets activation on ses
   assert.equal(state.sockets.length, 1, 'repeated activation does not duplicate sockets');
 
   const probes = state.probes;
+  await commands['remote-control'].handler('', ctx);
+  assert.deepEqual(live.frames.at(-1).session, { remoteEnabled: false, status: 'stopped' });
+  assert.equal(live.readyState, 3, 'remote off closes the daemon channel so local UI ends the session too');
+  assert.equal(ctx.ui.select, originalSelect, 'remote off restores local dialogs');
+  live.emit('message', JSON.stringify({ type: 'command', command: { type: 'prompt', text: 'stale control' } }));
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(prompts, 0, 'retired transport cannot execute queued controls');
+  assert.equal(state.probes, probes);
+  assert.equal(state.sockets.length, 1, 'disabled sharing never reconnects itself');
+  await commands['remote-control'].handler('', ctx);
+  await nextTurn();
+  const resumed = state.sockets[1];
+  resumed.readyState = 1;
+  resumed.emit('open');
+  assert.equal(resumed.frames[0].session.remoteEnabled, true);
+  assert.equal(resumed.frames[0].session.status, 'idle');
+  assert.notEqual(ctx.ui.select, originalSelect);
+  live.emit('close');
+  assert.equal(state.sockets.length, 2, 'stale close cannot replace the resumed channel');
+  await commands.companion.handler('off', ctx);
+  assert.equal(resumed.readyState, 3, '/companion off has the same end-sharing semantics');
   events.session_start({}, ctx);
   assert.equal(ctx.ui.select, originalSelect, 'switch restores terminal dialogs');
   await commands['remote-control'].handler('', ctx);
   events.agent_start({}, ctx);
   await nextTurn();
   assert.equal(state.probes, probes, 'new session does not inherit daemon opt-in');
-  assert.equal(state.sockets.length, 1);
+  assert.equal(state.sockets.length, 2);
   assert.equal(live.readyState, 3);
+  state.deferProbe = true;
+  const pendingEnable = commands.companion.handler('', ctx);
+  await nextTurn();
+  assert.ok(state.resolveProbe);
+  await commands.companion.handler('off', ctx);
+  state.deferProbe = false;
+  state.resolveProbe();
+  await pendingEnable;
+  await nextTurn();
+  assert.equal(state.sockets.length, 2, 'a late daemon probe cannot undo a newer sharing-off command');
+  assert.equal(ctx.ui.select, originalSelect);
   events.session_shutdown({}, ctx);
   delete (globalThis as any).__companionLifecycleTest;
 });

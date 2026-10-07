@@ -53,9 +53,13 @@
   <div class="sheet-body scroll">
     <div class="status-row">
       <span class="dot {companion.connection}" aria-hidden="true"></span>
-      <strong>{({ connecting: 'Connecting…', online: 'Live', offline: 'Reconnecting…', disconnected: 'Disconnected', revoked: 'Access removed' })[companion.connection]}</strong>
+      <strong>{({ connecting: 'Connecting…', online: 'Live', offline: 'Workspace unavailable', disconnected: 'Disconnected', revoked: 'Access removed' })[companion.connection]}</strong>
       <span class="badge">{companion.version ? `v${companion.version}` : 'Version unavailable'}</span>
     </div>
+    {#if companion.connectionError}
+      <p class="error" role="alert">{companion.connectionError}</p>
+      <button class="btn btn-sm" disabled={companion.connection === 'connecting'} onclick={() => companion.reconnect()}>Retry connection</button>
+    {/if}
     {#if companion.isAdmin}
       {#if loading}<p class="muted">Loading daemon details…</p>
       {:else if loadError}<p class="error" role="alert">Could not load daemon details: {loadError}</p>

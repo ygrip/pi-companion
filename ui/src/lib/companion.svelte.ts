@@ -1,6 +1,8 @@
 import { pushUser, reduceBridgeMessage, type ActivityEntry } from './activity.ts';
 import { sortSessions } from './format.ts';
 import { toasts } from './toast.svelte.ts';
+import { ApiError, WorkspaceConnectionError, unreachableMessage, workspaceRequest } from './workspace-connection.ts';
+export { ApiError } from './workspace-connection.ts';
 import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
 
 /**
@@ -18,20 +20,14 @@ const TOKEN_KEY = 'piCompanionDeviceToken';
 const CLOSE_DISCONNECTED = 4001;
 const CLOSE_REVOKED = 4003;
 
-export class ApiError extends Error {
-  constructor(
-    readonly status: number,
-    message: string
-  ) {
-    super(message);
-  }
-}
-
 type Diff = { staged: boolean; text: string; at: number; error?: string };
+type UploadPolicy = { maxUploadMb: number; allowedUploadTypes: string[] };
 
 class Companion {
   booted = $state(false);
   bootError = $state('');
+  connectionError = $state('');
+  uploadPolicy = $state<UploadPolicy>({ maxUploadMb: 25, allowedUploadTypes: [] });
   remote = $state(false);
   version = $state('');
   token = $state<string | null>(null);
@@ -48,6 +44,8 @@ class Companion {
   private retryMs = 1000;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
   private devicesTimer: ReturnType<typeof setTimeout> | undefined;
+  private socketTimer: ReturnType<typeof setTimeout> | undefined;
+  private booting = false;
 
   get isAdmin() {
     return !this.remote;
@@ -75,38 +73,73 @@ class Companion {
   }
 
   async boot() {
-    if (this.booted) return;
+    if (this.booting || (this.booted && !this.bootError)) return;
+    this.booting = true;
+    this.connection = 'connecting';
+    clearTimeout(this.retryTimer);
     try {
-      const response = await fetch('/api/context', { cache: 'no-store' });
-      const context = await response.json();
-      this.remote = Boolean(context.remote);
-      this.version = String(context.version ?? '');
+      const context = await workspaceRequest<{ remote: boolean; version: string; uploadPolicy?: UploadPolicy }>('/api/context');
+      if (!context || typeof context.remote !== 'boolean' || typeof context.version !== 'string') {
+        throw new WorkspaceConnectionError('This address is not responding as a Pi Companion workspace. Check the current tunnel URL.');
+      }
+      this.setUploadPolicy(context.uploadPolicy);
+      this.remote = context.remote;
+      this.version = context.version;
       this.token = this.remote ? localStorage.getItem(TOKEN_KEY) : null;
-    } catch {
-      this.bootError = 'Pi Companion is not responding. Is the daemon running?';
-      this.connection = 'offline';
+      this.bootError = '';
+      this.connectionError = '';
       this.booted = true;
-      setTimeout(() => {
-        this.booted = false;
-        this.bootError = '';
-        void this.boot();
-      }, 3000);
+    } catch (error) {
+      this.bootError = error instanceof Error ? error.message : unreachableMessage();
+      this.unavailable(this.bootError);
+      this.booted = true;
       return;
+    } finally {
+      this.booting = false;
     }
-    this.booted = true;
     if (!this.paired) return;
-    await this.refresh().catch(() => {});
-    this.connect();
+    try {
+      await this.refresh();
+      if (this.paired) this.connect();
+    } catch { /* request() exposes connection errors and schedules recovery */ }
   }
 
-  async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private scheduleRetry() {
+    clearTimeout(this.retryTimer);
+    if (!navigator.onLine || this.connection === 'disconnected' || this.connection === 'revoked') return;
+    this.retryTimer = setTimeout(() => {
+      if (this.bootError) void this.boot();
+      else if (this.paired) this.connect();
+    }, this.retryMs);
+    this.retryMs = Math.min(this.retryMs * 2, 15_000);
+  }
+
+  private unavailable(message: string) {
+    if (this.connection === 'disconnected' || this.connection === 'revoked') return;
+    this.connectionError = message;
+    this.connection = 'offline';
+    this.scheduleRetry();
+  }
+
+  networkOffline() {
+    if (this.connection === 'disconnected' || this.connection === 'revoked') return;
+    this.unavailable(unreachableMessage(false));
+    this.ws?.close();
+  }
+
+  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
     const headers = new Headers(init.headers);
     if (this.remote && this.token) headers.set('authorization', 'Bearer ' + this.token);
-    const response = await fetch(path, { ...init, headers, cache: 'no-store' });
-    if (response.status === 401 && this.remote) this.forget();
-    if (!response.ok) throw new ApiError(response.status, (await response.text()) || response.statusText);
-    if (response.status === 204) return undefined as T;
-    return (await response.json()) as T;
+    try {
+      return await workspaceRequest<T>(path, { ...init, headers }, timeoutMs);
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401 && this.remote && path !== '/api/pairing/claim') this.forget();
+      else if (error instanceof WorkspaceConnectionError) this.unavailable(error.message);
+      else if (error instanceof ApiError && error.status === 403 && path === '/api/sessions') {
+        this.unavailable('The workspace denied this connection (HTTP 403). Open the current device URL and check the daemon’s allowed origins and device permissions.');
+      }
+      throw error;
+    }
   }
 
   async refresh() {
@@ -115,12 +148,22 @@ class Companion {
 
   async refreshSessions() {
     const result = await this.request<{ sessions: Session[] }>('/api/sessions');
+    if (!result || !Array.isArray(result.sessions)) {
+      const error = new WorkspaceConnectionError('The workspace returned an invalid session list. Check the tunnel URL and retry.');
+      this.unavailable(error.message);
+      throw error;
+    }
     this.sessions = sortSessions(result.sessions);
   }
 
   async refreshDevices() {
     if (!this.isAdmin) return;
     const result = await this.request<{ devices: PairedDevice[] }>('/api/devices');
+    if (!result || !Array.isArray(result.devices)) {
+      const error = new WorkspaceConnectionError('The workspace returned an invalid device list. Check the tunnel URL and retry.');
+      this.unavailable(error.message);
+      throw error;
+    }
     this.devices = result.devices;
   }
 
@@ -142,52 +185,94 @@ class Companion {
     this.dropSession(sessionId);
   }
 
+  private setUploadPolicy(policy?: UploadPolicy) {
+    if (!policy || !Number.isFinite(policy.maxUploadMb) || policy.maxUploadMb < 1 || policy.maxUploadMb > 100 || !Array.isArray(policy.allowedUploadTypes) || !policy.allowedUploadTypes.every((type) => typeof type === 'string')) return;
+    this.uploadPolicy = { maxUploadMb: policy.maxUploadMb, allowedUploadTypes: [...policy.allowedUploadTypes] };
+  }
+
+  async refreshUploadPolicy() {
+    const context = await this.request<{ uploadPolicy?: UploadPolicy }>('/api/context');
+    this.setUploadPolicy(context.uploadPolicy);
+    return this.uploadPolicy;
+  }
+
   async refreshFiles(sessionId: string) {
     const result = await this.request<{ files: TempFile[] }>(
       '/api/sessions/' + encodeURIComponent(sessionId) + '/files'
     );
+    if (!result || !Array.isArray(result.files)) {
+      const error = new WorkspaceConnectionError('The workspace returned an invalid file list. Check the tunnel URL and retry.');
+      this.unavailable(error.message);
+      throw error;
+    }
     this.files = { ...this.files, [sessionId]: result.files };
   }
 
   connect() {
     clearTimeout(this.retryTimer);
+    clearTimeout(this.socketTimer);
     if (!this.paired) return;
-    const url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/browser';
-    const ws = this.remote ? new WebSocket(url, ['pi-companion', 'token.' + this.token]) : new WebSocket(url);
-    this.ws = ws;
+    if (!navigator.onLine) return this.networkOffline();
+    // Invalidate the previous socket before closing it; late events cannot reset recovery.
+    const previous = this.ws;
+    this.ws = null;
+    previous?.close();
     this.connection = 'connecting';
+    const url = (location.protocol === 'https:' ? 'wss:' : 'ws:') + '//' + location.host + '/ws/browser';
+    let ws: WebSocket;
+    try {
+      ws = this.remote ? new WebSocket(url, ['pi-companion', 'token.' + this.token]) : new WebSocket(url);
+    } catch {
+      this.unavailable('Could not open the live workspace connection. Check that the tunnel allows WebSocket connections.');
+      return;
+    }
+    this.ws = ws;
+    this.socketTimer = setTimeout(() => {
+      if (this.ws !== ws) return;
+      this.unavailable('The live workspace connection timed out. Check that the tunnel is running and supports WebSocket connections.');
+      ws.close();
+    }, 10_000);
 
     ws.onopen = () => {
-      this.connection = 'online';
-      this.retryMs = 1000;
-      void this.refresh().catch(() => {});
+      if (this.ws !== ws) return;
+      clearTimeout(this.socketTimer);
+      void this.refresh().then(() => {
+        if (this.ws !== ws) return;
+        this.connection = 'online';
+        this.connectionError = '';
+        this.retryMs = 1000;
+        clearTimeout(this.retryTimer);
+      }).catch(() => {});
     };
     ws.onmessage = (event) => {
+      if (this.ws !== ws) return;
       try {
         this.handle(JSON.parse(event.data));
-      } catch {
-        /* ignore malformed frames */
-      }
+      } catch { /* ignore malformed frames */ }
     };
     ws.onclose = (event) => {
       if (this.ws !== ws) return;
+      clearTimeout(this.socketTimer);
       this.ws = null;
       if (event.code === CLOSE_REVOKED) return this.forget();
       if (event.code === CLOSE_DISCONNECTED) {
+        clearTimeout(this.retryTimer);
+        this.connectionError = '';
         this.connection = 'disconnected';
         return;
       }
-      this.connection = 'offline';
-      // An upgrade rejected with 401 looks like a plain close; confirm over HTTP.
-      if (this.remote) void this.request('/api/sessions').catch(() => {});
-      this.retryTimer = setTimeout(() => this.connect(), this.retryMs);
-      this.retryMs = Math.min(this.retryMs * 2, 15_000);
+      this.unavailable(this.connectionError || (navigator.onLine
+        ? 'Live updates disconnected. The tunnel may be closed, or your workspace may be unavailable. Retrying automatically.'
+        : unreachableMessage(false)));
+      // Browsers hide WebSocket upgrade status. Probe HTTP for a gateway error or revoked token.
+      void this.request('/api/sessions').catch(() => {});
     };
   }
 
   reconnect() {
     this.retryMs = 1000;
-    this.connect();
+    if (this.bootError || !this.booted) void this.boot();
+    else this.connect();
   }
 
   /** Drop this device's credential (revoked or explicitly unpaired). */
@@ -196,7 +281,9 @@ class Companion {
     localStorage.removeItem(TOKEN_KEY);
     this.token = null;
     this.connection = 'revoked';
+    this.connectionError = '';
     clearTimeout(this.retryTimer);
+    clearTimeout(this.socketTimer);
     const ws = this.ws;
     this.ws = null;
     ws?.close();
@@ -261,9 +348,14 @@ class Companion {
   }
 
   send(sessionId: string, command: Record<string, unknown>) {
-    if (this.ws?.readyState !== WebSocket.OPEN) return false;
-    this.ws.send(JSON.stringify({ sessionId, command }));
-    return true;
+    if (this.connection !== 'online' || this.ws?.readyState !== WebSocket.OPEN) return false;
+    try {
+      this.ws.send(JSON.stringify({ sessionId, command }));
+      return true;
+    } catch {
+      this.unavailable('Your message could not be sent because the live workspace connection was lost. Reconnect before trying again.');
+      return false;
+    }
   }
 
   prompt(sessionId: string, text: string, steer: boolean) {
@@ -296,8 +388,14 @@ class Companion {
   async upload(sessionId: string, file: File) {
     const data = new FormData();
     data.append('file', file);
-    await this.request('/api/sessions/' + encodeURIComponent(sessionId) + '/files', { method: 'POST', body: data });
-    await this.refreshFiles(sessionId);
+    const uploaded = await this.request<TempFile>('/api/sessions/' + encodeURIComponent(sessionId) + '/files', { method: 'POST', body: data }, 60_000);
+    if (!uploaded || typeof uploaded.id !== 'string' || typeof uploaded.name !== 'string' || typeof uploaded.path !== 'string' || typeof uploaded.size !== 'number') {
+      throw new Error('The workspace could not confirm this upload. Check Shared files before uploading again.');
+    }
+    // A successful upload must not become a failed/duplicate upload if the follow-up list refresh fails.
+    this.files = { ...this.files, [sessionId]: [...(this.files[sessionId] ?? []).filter((file) => file.id !== uploaded.id), uploaded] };
+    void this.refreshFiles(sessionId).catch(() => {});
+    return uploaded;
   }
 
   async removeFile(sessionId: string, fileId: string) {
@@ -313,13 +411,12 @@ class Companion {
   }
 
   async claim(source: { invite: string } | { code: string }, deviceName: string) {
-    const response = await fetch('/api/pairing/claim', {
+    const result = await this.request<{ token: string }>('/api/pairing/claim', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...source, deviceName })
     });
-    if (!response.ok) throw new ApiError(response.status, (await response.text()) || response.statusText);
-    const result = (await response.json()) as { token: string };
+
     localStorage.setItem(TOKEN_KEY, result.token);
     this.token = result.token;
     await this.refresh().catch(() => {});

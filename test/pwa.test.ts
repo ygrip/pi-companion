@@ -6,7 +6,7 @@ import { runInNewContext } from 'node:vm';
 const staticDir = new URL('../ui/static/', import.meta.url);
 const worker = readFileSync(new URL('service-worker.js', staticDir), 'utf8');
 
-function harness(online = true) {
+function harness(online = true, status = 200) {
   const handlers: Record<string, (event: any) => void> = {};
   const writes: string[] = [];
   const removed: string[] = [];
@@ -30,7 +30,7 @@ function harness(online = true) {
     },
     fetch: async () => {
       if (!online) throw new Error('offline');
-      return new Response('network');
+      return new Response('network', { status });
     },
     URL, Response
   });
@@ -76,6 +76,16 @@ test('worker never intercepts authenticated API, websocket, external or mutation
     });
     assert.equal(intercepted, false, `${method} ${path}`);
   }
+});
+
+test('gateway navigation falls back to the public shell instead of replacing the app with proxy HTML', async () => {
+  const { handlers } = harness(true, 530);
+  let response: Promise<Response>;
+  handlers.fetch({
+    request: { url: 'https://companion.example/sessions/private', method: 'GET', mode: 'navigate' },
+    respondWith: (p: Promise<Response>) => { response = p; }
+  });
+  assert.equal(await (await response!).text(), '<html>public shell</html>');
 });
 
 test('offline navigation falls back to public shell without caching session HTML', async () => {

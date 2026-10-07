@@ -69,9 +69,11 @@ function resultText(result: unknown) {
 
 export default function companionExtension(pi: ExtensionAPI) {
   let bridge = new CompanionBridge(pi);
+  let sharingGeneration = 0;
 
   pi.on("session_start", (_event, ctx) => {
     // Switching or starting a Pi session must not inherit the previous opt-in.
+    sharingGeneration += 1;
     bridge.close();
     bridge = new CompanionBridge(pi);
     bridge.setContext(ctx);
@@ -120,6 +122,7 @@ export default function companionExtension(pi: ExtensionAPI) {
     });
   });
   pi.on("session_shutdown", event => {
+    sharingGeneration += 1;
     bridge.updateStatus("stopped");
     bridge.emit("session.shutdown", event);
     bridge.close();
@@ -204,19 +207,20 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.registerCommand("companion", {
     description: "Enable Pi Companion for this session and show the dashboard address (`/companion off` to stop sharing)",
     handler: async (args, ctx) => {
+      const generation = ++sharingGeneration;
       bridge.setContext(ctx);
       if (args.trim().toLowerCase() === "off") {
         bridge.setRemoteEnabled(false);
-        ctx.ui.notify("Pi Companion: this session is no longer shared with paired devices.", "info");
+        ctx.ui.notify("Pi Companion sharing ended for this session. Pi continues locally.", "info");
         return;
       }
       const currentBridge = bridge;
       const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
+      if (bridge !== currentBridge || generation !== sharingGeneration) return;
       if (!up) {
         ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
         return;
       }
-      if (bridge !== currentBridge) return;
       bridge.activate();
       void bridge.connect();
       const enabled = true;
@@ -224,7 +228,7 @@ export default function companionExtension(pi: ExtensionAPI) {
       ctx.ui.notify(
         enabled
           ? "Pi Companion enabled for this session: " + adminHttpUrl() + " (paired devices can now see it)"
-          : "Pi Companion: this session is no longer shared with paired devices.",
+          : "Pi Companion sharing ended for this session. Pi continues locally.",
         "info"
       );
     }
@@ -233,6 +237,7 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.registerCommand("remote-control", {
     description: "Toggle remote control for this Pi session",
     handler: async (_args, ctx) => {
+      sharingGeneration += 1;
       if (!bridge.isActivated()) {
         ctx.ui.notify("Run /companion first to enable this session's daemon connection.", "warning");
         return;
@@ -242,7 +247,7 @@ export default function companionExtension(pi: ExtensionAPI) {
       ctx.ui.notify(
         enabled
           ? "Remote control enabled for this session. Pair a device from Pi Companion."
-          : "Remote control disabled for this session.",
+          : "Remote control disabled; this Companion session has ended. Pi continues locally.",
         enabled ? "info" : "warning"
       );
     }
