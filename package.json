@@ -1,10 +1,36 @@
 {
   "name": "@ygrip/pi-companion",
   "version": "0.1.0",
-  "description": "Local-first remote control companion for Pi sessions",
+  "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-extension",
+    "pi-coding-agent",
+    "remote-control",
+    "companion",
+    "dashboard",
+    "mobile"
+  ],
+  "homepage": "https://github.com/ygrip/pi-companion#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ygrip/pi-companion.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ygrip/pi-companion/issues"
+  },
+  "author": "ygrip <yunaz.gilang@gmail.com>",
   "type": "module",
   "main": "src/index.ts",
-  "files": ["src", "README.md", "SECURITY.md"],
+  "files": [
+    "src",
+    "README.md",
+    "SECURITY.md"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "check": "tsc --noEmit",
     "ui:dev": "cd ui && vite dev",
@@ -12,11 +38,18 @@
     "server:dev": "npm run ui:build && cargo run --manifest-path server/Cargo.toml",
     "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml"
   },
-  "pi": { "extensions": ["./src/index.ts"] },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ],
+    "image": "https://raw.githubusercontent.com/ygrip/pi-companion/main/docs/dashboard.png"
+  },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "*",
-    "typebox": "^1.0.13",
     "ws": "^8.18.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.8",
@@ -26,6 +59,8 @@
     "@types/ws": "^8.18.1",
     "svelte": "^5.43.0",
     "typescript": "^5.9.3",
-    "vite": "^7.1.12"
+    "vite": "^7.1.12",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "^1.0.13"
   }
 }
