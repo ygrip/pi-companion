@@ -8,6 +8,7 @@
   import ConnectionNotice from '#lib/ConnectionNotice.svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
+  import { devicePermissions } from '#lib/device-permissions.svelte.ts';
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
   import { toasts } from '#lib/toast.svelte.ts';
 
@@ -18,7 +19,7 @@
     { href: '/', label: 'Overview', icon: 'home' },
     { href: '/sessions', label: 'Sessions', icon: 'sessions' },
     { href: '/devices', label: 'Devices', icon: 'devices', admin: true },
-    { href: '/settings', label: 'Settings', icon: 'settings', admin: true }
+    { href: '/settings', label: 'Settings', icon: 'settings' }
   ];
   const visibleNav = $derived(nav.filter((item) => !item.admin || companion.isAdmin));
   const path = $derived(page.url.pathname);
@@ -63,12 +64,31 @@
   $effect(() => {
     if (!companion.booted) return;
     if (bare && path !== '/pair' && path !== '/privacy' && path !== '/terms') void goto('/pair', { replaceState: true });
-    else if (companion.remote && (path.startsWith('/devices') || path.startsWith('/settings'))) void goto('/', { replaceState: true });
+    else if (companion.remote && path.startsWith('/devices')) void goto('/', { replaceState: true });
   });
+
+  let notificationPromptDismissed = $state(true);
+  const showNotificationPrompt = $derived(
+    companion.booted && companion.paired && !notificationPromptDismissed && devicePermissions.notifications === 'prompt'
+  );
+
+  function dismissNotificationPrompt() {
+    notificationPromptDismissed = true;
+    try { localStorage.setItem('pi-companion-notification-prompt', 'dismissed'); } catch { /* storage blocked */ }
+  }
+
+  async function enableNotifications() {
+    // Must stay inside the click handler: browsers only prompt from a user gesture.
+    await devicePermissions.requestNotifications();
+    dismissNotificationPrompt();
+  }
 
   onMount(() => {
     insecureContext = !window.isSecureContext;
     theme.init();
+    devicePermissions.init();
+    companion.onSessionChange = (previous, next) => devicePermissions.sessionChanged(previous, next);
+    try { notificationPromptDismissed = localStorage.getItem('pi-companion-notification-prompt') === 'dismissed'; } catch { /* storage blocked */ }
     const stopConnectivity = companion.watchConnectivity();
     void companion.boot();
 
@@ -185,6 +205,14 @@
         </div>
       {/if}
       <ConnectionNotice />
+      {#if showNotificationPrompt}
+        <div class="banner" role="region" aria-label="Notifications">
+          <Icon name="bell" />
+          <span>Turn on notifications to hear when Pi asks a question or finishes a task.</span>
+          <button class="btn btn-sm btn-primary" onclick={enableNotifications}>Turn on</button>
+          <button class="btn btn-sm btn-ghost" onclick={dismissNotificationPrompt}>Not now</button>
+        </div>
+      {/if}
       {#if updated.current}
         <div class="banner" role="status">
           <Icon name="sparkle" />

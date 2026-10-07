@@ -1,5 +1,5 @@
 // Cache only the public application shell. Tokens, API data and uploads stay online-only.
-const CACHE = 'pi-companion-shell-v4';
+const CACHE = 'pi-companion-shell-v5';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png', '/pwa-icon.svg', '/pwa-maskable.svg', '/pwa-192.png', '/pwa-512.png', '/pwa-maskable-512.png'];
 
 self.addEventListener('install', (event) => {
@@ -46,4 +46,21 @@ self.addEventListener('fetch', (event) => {
       })
     );
   }
+});
+
+// Tapping a session notification focuses an open Pi Companion window (or opens one) on that session.
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL(event.notification.data?.url || '/', self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windows) => {
+      const open = windows.find((client) => client.url.startsWith(self.location.origin));
+      if (open) {
+        await open.focus();
+        if (open.url !== target && 'navigate' in open) await open.navigate(target).catch(() => {});
+        return;
+      }
+      await self.clients.openWindow(target);
+    })
+  );
 });

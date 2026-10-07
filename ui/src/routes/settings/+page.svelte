@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
+  import DevicePermissions from '#lib/DevicePermissions.svelte';
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { Settings, SettingsResponse } from '#lib/types.ts';
@@ -49,6 +50,7 @@
   }
 
   onMount(async () => {
+    if (!companion.isAdmin) return;
     try {
       apply(await companion.getSettings());
     } catch (e) {
@@ -83,7 +85,7 @@
   <header class="page-head">
     <div>
       <h1>Settings</h1>
-      <p>How Pi Companion looks on this browser, and how the daemon on this computer behaves.</p>
+      <p>{companion.isAdmin ? 'Choose how Pi Companion looks and alerts you here, and how the daemon on this computer behaves.' : 'Choose how Pi Companion looks and alerts you on this device.'}</p>
     </div>
   </header>
 
@@ -103,7 +105,17 @@
     </div>
   </section>
 
-  {#if loadError}
+  <section class="card tile section" aria-labelledby="device-permissions">
+    <div class="section-copy">
+      <h2 id="device-permissions">Notifications and camera</h2>
+      <p class="muted">Permissions belong to this browser. Your browser asks once; you can change them in its site settings later.</p>
+    </div>
+    <DevicePermissions />
+  </section>
+
+  {#if !companion.isAdmin}
+    <!-- Daemon settings live on the computer running Pi. -->
+  {:else if loadError}
     <div class="card empty"><span class="empty-icon"><Icon name="alert" /></span><h2>Couldn’t load settings</h2><p>{loadError}</p></div>
   {:else if data}
     <form class="stack" onsubmit={(event) => { event.preventDefault(); void save(); }}>

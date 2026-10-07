@@ -7,6 +7,7 @@
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { errorMessage } from '#lib/toast.svelte.ts';
+  import { devicePermissions } from '#lib/device-permissions.svelte.ts';
 
   const invite = $derived(page.url.searchParams.get('invite'));
   let name = $state(guessName());
@@ -37,7 +38,9 @@
 
   onMount(() => {
     scannerAvailable = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia);
+    devicePermissions.init();
   });
+
 
   onDestroy(stopCamera);
 
@@ -110,7 +113,9 @@
   function startCamera() {
     cameraError = '';
     cameraDenied = false;
-    cameraPrompt = true;
+    // Skip the explainer once the browser has already granted the camera.
+    if (devicePermissions.camera === 'granted') void allowCamera();
+    else cameraPrompt = true;
   }
 
   async function allowCamera() {
@@ -123,6 +128,7 @@
         audio: false
       });
       cameraPrompt = false;
+      devicePermissions.markCamera('granted');
       scanning = true;
       await tick();
       if (!video) return stopCamera();
@@ -134,6 +140,7 @@
       const name = e instanceof DOMException ? e.name : '';
       if (name === 'NotAllowedError' || name === 'SecurityError') {
         cameraDenied = true;
+        devicePermissions.markCamera('denied');
         cameraError = 'Camera access was denied. Allow Camera for this site in your browser settings, then try again.';
       } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         cameraError = 'No usable camera was found on this device.';

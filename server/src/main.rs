@@ -1080,12 +1080,13 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
         };
         last_received = tokio::time::Instant::now();
         let Ok(value) = serde_json::from_str::<Value>(&text) else { continue };
-        // An old socket can finish closing after a replacement already registered.
+        // An old socket can finish closing after a replacement already registered:
+        // once retired it may never act for the session again, so drop it.
         if value.get("type").and_then(Value::as_str) != Some("register") {
             let sessions = state.sessions.read().await;
             let owns_session = sessions.get(&session_id).and_then(|s| s.command_tx.as_ref())
                 .is_some_and(|tx| tx.same_channel(&command_tx));
-            if !owns_session { continue; }
+            if !owns_session { break; }
         }
         match value.get("type").and_then(Value::as_str) {
             Some("register") => {

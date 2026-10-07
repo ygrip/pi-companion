@@ -284,6 +284,9 @@ class Companion {
     this.sessions = [];
   }
 
+  /** Observer for session snapshot changes (device notifications hook in here). */
+  onSessionChange?: (previous: Session, next: Session) => void;
+
   private handle(message: any) {
     switch (message.type) {
       case 'session.register': {
@@ -302,6 +305,8 @@ class Companion {
           void this.refreshSessions().catch(() => {});
           break;
         }
+        const previous = this.sessions.find((session) => session.id === message.sessionId);
+        if (previous) this.onSessionChange?.(previous, { ...previous, ...patch });
         this.sessions = sortSessions(
           this.sessions
             .map((session) => (session.id === message.sessionId ? { ...session, ...patch } : session))
