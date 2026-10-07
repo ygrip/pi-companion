@@ -15,7 +15,7 @@ The UI is a static SvelteKit application. There is no Node runtime in production
 
 ## Install
 
-    pi install npm:@ygrip/pi-companion
+    pi install npm:@yunazgr/pi-companion
 
 or straight from git:
 
@@ -304,7 +304,7 @@ A tag matching vX.Y.Z triggers both the CI and release workflows.
 
 Before publishing, the workflow requires X.Y.Z to match both package.json and server/Cargo.toml. It then runs TypeScript and Rust checks, builds native daemon archives for Linux x86_64, macOS arm64, macOS x86_64, and Windows x86_64, generates SHA-256 checksums, and creates a GitHub Release.
 
-Only after the GitHub Release exists, and only if the repository has an NPM_TOKEN secret, the same tag publishes @ygrip/pi-companion to npm with provenance, so an npm install never looks for a daemon binary that is not uploaded yet. Git installs need no token.
+Only after the GitHub Release exists, and only if the repository has an NPM_TOKEN secret, the same tag publishes @yunazgr/pi-companion to npm with provenance, so an npm install never looks for a daemon binary that is not uploaded yet. Git installs need no token.
 
 On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. A git install from a branch that is ahead of the newest tag falls back to the latest release.
 
