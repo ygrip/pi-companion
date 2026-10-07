@@ -5,6 +5,7 @@
   import { page, updated } from '$app/state';
   import logo from '../assets/pi-companion.webp';
   import AboutSheet from '#lib/AboutSheet.svelte';
+  import ConnectionNotice from '#lib/ConnectionNotice.svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
@@ -23,13 +24,20 @@
   const path = $derived(page.url.pathname);
   const bare = $derived(companion.remote && !companion.paired);
   const waiting = $derived(Object.values(companion.asks).reduce((total, list) => total + list.length, 0));
+  const workSession = $derived(page.params.id
+    ? companion.sessions.find((session) => session.id === page.params.id)
+    : companion.sessions.find((session) => session.status === 'active'));
+  const workPhase = $derived(companion.connection === 'online' && workSession?.status === 'active'
+    ? companion.activity[workSession.id]?.at(-1)?.kind === 'thinking' ? 'thinking' : 'working'
+    : '');
   let aboutOpen = $state(false);
+  let insecureContext = $state(false);
 
   const connectionLabel = $derived(
     {
       connecting: 'Connecting…',
       online: 'Live',
-      offline: 'Reconnecting…',
+      offline: 'Offline',
       disconnected: 'Disconnected',
       revoked: 'Access removed'
     }[companion.connection]
@@ -59,6 +67,7 @@
   });
 
   onMount(() => {
+    insecureContext = !window.isSecureContext;
     theme.init();
     void companion.boot();
 
@@ -75,9 +84,17 @@
       event.preventDefault();
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'none';
     };
+    const offline = () => companion.networkOffline();
+    const online = () => {
+      if (companion.connection === 'offline' || companion.bootError) companion.reconnect();
+    };
+    addEventListener('offline', offline);
+    addEventListener('online', online);
     addEventListener('dragover', swallow);
     addEventListener('drop', swallow);
     return () => {
+      removeEventListener('offline', offline);
+      removeEventListener('online', online);
       removeEventListener('dragover', swallow);
       removeEventListener('drop', swallow);
     };
@@ -92,9 +109,10 @@
 <a class="skip-link" href="#main">Skip to content</a>
 
 {#if bare}
-  <main class="bare scroll" id="main">{@render children()}</main>
+  <main class="bare scroll" id="main"><ConnectionNotice />{@render children()}</main>
 {:else}
-  <div class="shell">
+  <div class="shell" class:working={Boolean(workPhase)} data-work-phase={workPhase}>
+    <span class="sr-only" role="status">{workPhase === 'thinking' ? 'Pi is thinking.' : workPhase === 'working' ? 'Pi is working.' : ''}</span>
     <aside class="sidebar scroll" aria-label="Primary">
       <a class="brand" href="/">
         <img src={logo} alt="" width="36" height="36" />
@@ -117,7 +135,7 @@
       </nav>
 
       <div class="sidebar-foot">
-        <button class="status status-trigger" aria-haspopup="dialog" onclick={() => (aboutOpen = true)}>
+        <button class="status status-trigger" aria-haspopup="dialog" aria-label="Connection: {connectionLabel}. Open connection details" onclick={() => (aboutOpen = true)}>
           <span class="dot {companion.connection}" aria-hidden="true"></span>
           <span>{connectionLabel}</span>
           {#if companion.version}<span class="subtle mono">v{companion.version}</span>{/if}
@@ -145,7 +163,7 @@
           <strong>Pi Companion</strong>
         </a>
         <div class="topbar-actions">
-          <button class="status compact status-trigger" aria-haspopup="dialog" onclick={() => (aboutOpen = true)} title={connectionLabel}>
+          <button class="status compact status-trigger" aria-haspopup="dialog" aria-label="Connection: {connectionLabel}. Open connection details" onclick={() => (aboutOpen = true)} title={connectionLabel}>
             <span class="dot {companion.connection}" aria-hidden="true"></span>
             <span>{connectionLabel}</span>
           </button>
@@ -156,15 +174,20 @@
         </div>
       </header>
 
+      {#if insecureContext}
+        <div class="banner danger" role="alert">
+          <Icon name="alert" />
+          <span>Install and offline features require HTTPS. Open Pi Companion through its secure remote URL instead of a LAN HTTP address.</span>
+        </div>
+      {/if}
       {#if companion.connection === 'disconnected'}
         <div class="banner" role="alert">
           <Icon name="unplug" />
           <span>Your computer ended this connection. You are still paired.</span>
           <button class="btn btn-sm" onclick={() => companion.reconnect()}>Reconnect</button>
         </div>
-      {:else if companion.bootError}
-        <div class="banner danger" role="alert"><Icon name="alert" /><span>{companion.bootError}</span></div>
       {/if}
+      <ConnectionNotice />
       {#if updated.current}
         <div class="banner" role="status">
           <Icon name="sparkle" />
@@ -174,7 +197,14 @@
       {/if}
 
       <main class="content scroll" id="main" tabindex="-1">
-        {#if companion.booted}{@render children()}{/if}
+        {#if companion.booted && !companion.bootError}
+          {@render children()}
+        {:else}
+          <div class="page connection-placeholder" role="status">
+            <h1>{companion.bootError ? 'Workspace unavailable' : 'Connecting to workspace…'}</h1>
+            <p>{companion.bootError ? 'Your sessions will appear when the connection is restored.' : 'Waiting for Pi Companion to respond.'}</p>
+          </div>
+        {/if}
       </main>
 
       <nav class="tabbar" aria-label="Primary">
@@ -458,9 +488,9 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
-      padding: calc(8px + env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 8px
-        max(12px, env(safe-area-inset-left));
+      gap: 8px;
+      padding: calc(4px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 4px
+        max(8px, env(safe-area-inset-left));
       border-bottom: 1px solid var(--border);
       background: var(--bg-sunken);
     }
@@ -490,14 +520,15 @@
     }
 
     .tabbar a {
-      display: grid;
-      justify-items: center;
-      align-content: center;
-      gap: 1px;
-      min-height: 46px;
-      margin: 1px 2px;
-      padding: 2px 8px;
-      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 4px;
+      min-width: 0;
+      min-height: 44px;
+      margin: 0;
+      padding: 2px 4px;
+      border-radius: 12px;
       color: var(--text-3);
       font-size: 0.68rem;
       font-weight: 600;
@@ -516,8 +547,8 @@
       position: relative;
       display: grid;
       place-items: center;
-      width: 40px;
-      height: 22px;
+      width: 22px;
+      height: 24px;
       border-radius: 999px;
     }
 
@@ -528,7 +559,7 @@
     .pip {
       position: absolute;
       top: 1px;
-      right: 8px;
+      right: 0;
       width: 8px;
       height: 8px;
       border-radius: 50%;
@@ -537,7 +568,7 @@
     }
 
     .toasts {
-      bottom: calc(var(--tabbar) + 16px + env(safe-area-inset-bottom));
+      bottom: calc(48px + 12px + env(safe-area-inset-bottom));
       left: 16px;
       right: 16px;
       width: auto;
@@ -545,9 +576,9 @@
   }
 
   @media (max-width: 380px) {
-    .status.compact span:last-child {
-      display: none;
-    }
+    .status.compact span:last-child { max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .topbar .brand { min-width: 0; }
+    .topbar .brand strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
   .sidebar {
     margin: 10px 0 10px 10px;
@@ -560,6 +591,8 @@
   .nav a {
     min-height: 44px;
     border-radius: var(--clay-radius);
+    background: var(--surface-2);
+    box-shadow: var(--clay-soft);
     transition: background-color 200ms ease-out, color 200ms ease-out, box-shadow 200ms ease-out, transform 200ms ease-out;
   }
   .nav a:hover { background: var(--clay-surface); color: var(--text); box-shadow: var(--clay-soft); }
@@ -576,29 +609,52 @@
     cursor: pointer;
   }
   .status-trigger:hover { color: var(--text); }
-  .status-trigger:active { transform: scale(0.97); }
+  .status-trigger:active { transform: scale(0.97); box-shadow: var(--clay-pressed); }
   .topbar, .tabbar { background: var(--clay-surface); box-shadow: var(--clay-raised); }
   @media (max-width: 900px) {
     .topbar {
-      margin: 8px 10px 0;
+      flex: none;
+      margin: 6px 8px 4px;
+      padding: calc(4px + env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) 4px max(8px, env(safe-area-inset-left));
       border: 1px solid var(--border);
-      border-radius: var(--clay-radius);
+      border-radius: 20px;
       box-shadow: var(--clay-raised);
     }
+    .topbar .brand { min-height: 44px; }
+    .topbar .brand strong { font-size: 0.9rem; }
+    .topbar-actions { gap: 8px; }
+    .topbar-actions > .btn-icon { border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); box-shadow: var(--clay-soft); }
     .tabbar {
-      margin: 0 10px max(4px, env(safe-area-inset-bottom));
+      flex: none;
+      margin: 4px 8px calc(6px + env(safe-area-inset-bottom));
+      padding: 4px;
       border: 1px solid var(--border);
-      border-radius: 18px;
+      border-radius: 20px;
       box-shadow: var(--clay-raised);
-      gap: 2px;
+      gap: 6px;
     }
-    .tabbar a.active { color: var(--accent-text); background: var(--clay-surface); box-shadow: var(--clay-pressed); }
-    .tabbar a:active { transform: scale(0.97); }
+    .tabbar a { border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+    .tabbar a.active { border-radius: 16px; color: var(--accent-text); background: var(--accent-soft); box-shadow: var(--clay-pressed); }
+    .tabbar a:active { transform: scale(0.97); box-shadow: var(--clay-pressed); }
     .tab-icon, .tabbar a.active .tab-icon { background: transparent; }
-    .status-trigger.compact { width: auto; min-height: 40px; padding: 0 10px; }
+    .status-trigger.compact { width: auto; min-height: 44px; padding: 0 10px; border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
   }
   :global(:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
+  .shell.working .brand img { animation: clay-breathe 2.2s ease-in-out infinite; }
+  .shell.working .topbar { position: relative; }
+  .shell.working .topbar::after {
+    content: ''; position: absolute; left: 20px; right: 20px; bottom: 1px; height: 3px;
+    border-radius: 999px; pointer-events: none;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    animation: clay-sweep 2.2s ease-in-out infinite alternate;
+  }
+  .shell.working :global(.dot.active) { animation: clay-breathe 2.2s ease-in-out infinite; }
+  .shell[data-work-phase='thinking'] .brand img,
+  .shell[data-work-phase='thinking'] .topbar::after { animation-duration: 3.2s; }
+  @keyframes clay-breathe { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.72; transform: scale(1.04); } }
+  @keyframes clay-sweep { from { opacity: 0.45; transform: scaleX(0.25); } to { opacity: 0.85; transform: scaleX(1); } }
   @media (prefers-reduced-motion: reduce) {
+    .shell.working .brand img, .shell.working .topbar::after, .shell.working :global(.dot.active) { animation: none; transform: none; }
     .nav a, .status-trigger, .tabbar a { transition: none; }
     .nav a:active, .status-trigger:active, .tabbar a:active { transform: none; }
   }

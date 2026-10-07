@@ -13,6 +13,8 @@ The UI is a static SvelteKit application. There is no Node runtime in production
   <img src="docs/mobile.webp" alt="Session detail on a phone" width="28%" />
 </p>
 
+Screenshots use demo sessions, not private conversation data. See the [session menu](docs/session-menu.webp), [desktop session rows](docs/session-list-desktop.webp) and [mobile session list](docs/session-list.webp), plus [attachment previews](docs/attachments.webp), [file-grouped changes](docs/changes.webp) and [connection recovery](docs/connection-error.webp).
+
 ## Install
 
     pi install npm:@yunazgr/pi-companion
@@ -21,7 +23,7 @@ or straight from git:
 
     pi install git:github.com/ygrip/pi-companion
 
-Then start Pi as usual. Installing the Pi extension is enough for normal use: when a Pi session starts, the extension probes the local admin port and automatically starts the daemon if needed. On first use it downloads the matching sha256-verified daemon binary from GitHub Releases, caches it under `~/.pi/agent/pi-companion/bin/<version>/`, and reuses the same daemon across Pi sessions.
+Then start Pi as usual. Installing the Pi extension is enough for normal use: the extension does not probe, connect to, download, or start a daemon until you run `/companion` in that session. On first use it downloads the matching sha256-verified daemon binary from GitHub Releases, caches it under `~/.pi/agent/pi-companion/bin/<version>/`, and reuses the same daemon across Pi sessions.
 
 Use `/companion` in each session you want to share with paired devices. It enables remote access for that session and prints the local dashboard address. `/companion off` stops sharing that session.
 
@@ -60,22 +62,30 @@ You do **not** need to run `pi-companion-server` manually for a normal npm insta
 
 The local administration surface and paired-device surface are separate listeners. If you expose Pi Companion through a tunnel, target only port 43722. Never expose port 43721.
 
+## Install the web app on your phone
+
+Open the daemon’s **HTTPS device URL** and pair the phone first. On Android/Chromium, choose **Install app** (or **Add to Home screen**) in the browser menu. On iPhone/iPad, open Safari and choose **Share → Add to Home Screen**; enable **Open as Web App** if offered. Installation does not grant additional session permissions.
+
+Service workers require HTTPS; `http://localhost` is permitted for desktop development, but ordinary LAN HTTP addresses are not. An insecure-origin banner explains this in the UI. Install prompts vary by browser and may not appear inside in-app browsers.
+
+After an online visit, the public app shell and visited immutable assets are cached. This is not an offline agent: sending, live activity, pairing, uploads and changes require the daemon connection. No credentials, API responses or session files are stored in the service-worker cache. Reopen online after an update to load the new build.
+
 ## How the daemon runs
 
 For a normal install:
 
     pi install npm:@yunazgr/pi-companion
 
-That is enough. Start Pi normally; the extension will start the daemon on demand and keep its daemon version aligned with the installed extension. Updating the Pi package is therefore enough to update both pieces. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
+That is enough. Start Pi normally, then run `/companion` in the session you want to share. Only then does the extension connect or start the daemon on demand and keep its daemon version aligned with the installed extension. Updating the Pi package is therefore enough to update both pieces. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
 
 The lifecycle is:
 
-1. A Pi session loads the extension.
-2. The extension probes `http://127.0.0.1:43721`.
-3. If the daemon is already running, the session connects to it.
+1. A Pi session loads the extension without daemon network or startup work.
+2. You run `/companion` in that session; the extension probes `http://127.0.0.1:43721`.
+3. If the daemon is already running, this opted-in session connects to it.
 4. If not, the extension resolves the daemon binary, downloading the matching GitHub Release on first use if necessary.
 5. It starts the daemon detached in the background.
-6. Other Pi sessions reuse the same daemon.
+6. Other Pi sessions reuse the same daemon only after their own `/companion` command. New sessions start disconnected, even when another session has enabled Companion.
 7. On extension upgrades, the extension compares its package version with the running daemon. If they differ, it stops the old local daemon, resolves/downloads the matching release, and starts the new daemon automatically.
 8. The daemon keeps running independently until it is stopped or the machine restarts.
 
@@ -130,7 +140,7 @@ Inside any Pi session:
     /companion off      # stop sharing this session
     /remote-control     # toggle sharing on/off
 
-A paired device cannot access sessions that have not explicitly enabled remote control.
+A paired device cannot access sessions that have not explicitly enabled remote control. Turning `/remote-control` off or running `/companion off` closes this session’s daemon channel: it disappears from paired devices and becomes **Ended** on the local dashboard. Pi continues locally; local Pi history is untouched. Sharing does not reconnect itself while disabled. After the initial opt-in, `/remote-control` can enable sharing again; `/companion` can also resume it. Temporary uploads follow the usual disconnected-session cleanup below.
 
 ## Questions from Pi
 
@@ -179,7 +189,7 @@ Each session has an isolated temporary directory beneath the operating system te
 
 On Unix the daemon attempts to set the Pi Companion and session directories to mode 0700.
 
-The browser can upload a file from the Files tab. Current constraints:
+The browser can upload a file using the composer’s attachment button, or from **Shared files** in the session menu. Composer attachments show previews, file names, sizes and upload status; validation and upload failures appear beside the file. Image thumbnails are limited to safe raster image types. Removing a preview removes that attachment from the draft; deleting a shared upload remains an explicit action. The current daemon upload policy is checked before selection is uploaded, and the daemon remains authoritative. Current constraints:
 
 - 25 MiB maximum per upload by default (Settings); a rejected or interrupted upload leaves no partial file
 - optional MIME allowlist: the type guessed from the file name and any specific declared Content-Type must both be allowed
@@ -203,6 +213,18 @@ which destroys one temporary file by opaque id.
 
 This means the agent can consume uploaded artifacts using its normal file capabilities while Pi Companion retains ownership of upload placement and cleanup.
 
+## Workspace and tunnel connection errors
+
+If a tunnel closes, the workspace stops, or your device loses its network, Companion shows an actionable **Workspace connection interrupted** notice with **Retry now** and reconnect instructions. On initial connection failure, it shows **Workspace unavailable**, not a misleading empty session list or “session not found.” Gateway errors (including HTTP 502/503/504 and tunnel-provider errors) are translated into readable messages rather than raw HTML or JSON parse errors. A browser cannot always distinguish a closed tunnel from a daemon, DNS or network failure, so these messages describe possible causes rather than claiming certainty.
+
+- Ordinary API requests and live-connection handshakes time out after 10 seconds; uploads allow 60 seconds.
+- Reconnection uses bounded backoff and retries when the device returns online. **Retry now** is available immediately.
+- Previously loaded activity may be stale. Failed sends keep your draft; messages and uploads are never automatically resent.
+- Network/tunnel errors preserve pairing. Explicit computer disconnects still require manual reconnect; revoked credentials still require pairing again.
+- Restart the tunnel, keep the workspace running, and run `/companion` in Pi if the daemon is not running. If the tunnel URL changed, open the new HTTPS device URL; a different hostname/origin may require pairing again in that browser.
+
+A previously cached PWA shell can also explain gateway failures on reload. If the app has never loaded successfully on that device and no shell is cached, the browser/tunnel provider owns the initial error page; Companion cannot display its own UI until its assets are reachable.
+
 ## Session identity
 
 Every registered Pi session publishes a compact display model to the daemon:
@@ -215,7 +237,7 @@ Every registered Pi session publishes a compact display model to the daemon:
 - working directory and process id
 - remote-control state
 
-Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period.
+Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period. Use **Archive session** on the list or in the session menu to remove a disconnected/stopped entry. The daemon rejects removal of active, idle, waiting, or otherwise connected sessions. Archiving removes only the daemon entry; it never deletes Pi history, project files or other files on disk. Temporary uploads still follow the existing disconnect cleanup lifecycle. Reopening the Pi session and running `/companion` can register it again.
 
 ## UI
 
@@ -223,15 +245,15 @@ A single-page SvelteKit app, embedded in the daemon binary:
 
 | Page | Who sees it | What it is for |
 |---|---|---|
-| Overview | everyone | Dot-field hero, live counts, sessions that need your answer, live sessions, Help entry |
-| Sessions | everyone | Searchable, filterable list (Working / Waiting / Ended). Paired devices only see shared sessions |
-| Session detail | everyone | Shell-style transcript that follows the theme: Markdown replies with highlight.js code and Mermaid diagrams, collapsible tool output and thinking. Question sheet, files, git changes, /plan; the composer (message / steer) appears on Activity only. Session details are collapsed under the title |
+| Overview | everyone | Dot-field hero, live counts, sessions that need your answer, a labeled live-session table, and a spaced onboarding/help panel with Claymorphism actions |
+| Sessions | everyone | Searchable, filterable full-width session rows (Working / Waiting / Ended), with short titles, workspace/model metadata, View details and safe Archive actions. Paired devices only see shared sessions |
+| Session detail | everyone | Activity-first transcript with Markdown, highlighted code, Mermaid diagrams, collapsible tool output/thinking and question sheets. Compact header and navigation leave more space for the shell. The expanding composer includes Auto/Plan selection, attachment previews and a full-width labeled Send/Steer action; Plan uses the existing `/plan` command, not an agent permission setting. The top-right session menu opens Shared files, Changes and Archive session. The session header shows a status dot; clicking its title reveals status and session metadata. Changes are grouped by file with clear separators and a filename filter |
 | Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings with a save bar that appears only for unsaved edits |
 | Help, Privacy, Terms | everyone | Setup stepper, commands, tools, troubleshooting; data handling; terms of use. Help is opened from the Overview |
 
 The Live indicator in the header and sidebar opens the connection sheet (status, version and, on this computer, the console and device addresses and data folders).
 
-Git problems on the Changes tab (for example a folder that is not a git repository) show as a toast, never in the transcript.
+Git problems in the Changes panel (for example a folder that is not a git repository) show as a toast, never in the transcript.
 
 Design notes:
 
@@ -239,12 +261,13 @@ Design notes:
 - claymorphism: solid surfaces with an outer drop shadow plus inset highlight and shade (no blur or glass); small icons are Lucide line icons on raised clay wells, feature art is 3D clay renders from [3dicons](https://3dicons.co) (CC0)
 - warm amber on graphite or paper, matching the logo; system fonts only, so nothing loads from the network. highlight.js and Mermaid load only when a reply contains code or a diagram
 - the window never scrolls. The sidebar, page content, activity feed, file list, diff, chips and tabs each scroll inside their own container, and the composer and mobile tab bar stay put
+- the shell gently breathes while the displayed session is working, with a slower [thinking animation](docs/thinking.webp) and a soft progress sweep on the mobile header; it stops when idle or disconnected and respects reduced-motion preferences
 - the activity feed follows new output and stops following when you scroll up ("Jump to latest" brings you back)
-- installable PWA: web app manifest, standalone display mode, Apple home-screen metadata, and a small service worker that caches only the shell and immutable assets; API/session traffic is never cached
+- installable PWA: scoped manifest with explicit 192×192 and 512×512 PNG icons plus a maskable icon, standalone display mode, Apple home-screen metadata, and a service worker that caches only the public shell and static assets; API/session traffic and uploads are never cached
 - mobile: bottom tab bar, safe-area insets, 44px touch targets, 16px inputs (no iOS zoom), Enter inserts a newline on touch keyboards
-- accessibility: skip link, visible focus rings, arrow-key tabs, labelled controls, live regions for the feed and questions, reduced-motion support
+- accessibility: skip link, visible focus rings, labeled controls and table metadata, accessible session menus, live regions for the feed and questions, reduced-motion support
 - the dot field is Raksara's component, loaded when the browser is idle, paused when hidden, and static under reduced motion
-- dropping a file anywhere outside the Files drop zone is ignored. Without this, the browser tries to open the file itself (Firefox reports this as "may not load or link to file:///")
+- dropping a file anywhere outside the Shared files drop zone is ignored. Without this, the browser tries to open the file itself (Firefox reports this as "may not load or link to file:///")
 
 ### Caching and updates
 
@@ -302,7 +325,7 @@ Type checks cover the extension (`tsc`) and the UI (`svelte-check`, warnings fai
 
     npm run check
 
-Tests cover the question relay (`node --test`) and the daemon's wire protocol, pairing expiry and code throttling, origin policy, bridge and device reconnects, path traversal, upload limits, MIME allowlist, state-file permissions and multi-session isolation (`cargo test`):
+Tests cover the question relay, deferred per-session startup and remote-off/re-enable behavior (including an executable extension/bridge harness), attachment validation and path references, changed-file grouping/filtering, workspace error classification and actual connection-store recovery, install icon dimensions and service-worker cache isolation (`node --test`), plus the daemon's wire protocol, safe session archiving, pairing expiry and code throttling, origin policy, bridge and device reconnects, path traversal, upload limits, MIME allowlist, state-file permissions and multi-session isolation (`cargo test`):
 
     npm test
 
@@ -312,7 +335,7 @@ Then, in another shell, start Pi with the extension from this checkout:
 
     pi -e ./src/index.ts
 
-Because the development daemon is already listening on port 43721, the extension detects it and does not launch another daemon.
+After you run `/companion`, the extension detects the development daemon already listening on port 43721 and does not launch another daemon.
 
 For hot-reloading UI work, keep the daemon running and use:
 
@@ -320,13 +343,13 @@ For hot-reloading UI work, keep the daemon running and use:
 
 which proxies /api and /ws to the daemon on 43721.
 
-If you start Pi from the checkout without running `npm run serve`, the extension can still auto-start a local daemon build if one exists under `server/target/debug` or `server/target/release`. For predictable UI work, prefer `npm run serve` in one terminal and `pi -e ./src/index.ts` in another.
+If you start Pi from the checkout without running `npm run serve`, running `/companion` can still auto-start a local daemon build if one exists under `server/target/debug` or `server/target/release`. For predictable UI work, prefer `npm run serve` in one terminal and `pi -e ./src/index.ts` in another.
 
 To test the same behavior as a published install, stop any development daemon first and install the package normally:
 
     pi install npm:@yunazgr/pi-companion
 
-Then start Pi. The extension downloads and starts the released daemon automatically.
+Then start Pi and run `/companion`. The extension downloads and starts the released daemon on demand; merely starting Pi does neither.
 
 ## Releases
 

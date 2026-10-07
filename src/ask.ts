@@ -28,6 +28,7 @@ export function relayDialogs(ui: ExtensionUIContext, channel: AskChannel, tools:
   const confirm = ui.confirm.bind(ui);
   const input = ui.input.bind(ui);
   const custom = ui.custom.bind(ui);
+  const originals = { select: ui.select, confirm: ui.confirm, input: ui.input, custom: ui.custom };
 
   ui.custom = (factory, options) => {
     const complete = tools.claim();
@@ -73,6 +74,11 @@ export function relayDialogs(ui: ExtensionUIContext, channel: AskChannel, tools:
       undefined,
       opts?.signal
     );
+
+  return () => {
+    Object.assign(ui, originals);
+    delete target[RELAYED];
+  };
 }
 
 async function race<T>(

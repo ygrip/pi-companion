@@ -266,6 +266,7 @@ fn local_router(state: AppState) -> Router {
     Router::new()
         .route("/api/context", get(local_context))
         .route("/api/sessions", get(list_sessions))
+        .route("/api/sessions/{session_id}", delete(delete_session_local))
         .route("/api/sessions/{session_id}/files", get(list_files).post(upload_file))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_local))
         .route("/api/pairing/start", post(start_pairing))
@@ -288,6 +289,7 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/context", get(remote_context))
         .route("/api/pairing/claim", post(claim_pairing))
         .route("/api/sessions", get(list_sessions_remote))
+        .route("/api/sessions/{session_id}", delete(delete_session_remote))
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
         .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
@@ -396,12 +398,17 @@ fn body_limit() -> usize {
     (config::MAX_UPLOAD_MB_LIMIT as usize) * 1024 * 1024 + 64 * 1024
 }
 
-async fn local_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": false, "version": VERSION, "pid": std::process::id() }))
+async fn upload_policy(state: &AppState) -> Value {
+    let settings = state.settings.read().await;
+    serde_json::json!({ "maxUploadMb": settings.max_upload_mb, "allowedUploadTypes": settings.allowed_upload_types })
 }
 
-async fn remote_context() -> Json<Value> {
-    Json(serde_json::json!({ "remote": true, "version": VERSION }))
+async fn local_context(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({ "remote": false, "version": VERSION, "pid": std::process::id(), "uploadPolicy": upload_policy(&state).await }))
+}
+
+async fn remote_context(State(state): State<AppState>) -> Json<Value> {
+    Json(serde_json::json!({ "remote": true, "version": VERSION, "uploadPolicy": upload_policy(&state).await }))
 }
 
 /// Local-admin only. Used by the extension to replace an older daemon after a package upgrade.
@@ -479,6 +486,35 @@ async fn list_sessions_remote(
         .map(|s| s.snapshot.clone())
         .collect();
     Ok(Json(SessionsResponse { sessions }))
+}
+
+async fn delete_session_local(State(state): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
+    delete_session(&state, &session_id, false).await
+}
+
+async fn delete_session_remote(State(state): State<AppState>, Path(session_id): Path<String>, headers: HeaderMap) -> ApiResult<StatusCode> {
+    authorize_device(&state, bearer_token(&headers)?).await?;
+    delete_session(&state, &session_id, true).await
+}
+
+/// Remove only the daemon's record. Pi session history and project files are untouched.
+async fn delete_session(state: &AppState, session_id: &str, remote: bool) -> ApiResult<StatusCode> {
+    check_session_id(session_id)?;
+    let mut sessions = state.sessions.write().await;
+    let session = sessions.get(session_id).ok_or((StatusCode::NOT_FOUND, "Session not found.".into()))?;
+    if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
+        return Err((StatusCode::FORBIDDEN, "Remote control is disabled for this session.".into()));
+    }
+    let status = session.snapshot.get("status").and_then(Value::as_str);
+    if session.command_tx.is_some() || !matches!(status, Some("stopped" | "disconnected")) {
+        return Err((StatusCode::CONFLICT, "Only disconnected sessions can be archived; active and idle sessions cannot be removed.".into()));
+    }
+    let remote_enabled = session.snapshot.get("remoteEnabled").and_then(Value::as_bool) == Some(true);
+    sessions.remove(session_id);
+    // Keep the lock through publication so a concurrent registration cannot be followed
+    // by a stale removal event. No filesystem operation is performed by archiving.
+    broadcast(state, serde_json::json!({ "type": "session.removed", "sessionId": session_id, "remoteEnabled": remote_enabled }));
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn list_devices(State(state): State<AppState>) -> Json<DevicesResponse> {
@@ -864,6 +900,9 @@ async fn visible_to_device(state: &AppState, value: &Value) -> bool {
         .and_then(Value::as_str)
         .or_else(|| value.get("session").and_then(|s| s.get("id")).and_then(Value::as_str));
     let Some(session_id) = session_id else { return false };
+    if value.get("type").and_then(Value::as_str) == Some("session.removed") {
+        return value.get("remoteEnabled").and_then(Value::as_bool) == Some(true);
+    }
     // Let devices learn that a session stopped being shared, so they can hide it.
     if value.get("type").and_then(Value::as_str) == Some("session.update")
         && value.get("patch").and_then(|p| p.get("remoteEnabled")).is_some()
@@ -1010,21 +1049,21 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                 notify_session_files(&state, &session_id).await;
             }
             Some("session.update") => {
-                if let Some(patch) = value.get("session").and_then(Value::as_object) {
-                    let mut sessions = state.sessions.write().await;
-                    if let Some(session) = sessions.get_mut(&session_id) {
-                        if let Some(snapshot) = session.snapshot.as_object_mut() {
-                            for (key, value) in patch {
-                                snapshot.insert(key.clone(), value.clone());
-                            }
-                        }
+                // Validate ownership under the same lock as mutation/publication:
+                // a retired socket must never stop or hide its replacement.
+                let mut sessions = state.sessions.write().await;
+                let Some(session) = sessions.get_mut(&session_id) else { break };
+                if !session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) { break; }
+                if let (Some(patch), Some(snapshot)) = (value.get("session").and_then(Value::as_object), session.snapshot.as_object_mut()) {
+                    for (key, value) in patch {
+                        snapshot.insert(key.clone(), value.clone());
                     }
+                    broadcast(&state, serde_json::json!({
+                        "type": "session.update",
+                        "sessionId": session_id,
+                        "patch": patch
+                    }));
                 }
-                broadcast(&state, serde_json::json!({
-                    "type": "session.update",
-                    "sessionId": session_id,
-                    "patch": value.get("session")
-                }));
             }
             Some("file.delete") => {
                 let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1054,6 +1093,12 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
     {
         let mut sessions = state.sessions.write().await;
         if let Some(session) = sessions.get_mut(&session_id) {
+            // An older socket may close after the replacement registered. It must
+            // not make a live session archivable or clear the replacement channel.
+            if !session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) {
+                send_task.abort();
+                return;
+            }
             if let Some(snapshot) = session.snapshot.as_object_mut() {
                 snapshot.insert("status".into(), Value::String("stopped".into()));
             }
