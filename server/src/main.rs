@@ -36,8 +36,21 @@ use tokio::{
 use tower_http::trace::TraceLayer;
 use uuid::Uuid;
 
-const LOCAL_ADDR: &str = "127.0.0.1:43721";
-const REMOTE_ADDR: &str = "127.0.0.1:43722";
+/// Loopback listen address, overridable for isolated runs (demo screenshots, a second
+/// build next to a running daemon). Only loopback addresses are accepted.
+fn listen_addr(var: &str, default: &'static str) -> &'static str {
+    std::env::var(var)
+        .ok()
+        .filter(|value| value.starts_with("127.0.0.1:") && value[10..].parse::<u16>().is_ok())
+        .map(|value| &*Box::leak(value.into_boxed_str()))
+        .unwrap_or(default)
+}
+
+static LOCAL_ADDR_CELL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+static REMOTE_ADDR_CELL: std::sync::OnceLock<&'static str> = std::sync::OnceLock::new();
+
+fn local_addr() -> &'static str { LOCAL_ADDR_CELL.get_or_init(|| listen_addr("PI_COMPANION_ADMIN_ADDR", "127.0.0.1:43721")) }
+fn remote_addr() -> &'static str { REMOTE_ADDR_CELL.get_or_init(|| listen_addr("PI_COMPANION_DEVICE_ADDR", "127.0.0.1:43722")) }
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Close codes sent to paired-device sockets so the UI can explain what happened.
 const CLOSE_DISCONNECTED: u16 = 4001;
@@ -227,13 +240,13 @@ async fn main() {
 
     // Single instance per machine: if the ports are taken, another daemon is already
     // serving (started by another Pi session or manually). Exit quietly instead of panicking.
-    let local_listener = match tokio::net::TcpListener::bind(LOCAL_ADDR).await {
+    let local_listener = match tokio::net::TcpListener::bind(local_addr()).await {
         Ok(listener) => listener,
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
             eprintln!();
             eprintln!("  Pi Companion is already running.");
             eprintln!();
-            eprintln!("  Console   http://{LOCAL_ADDR}");
+            eprintln!("  Console   http://{}", local_addr());
             eprintln!();
             eprintln!("  Another daemon (often one started automatically by a Pi session) owns the port,");
             eprintln!("  so this one is exiting. To run this build instead, stop the other one first:");
@@ -242,15 +255,15 @@ async fn main() {
             eprintln!();
             return;
         }
-        Err(error) => panic!("bind local admin {LOCAL_ADDR}: {error}"),
+        Err(error) => panic!("bind local admin {}: {error}", local_addr()),
     };
-    let remote_listener = match tokio::net::TcpListener::bind(REMOTE_ADDR).await {
+    let remote_listener = match tokio::net::TcpListener::bind(remote_addr()).await {
         Ok(listener) => listener,
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            eprintln!("pi-companion-server: {REMOTE_ADDR} is used by another program. Free that port and try again.");
+            eprintln!("pi-companion-server: {} is used by another program. Free that port and try again.", remote_addr());
             std::process::exit(1);
         }
-        Err(error) => panic!("bind remote surface {REMOTE_ADDR}: {error}"),
+        Err(error) => panic!("bind remote surface {}: {error}", remote_addr()),
     };
 
     print_banner(&state).await;
@@ -330,7 +343,7 @@ fn loopback_origins(addr: &str) -> impl Iterator<Item = String> + '_ {
 
 /// Origins a paired-device browser may use: the public address and the loopback device port.
 async fn device_origins(state: &AppState) -> Vec<String> {
-    let mut origins: Vec<String> = loopback_origins(REMOTE_ADDR).collect();
+    let mut origins: Vec<String> = loopback_origins(remote_addr()).collect();
     origins.extend(origin_of(&public_url(state).await));
     origins.extend(state.extra_origins.iter().cloned());
     origins
@@ -369,7 +382,7 @@ async fn require_console_origin(State(state): State<AppState>, request: Request,
     let allowed = match request_origin(&request) {
         None => true,
         Some(None) => false,
-        Some(Some(origin)) => loopback_origins(LOCAL_ADDR).any(|allowed| allowed == origin) || state.extra_origins.contains(&origin),
+        Some(Some(origin)) => loopback_origins(local_addr()).any(|allowed| allowed == origin) || state.extra_origins.contains(&origin),
     };
     if !allowed {
         return forbidden_origin();
@@ -391,8 +404,8 @@ async fn print_banner(state: &AppState) {
     println!();
     println!("  Pi Companion v{VERSION}");
     println!();
-    println!("  Console          http://{LOCAL_ADDR}");
-    println!("  Paired devices   http://{REMOTE_ADDR}");
+    println!("  Console          http://{}", local_addr());
+    println!("  Paired devices   http://{}", remote_addr());
     println!("  Pairing links    {public}  ({public_note})");
     println!("  Data             {}  ({devices} paired)", state.data_dir.display());
     println!();
@@ -453,8 +466,8 @@ async fn get_settings(State(state): State<AppState>) -> Json<Value> {
         "limits": { "maxUploadMb": config::MAX_UPLOAD_MB_LIMIT },
         "about": {
             "version": VERSION,
-            "adminUrl": format!("http://{LOCAL_ADDR}"),
-            "deviceUrl": format!("http://{REMOTE_ADDR}"),
+            "adminUrl": format!("http://{}", local_addr()),
+            "deviceUrl": format!("http://{}", remote_addr()),
             "dataDir": state.data_dir.to_string_lossy(),
             "tempDir": state.temp_root.to_string_lossy(),
         }

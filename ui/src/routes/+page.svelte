@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, type Component } from 'svelte';
+  import logoArt from '../assets/morph/logo.svg';
   import computerArt from '../assets/morph/computer.svg';
   import phoneArt from '../assets/morph/phone.svg';
   import terminalArt from '../assets/morph/terminal.svg';
@@ -11,8 +12,8 @@
   import SessionTable from '#lib/SessionTable.svelte';
   import { companion } from '#lib/companion.svelte.ts';
 
-  // The dot field cycles through clear computer, phone and terminal shapes.
-  const art = [computerArt, phoneArt, terminalArt];
+  // The dot field opens on the Pi Companion mark, then cycles computer → phone → terminal.
+  const art = [logoArt, computerArt, phoneArt, terminalArt];
   let visual = $state<HTMLDivElement | null>(null);
   let DotField = $state<Component<any> | null>(null);
 
@@ -31,12 +32,12 @@
 
   type Stat = { label: string; value: number | string; hint: string; icon: IconName; href: string };
   const stats = $derived<Stat[]>([
-    { label: 'Live sessions', value: live.length, hint: working ? working + ' working right now' : 'None working right now', icon: 'sessions', href: '/sessions' },
-    { label: 'Waiting on you', value: waiting, hint: waiting ? 'Pi asked a question' : 'No open questions', icon: 'question', href: '/sessions' },
+    { label: 'Running', value: live.length, hint: working ? (working === 1 ? 'Pi is busy on 1' : 'Pi is busy on ' + working) : 'All quiet for now', icon: 'sessions', href: '/sessions' },
+    { label: 'Waiting on you', value: waiting, hint: waiting ? 'Pi has a question for you' : 'Nothing to answer', icon: 'question', href: '/sessions' },
     ...(companion.isAdmin
       ? [
-          { label: 'Paired devices', value: companion.devices.length, hint: connected ? connected + ' connected now' : 'None connected', icon: 'devices' as IconName, href: '/devices' },
-          { label: 'Shared sessions', value: companion.sessions.filter((s) => s.remoteEnabled && s.status !== 'stopped').length, hint: 'Visible on your devices', icon: 'link' as IconName, href: '/sessions' }
+          { label: 'Your devices', value: companion.devices.length, hint: connected ? connected + ' online now' : companion.devices.length ? 'None online right now' : 'No phone paired yet', icon: 'devices' as IconName, href: '/devices' },
+          { label: 'On your phone', value: companion.sessions.filter((s) => s.remoteEnabled && s.status !== 'stopped').length, hint: 'Sessions you can reach from your devices', icon: 'link' as IconName, href: '/sessions' }
         ]
       : [])
   ]);
@@ -64,26 +65,26 @@
         images={art}
         anchor={visual}
         className="hero-field"
-        label="Dots morphing between a computer, phone and terminal window" />
+        label="Dots forming the Pi Companion logo, then a computer, a phone and a terminal window" />
     {/if}
     <div class="hero-copy">
-      <span class="eyebrow">{companion.isAdmin ? 'Pi Companion' : 'Paired with your computer'}</span>
-      <h1>Pi keeps working.<br /><span class="accent">You stay in the loop.</span></h1>
+      <span class="eyebrow">{companion.isAdmin ? 'Pi Companion' : 'Linked to your computer'}</span>
+      <h1>Go grab a coffee.<br /><span class="accent">Pi’ll ping you.</span></h1>
       <p>
-        Watch live Pi sessions, answer its questions, steer the next step and hand over files, from this computer or
-        your phone, without going back to the terminal.
+        Pi keeps chipping away on your computer while you’re off doing other stuff. Check in from your phone, answer
+        when it gets stuck, nudge it in a new direction or toss it a file. No need to sit by the terminal.
       </p>
       <div class="cta">
-        <a class="btn btn-primary" href="/sessions"><Icon name="sessions" />Open sessions</a>
-        <a class="btn" href="/help"><Icon name="help" />Help</a>
+        <a class="btn btn-primary" href="/sessions"><Icon name="sessions" />See what Pi’s up to</a>
+        <a class="btn" href="/help"><Icon name="help" />How it works</a>
         {#if companion.isAdmin}
-          <a class="btn" href="/devices"><Icon name="devices" />Pair a phone</a>
+          <a class="btn" href="/devices"><Icon name="devices" />Add your phone</a>
         {/if}
       </div>
       <ol class="journey" aria-label="How it connects">
-        <li>Pi</li>
+        <li>Pi works</li>
         <li>Your computer</li>
-        <li>Your companion</li>
+        <li>You check in</li>
       </ol>
     </div>
     <div class="hero-visual" bind:this={visual} aria-hidden="true"></div>
@@ -102,17 +103,17 @@
   <section class="guide-tile tile" aria-labelledby="guide-heading">
     <span class="guide-art"><img src={bulbClay} alt="" aria-hidden="true" /></span>
     <div class="guide-copy">
-      <h2 id="guide-heading">New here?</h2>
-      <p>Connect a workspace, enable a Pi session, and pair your phone with the setup guide.</p>
+      <h2 id="guide-heading">First time here?</h2>
+      <p>It takes about two minutes: install it, switch it on in Pi, scan a code with your phone. Done.</p>
     </div>
-    <a class="btn guide-action" href="/help">Setup guide<Icon name="chevron" size={16} /></a>
+    <a class="btn guide-action" href="/help">Show me how<Icon name="chevron" size={16} /></a>
   </section>
 
 
   {#if needsAnswer.length}
     <section class="recent" aria-labelledby="needs-answer-heading">
       <div class="section-head">
-        <h2 id="needs-answer-heading"><img src={chatBubbleClay} alt="" aria-hidden="true" />Needs your answer</h2>
+        <h2 id="needs-answer-heading"><img src={chatBubbleClay} alt="" aria-hidden="true" />Pi’s waiting on you</h2>
       </div>
       <div class="session-grid">
         {#each needsAnswer as session (session.id)}<SessionCard {session} highlighted />{/each}
@@ -122,29 +123,29 @@
 
   <section class="recent" aria-labelledby="live-heading">
     <div class="section-head">
-      <h2 id="live-heading">Live now</h2>
-      <a class="btn view-all" href="/sessions">View all sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a>
+      <h2 id="live-heading">Running now</h2>
+      <a class="btn view-all" href="/sessions">All sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a>
     </div>
     {#if live.length}
       {#if liveNow.length}
-        <SessionTable sessions={liveNow} label="Live now" />
+        <SessionTable sessions={liveNow} label="Running now" />
       {:else}
-        <p class="muted">All live sessions are shown above because they need your answer.</p>
+        <p class="muted">Everything that’s running is up there, waiting on your answer.</p>
       {/if}
     {:else}
       <div class="tile empty">
         <span class="empty-icon"><img src={computerClay} alt="" aria-hidden="true" /></span>
         {#if companion.connection !== 'online'}
-          <h2>Waiting for workspace connection</h2>
-          <p>Live session information will refresh when the workspace is reachable again.</p>
+          <h2>Can’t reach your computer right now</h2>
+          <p>Hang tight. We’ll keep trying, and everything shows up again as soon as it’s back.</p>
         {:else if companion.isAdmin}
-          <h2>No live sessions</h2>
-          <p>Run <code>/companion</code> in a Pi session to bring it here. Install the extension first if you haven't already.</p>
+          <h2>Nothing running yet</h2>
+          <p>Type <code>/companion</code> in any Pi session and it’ll pop up here. Haven’t installed it yet? The guide walks you through it.</p>
         {:else}
-          <h2>No live sessions</h2>
-          <p>Ask the administrator to share a session by enabling remote control with <code>/companion</code>.</p>
+          <h2>Nothing shared with you yet</h2>
+          <p>On the computer running Pi, type <code>/companion</code> in a session to share it. It’ll show up here right away.</p>
         {/if}
-        <a class="btn" href="/help"><Icon name="help" />Setup guide</a>
+        <a class="btn" href="/help"><Icon name="help" />Show me how</a>
       </div>
     {/if}
   </section>

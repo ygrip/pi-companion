@@ -13,6 +13,10 @@ const MAX_MESSAGES: usize = 800;
 /// A single merged text block is capped so one long reply cannot grow without bound.
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 #[derive(Default)]
 pub struct ActivityLog {
     seq: u64,
@@ -26,6 +30,8 @@ impl ActivityLog {
         let seq = self.seq;
         if let Some(object) = message.as_object_mut() {
             object.insert("seq".into(), json!(seq));
+            // Original time, so a replayed feed shows when things happened, not when it loaded.
+            object.entry("at").or_insert_with(|| json!(now_ms()));
         }
         if !self.merge_delta(&message, seq) {
             self.messages.push_back(message.clone());

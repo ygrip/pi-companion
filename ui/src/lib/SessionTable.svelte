@@ -25,7 +25,7 @@
           <td class="workspace-cell" data-label="Workspace"><span class="workspace" title={session.cwd}><Icon name="folder" size={14} /><code>{prettyPath(session.cwd)}</code></span></td>
           <td class="model-cell" data-label="Model"><span class="model">{session.mainModel ?? 'Not reported'}</span>{#if session.effort}<span class="effort">Thinking: {session.effort}</span>{/if}</td>
           <td class="state-cell" data-label="Status"><span class="badge" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}><span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}</span></td>
-          <td class="action-cell"><a class="btn open" href="/sessions/{encodeURIComponent(session.id)}" aria-label="Open {sessionTitle(session)}">Open<Icon name="chevron" size={14} /></a></td>
+          <td class="action-cell" aria-hidden="true"><span class="open"><Icon name="chevron" size={16} /></span></td>
         </tr>
       {/each}
     </tbody>
@@ -42,9 +42,13 @@
   th:nth-child(4) { width: 14%; }
   th:nth-child(5) { width: 12%; }
   td { padding: 14px 16px; border-top: 1px solid var(--border); vertical-align: middle; min-width: 0; overflow-wrap: anywhere; }
-  tbody tr { transition: background-color 150ms var(--ease); }
+  /* The title link stretches over the row, so the whole row opens the session. */
+  tbody tr { position: relative; cursor: pointer; transition: background-color 150ms var(--ease); }
+  tbody tr:has(.session-title:focus-visible) { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .session-title::after { content: ''; position: absolute; inset: 0; z-index: 1; }
+  tbody tr:hover .session-title { color: var(--accent-text); }
   tbody tr:hover { background: var(--surface-2); }
-  .session-title { display: block; padding: 4px 0; min-height: 32px; color: var(--text); font-weight: 650; line-height: 1.4; text-decoration: none; }
+  .session-title { outline: none; display: block; padding: 4px 0; min-height: 32px; color: var(--text); font-weight: 650; line-height: 1.4; text-decoration: none; }
   .session-title:hover { color: var(--accent-text); }
   .short-title, .effort { display: block; margin-top: 4px; color: var(--text-2); font-size: 0.76rem; line-height: 1.45; }
   .workspace { display: flex; align-items: flex-start; gap: 8px; color: var(--text-2); }
@@ -55,23 +59,25 @@
   .question-count :global(svg) { flex: none; }
   .badge { max-width: 100%; }
   .action-cell { text-align: right; }
-  .open { min-height: 44px; padding: 10px 12px; border-radius: 14px; background: var(--surface); box-shadow: var(--clay-soft); white-space: nowrap; }
-  .open:hover { background: var(--surface-3); border-color: var(--accent-line); }
-  .open:active { box-shadow: var(--clay-pressed); }
+  .open { display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--surface); color: var(--text-2); box-shadow: var(--clay-soft); }
+  tbody tr:hover .open { color: var(--accent-text); }
   @media (max-width: 1100px) {
     .session-table { border: 0; background: none; box-shadow: none; overflow: visible; }
     table, tbody { display: block; }
     thead { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
     tbody { display: grid; gap: 12px; }
-    tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px 16px; padding: 16px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); box-shadow: var(--clay-raised); }
+    tr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 16px; padding: 16px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); box-shadow: var(--clay-raised); }
     td { display: block; padding: 0; border: 0; }
     td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 5px; color: var(--text-3); font-size: 0.7rem; font-weight: 650; letter-spacing: 0.03em; }
-    .session-cell { grid-column: 1 / -1; }
+    .session-cell { grid-column: 1; grid-row: 1; }
     .session-cell::before { display: none !important; }
+    /* Status pinned top-right next to the title. */
+    .state-cell { grid-column: 2; grid-row: 1; justify-self: end; }
+    .state-cell::before { display: none !important; }
+    .model-cell { grid-column: 1 / -1; }
     .session-title { min-height: 44px; display: flex; align-items: center; padding: 2px 0; font-size: 1rem; }
     .workspace-cell { grid-column: 1 / -1; }
-    .state-cell { align-self: start; }
-    .action-cell { grid-column: 1 / -1; padding-top: 12px; border-top: 1px solid var(--border); }
-    .open { width: 100%; justify-content: center; }
+    .state-cell { align-self: start; padding-top: 8px; }
+    .action-cell { display: none; }
   }
 </style>

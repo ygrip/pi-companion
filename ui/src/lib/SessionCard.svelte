@@ -14,6 +14,7 @@
   <div class="row-main">
     <header class="row-head">
       <div class="title-copy">
+        <!-- The title link stretches over the whole card, so any tap on the row opens it. -->
         <h2><a class="title-link" href="/sessions/{encodeURIComponent(session.id)}">{title}</a></h2>
         {#if session.shortTitle.trim() && session.shortTitle.trim() !== title}<p class="short-title">{session.shortTitle}</p>{/if}
       </div>
@@ -30,30 +31,32 @@
       <div><dt>Started</dt><dd>{relativeTime(session.connectedAt)}</dd></div>
       <div><dt>Sharing</dt><dd>{session.remoteEnabled ? 'Shared with devices' : 'Local only'}</dd></div>
     </dl>
-    {#if waiting}
-      <p class="questions"><Icon name="question" size={15} /><span class="badge count">{waiting}</span><strong>{waiting === 1 ? 'question needs' : 'questions need'} your answer</strong></p>
+    {#if waiting || session.status === 'stopped'}
+      <div class="row-foot">
+        {#if waiting}<p class="questions"><Icon name="question" size={15} /><span class="badge count">{waiting}</span><strong>{waiting === 1 ? 'question needs' : 'questions need'} your answer</strong></p>{/if}
+        {#if session.status === 'stopped'}<div class="row-actions"><ArchiveSession {session} /></div>{/if}
+      </div>
     {/if}
-  </div>
-
-  <div class="row-actions">
-    <a class="btn details-action" href="/sessions/{encodeURIComponent(session.id)}" aria-label="View details: {title}">View details<Icon name="chevron" size={15} /></a>
-    {#if session.status === 'stopped'}<ArchiveSession {session} />{/if}
   </div>
 </article>
 
 <style>
-  .session-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px; min-width: 0; padding: 20px; border-radius: 22px; background: var(--surface); box-shadow: var(--clay-raised); transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease); }
-  .session-row:hover { border-color: var(--border-strong); }
+  .session-row { position: relative; display: block; min-width: 0; padding: 20px; border-radius: 22px; background: var(--surface); box-shadow: var(--clay-raised); cursor: pointer; transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease), transform 150ms var(--ease); }
+  .session-row:hover { border-color: var(--accent-line); }
+  .session-row:active { box-shadow: var(--clay-pressed); }
+  .session-row:has(.title-link:focus-visible) { outline: 2px solid var(--accent); outline-offset: 3px; }
   .session-row.highlighted { border-color: var(--accent-line); background: linear-gradient(115deg, var(--accent-soft), transparent 58%), var(--surface); }
   .stopped .row-main { opacity: 0.78; }
   .row-main { display: grid; gap: 12px; min-width: 0; }
-  .row-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; min-width: 0; }
-  .title-copy { min-width: 0; flex: 1; }
+  /* Title takes the free space; the status badge always sits top-right. */
+  .row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 12px; min-width: 0; }
+  .title-copy { min-width: 0; }
   h2 { font-size: 1.05rem; line-height: 1.35; letter-spacing: -0.015em; }
-  .title-link { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; padding: 2px 0; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
-  .title-link:hover { color: var(--accent-text); }
+  .title-link { display: inline-flex; align-items: center; min-height: 44px; max-width: 100%; padding: 2px 0; color: var(--text); text-decoration: none; overflow-wrap: anywhere; outline: none; }
+  .title-link::after { content: ''; position: absolute; inset: 0; z-index: 1; border-radius: inherit; }
+  .session-row:hover .title-link { color: var(--accent-text); }
   .short-title { margin: 4px 0 0; color: var(--text-2); font-size: 0.83rem; overflow-wrap: anywhere; }
-  .status { flex: none; margin-top: 8px; box-shadow: var(--clay-soft); }
+  .status { justify-self: end; margin-top: 10px; white-space: nowrap; box-shadow: var(--clay-soft); }
   .workspace { display: flex; align-items: flex-start; gap: 8px; margin: 0; color: var(--text-2); min-width: 0; }
   .workspace > :global(svg) { flex: none; margin-top: 3px; }
   .workspace > span { display: grid; gap: 3px; min-width: 0; }
@@ -65,20 +68,18 @@
   dd { margin: 0; color: var(--text-2); font-size: 0.76rem; overflow-wrap: anywhere; }
   .questions { display: flex; align-items: center; gap: 8px; margin: 0; color: var(--accent-text); font-size: 0.83rem; }
   .questions :global(svg) { flex: none; }
-  .row-actions { display: grid; align-content: center; gap: 8px; min-width: 148px; }
-  .details-action, .row-actions :global(.archive) { width: 100%; min-height: 44px; padding: 11px 14px; justify-content: center; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-2); box-shadow: var(--clay-soft); }
-  .details-action:hover, .row-actions :global(.archive:not(:disabled):hover) { background: var(--surface-3); border-color: var(--accent-line); }
-  .details-action:active, .row-actions :global(.archive:not(:disabled):active) { box-shadow: var(--clay-pressed); }
+  .row-foot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+  .row-actions { margin-left: auto; }
+  /* Real controls sit above the stretched link. */
+  .row-actions :global(.archive) { position: relative; z-index: 2; min-height: 44px; padding: 11px 14px; border: 1px solid var(--border); border-radius: 15px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .row-actions :global(.archive:not(:disabled):hover) { background: var(--surface-3); border-color: var(--accent-line); }
   @media (max-width: 1100px) {
-    .session-row { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 18px; }
-    .row-actions { display: flex; flex-wrap: wrap; min-width: 0; padding-top: 14px; border-top: 1px solid var(--border); }
-    .row-actions > .details-action, .row-actions > :global(.archive) { flex: 1 1 140px; width: auto; }
+    .session-row { padding: 18px; }
   }
   @media (max-width: 420px) {
     .session-row { padding: 16px; }
-    .row-head { flex-wrap: wrap; gap: 8px; }
-    .title-copy { flex-basis: 100%; }
-    .status { margin-top: 0; }
+    .row-head { gap: 8px; }
+    .status { margin-top: 10px; }
     .metadata > div { padding: 7px 9px; }
   }
 </style>

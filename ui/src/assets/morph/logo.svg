@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="320" height="320" viewBox="0 0 320 320" fill="none" stroke="#141414" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Pi Companion mark: a π with an orbit and its little companion moon. -->
+  <path d="M74 104c10-14 26-20 48-20h132" stroke-width="22"/>
+  <path d="M136 88c0 72-12 128-48 160" stroke-width="22"/>
+  <path d="M210 88v116c0 30 12 44 36 44 10 0 20-3 30-9" stroke-width="22"/>
+  <path d="M40 214c34 40 154 30 228-50 26-28 32-52 18-66" stroke-width="9"/>
+  <circle cx="276" cy="86" r="16" fill="#141414" stroke="none"/>
+</svg>

@@ -8,16 +8,16 @@
   const steps = $derived(
     companion.remote && !companion.isAdmin
       ? [
-          { title: 'Choose a shared session', body: 'Pick one of the sessions your computer has enabled for remote control.' },
-          { title: 'Follow activity', body: 'Read Pi’s replies and tool activity as it happens.' },
-          { title: 'Answer and steer', body: 'Answer questions, send prompts, add files and review changes.' }
+          { title: 'Pick a session', body: 'You’ll see every session your computer has shared with you. Tap one to open it.' },
+          { title: 'Watch it work', body: 'Pi’s replies and what it’s doing show up as they happen. Close the tab and come back later, it’ll catch you up.' },
+          { title: 'Jump in when you want', body: 'Answer its questions, send a new message, nudge it mid-task or drop in a file. All from here.' }
         ]
       : [
-          { title: 'Install', body: 'Install the extension once. The matching daemon binary downloads automatically from GitHub Releases and is verified.' },
-          { title: 'Enable each session with /companion', body: 'Run /companion in every Pi session you want to control. This starts the daemon, prints the dashboard URL and enables sharing for that session.' },
-          { title: 'Open the dashboard', body: 'Keep this dashboard open to follow the sessions you enabled.' },
-          { title: 'Pair your phone', body: 'An administrator can scan the QR code or enter a one-time code from Devices.', link: '/devices' },
-          { title: 'Follow and answer', body: 'Watch activity, answer Pi’s questions, send prompts, add files and review changes.' }
+          { title: 'Install', body: 'Paste this into your terminal once. It grabs everything it needs on its own.' },
+          { title: 'Switch it on in Pi', body: 'In any Pi session you want to keep an eye on, type /companion. That session shows up here. Sessions you don’t switch on stay private.' },
+          { title: 'Keep this page handy', body: 'This is home base on your computer. Everything you’ve switched on lives here.' },
+          { title: 'Add your phone', body: 'Go to Devices, then scan the QR code with your phone’s camera. Or type the short code instead.', link: '/devices' },
+          { title: 'Get on with your day', body: 'Pi will ping you when it needs an answer or finishes up. Reply from wherever you are.' }
         ]
   );
 
@@ -37,8 +37,8 @@
   <header class="page-head">
     <div>
       <span class="eyebrow">Guide</span>
-      <h1>Help</h1>
-      <p>Get Pi Companion connected, then follow and steer the sessions you choose to share.</p>
+      <h1>How it works</h1>
+      <p>Pi Companion lets you check on Pi from your phone or any browser, so you don’t have to babysit the terminal. Here’s the quick version.</p>
     </div>
   </header>
 
@@ -57,7 +57,7 @@
               </div>
             {/if}
             {#if 'link' in step && step.link}
-              <a class="btn btn-ghost step-link" href={step.link}><Icon name="devices" />Open Devices</a>
+              <a class="btn btn-ghost step-link" href={step.link}><Icon name="devices" />Go to Devices</a>
             {/if}
           </div>
         </li>
@@ -68,71 +68,79 @@
   <section class="bento" aria-label="Help topics">
     <article class="tile">
       <span class="topic-icon"><Icon name="tool" /></span>
-      <h2>Pi commands</h2>
+      <h2>The two commands you’ll use</h2>
+      <p class="muted">Type these inside a Pi session on your computer.</p>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+          <thead><tr><th>Type this</th><th>What happens</th></tr></thead>
           <tbody>
-            <tr><th><code>/companion</code></th><td>Starts the daemon if needed, prints the dashboard URL and enables remote control for the current session.</td></tr>
-            <tr><th><code>/remote-control</code></th><td>Toggles sharing after the first /companion opt-in. Off ends this session in Companion and removes it from paired devices; Pi continues locally. Toggle again to resume sharing.</td></tr>
+            <tr><th><code>/companion</code></th><td>Switches this session on, so you can see it here and on your phone. Starts everything up if it isn’t running yet.</td></tr>
+            <tr><th><code>/remote-control</code></th><td>Flips sharing off and on again. Off hides the session from your phone; Pi carries on as normal on your computer.</td></tr>
           </tbody>
         </table>
       </div>
     </article>
+
+    <article class="tile">
+      <span class="topic-icon"><Icon name="bell" /></span>
+      <h2>Notifications and camera</h2>
+      <p>Want a buzz when Pi needs you? Turn on notifications in <a href="/settings">Settings</a>. You’ll hear about it when Pi asks something, wraps up a task or a session ends.</p>
+      <p>The camera is only for scanning the pairing QR code. Nothing gets recorded or sent anywhere.</p>
+      <dl>
+        <dt>iPhone or iPad</dt><dd>Add Pi Companion to your Home Screen first (see below), open it from there, then turn notifications on. Apple only allows them that way.</dd>
+        <dt>Said no by accident?</dt><dd>Tap the icon next to the web address, find Notifications or Camera, and switch it to Allow. Then reload.</dd>
+      </dl>
+    </article>
+
     <article class="tile">
       <span class="topic-icon"><Icon name="chat" /></span>
-      <h2>Companion tools</h2>
-      <dl>
-        <dt><code>companion_ask_user</code></dt><dd>Ask 1–4 questions in the dashboard or paired-device sheet, with descriptions, multi-select options or free text.</dd>
-        <dt><code>companion_temp_files</code></dt><dd>List temporary files uploaded for the current session.</dd>
-        <dt><code>companion_delete_temp_file</code></dt><dd>Delete a temporary upload before the session ends.</dd>
-      </dl>
-      <p class="muted">Questions from other extensions are relayed too, including <code>ctx.ui</code> select/confirm/input dialogs and pi-jar’s <code>jar_ask</code>. Answer in the terminal or Companion; the first answer wins. Temporary uploads are removed when their session ends.</p>
+      <h2>When Pi asks you something</h2>
+      <p>Sometimes Pi needs a decision: pick an option, say yes or no, or type a quick answer. Those questions pop up here and on your phone. Answer wherever’s easiest. Whoever answers first, terminal or phone, wins.</p>
+      <p class="muted">For the curious: this covers Pi’s <code>companion_ask_user</code> tool plus questions from other extensions, like <code>jar_ask</code> and the usual select, confirm and input prompts.</p>
     </article>
+
     <article class="tile">
       <span class="topic-icon"><Icon name="devices" /></span>
-      <h2>Pairing</h2>
-      <p>Pair phones from <a href="/devices">Devices</a>. A pairing code is one-time and expires quickly. Paired devices stay trusted until you revoke them. Disconnect ends the current connection without revoking the device.</p>
-      <p>For a remote connection, use the device URL shown in Settings—not the local-only admin URL.</p>
+      <h2>Adding a phone</h2>
+      <p>Head to <a href="/devices">Devices</a> on your computer and scan the code. Each code works once and runs out after a few minutes, so a screenshot floating around won’t let anyone in.</p>
+      <p>Once your phone is in, it stays in until you remove it. <strong>Disconnect</strong> just kicks it off for now. <strong>Revoke</strong> removes it for good.</p>
+      <p class="muted">Not on the same Wi-Fi? Use the device link from Settings (usually an HTTPS tunnel), not the local one.</p>
     </article>
+
     <article class="tile">
       <span class="topic-icon"><Icon name="download" /></span>
-      <h2>Install on your phone</h2>
-      <p>Open the paired-device dashboard using its HTTPS address in your phone’s browser, then install Pi Companion to launch it as an app.</p>
+      <h2>Put it on your home screen</h2>
+      <p>Pair first, then add it to your home screen so it opens like a normal app.</p>
       <dl>
-        <dt>iPhone or iPad</dt><dd>In Safari, tap Share → Add to Home Screen. Enable Open as Web App if offered, then tap Add.</dd>
-        <dt>Android</dt><dd>In Chrome, open the browser menu → Install app or Add to Home screen.</dd>
-        <dt>No install option?</dt><dd>Use HTTPS, not a plain HTTP LAN address. Open the link in Safari or Chrome rather than an in-app browser. Ask your administrator for the HTTPS tunnel or reverse-proxy address configured in Settings.</dd>
+        <dt>iPhone or iPad</dt><dd>In Safari, tap Share → Add to Home Screen. If you see “Open as Web App”, leave it on.</dd>
+        <dt>Android</dt><dd>In Chrome, open the ⋮ menu → Install app (or Add to Home screen).</dd>
+        <dt>Don’t see the option?</dt><dd>Make sure the address starts with <code>https://</code> and you’re in Safari or Chrome, not a browser inside another app.</dd>
       </dl>
-      <p class="muted">An internet or local-network connection to the daemon is still required. Installing does not enable offline session access.</p>
+      <p class="muted">It still needs a connection to your computer to show anything live.</p>
     </article>
+
     <article class="tile">
       <span class="topic-icon"><Icon name="alert" /></span>
-      <h2>Troubleshooting</h2>
+      <h2>Something’s off?</h2>
       <dl>
-        <dt>Tunnel closed or workspace unreachable</dt><dd>Use Retry now in the connection notice. Check your internet, restart the tunnel on your computer, keep the workspace running, and open the new HTTPS device URL if it changed. Connection failures keep your pairing and unsent draft; messages and uploads are not automatically resent.</dd>
-        <dt>Daemon not reachable</dt><dd>Run <code>/companion</code> in the Pi session. The admin service normally listens on port <code>43721</code>.</dd>
-        <dt>Invalid attachment</dt><dd>The composer shows file name, size, upload status and a preview when safe. Empty, oversized or disallowed files show an inline explanation. Upload policy comes from the daemon; remove failed attachments before sending. Removing a draft preview does not delete the shared upload.</dd>
-        <dt>Custom daemon behavior</dt><dd>Check <code>PI_COMPANION_URL</code>, <code>PI_COMPANION_SERVER</code>, and <code>PI_COMPANION_AUTOSTART=0</code>.</dd>
-        <dt>Restarting the daemon</dt><dd>On macOS or Linux, stop it with <code>pkill -f pi-companion-server</code>, then run <code>/companion</code> again.</dd>
-        <dt>Git errors</dt><dd>Git problems in the Changes panel appear as a toast; check the message and your repository state. Each changed file has its own labeled section; use Filter changed files to narrow the list by path.</dd>
+        <dt>“Can’t reach your computer”</dt><dd>Check your internet and that the computer is awake. If you use a tunnel, restart it; if the link changed, open the new one. Hit <strong>Retry now</strong>. Your pairing and anything you were typing are kept, but nothing gets resent on its own.</dd>
+        <dt>Activity looks stale</dt><dd>It catches up by itself when the connection comes back. Still stuck? Leave the session and open it again.</dd>
+        <dt>Nothing shows up on the computer</dt><dd>Type <code>/companion</code> in the Pi session again. It normally runs on port <code>43721</code>.</dd>
+        <dt>A file won’t attach</dt><dd>It might be empty, too big or a type that isn’t allowed. You’ll see the reason right under the file. Remove it and try another.</dd>
+        <dt>Need a clean restart</dt><dd>On macOS or Linux run <code>pkill -f pi-companion-server</code>, then type <code>/companion</code> again.</dd>
+        <dt>Git errors in Changes</dt><dd>They show as a pop-up message. Usually it means the folder isn’t a git repo or git isn’t installed.</dd>
+        <dt>Power-user settings</dt><dd><code>PI_COMPANION_URL</code>, <code>PI_COMPANION_SERVER</code> and <code>PI_COMPANION_AUTOSTART=0</code> change where and how it runs.</dd>
       </dl>
     </article>
-    <article class="tile">
-      <span class="topic-icon"><Icon name="devices" /></span>
-      <h2>Install on your phone</h2>
-      <p>Open the secure HTTPS device URL and pair first. On Android, use your browser’s Install app or Add to Home screen menu. On iPhone or iPad, open Safari, choose Share → Add to Home Screen, and enable Open as Web App if offered.</p>
-      <p>Installation keeps the same pairing and session permissions. The public app shell can load offline after it has been visited; live activity, sending messages, pairing and files still require a connection to the daemon. LAN HTTP addresses cannot install the service worker; localhost is allowed for desktop development.</p>
-    </article>
+
     <article class="tile">
       <span class="topic-icon"><Icon name="help" /></span>
-      <h2>Frequently asked questions</h2>
+      <h2>Quick questions</h2>
       <dl>
-        <dt>Can I archive a session?</dt><dd>Use Archive on the session list or session menu after Pi has disconnected. Active and idle sessions cannot be archived. This removes only the daemon’s session entry, never your Pi history or project files. Uploads follow the normal disconnect cleanup lifecycle.</dd>
-        <dt>Why don’t I see every Pi session?</dt><dd>Control is opt-in per session. Run <code>/companion</code> in each session you want to manage.</dd>
-        <dt>Can a paired phone see all sessions?</dt><dd>No. It sees sessions that are shared for remote control. Pairing alone does not share sessions.</dd>
-        <dt>How do questions work?</dt><dd><code>companion_ask_user</code> can show several questions together, with choices, descriptions, multi-select or free text. Companion also relays other extensions’ select, confirm and input dialogs, including pi-jar’s <code>jar_ask</code>. The first terminal or Companion answer wins.</dd>
-        <dt>Where do uploads go?</dt><dd>They are stored in the daemon’s local temporary folder for the session and deleted when that session ends.</dd>
+        <dt>Why don’t I see all my Pi sessions?</dt><dd>On purpose. Only sessions where you typed <code>/companion</code> show up. Everything else stays private.</dd>
+        <dt>Can my phone see everything?</dt><dd>Nope. Just the sessions you’ve shared. Pairing a phone doesn’t share anything by itself.</dd>
+        <dt>Where do my uploaded files go?</dt><dd>Into a temporary folder on your computer, just for that session. They’re cleaned up when the session ends. Nothing goes to the cloud.</dd>
+        <dt>What does Archive do?</dt><dd>Tidies a finished session out of the list. Your Pi history and project files aren’t touched.</dd>
       </dl>
     </article>
   </section>

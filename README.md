@@ -13,7 +13,7 @@ The UI is a static SvelteKit application. There is no Node runtime in production
   <img src="docs/mobile.webp" alt="Session detail on a phone" width="28%" />
 </p>
 
-Screenshots use demo sessions, not private conversation data. See the [session menu](docs/session-menu.webp), [desktop session rows](docs/session-list-desktop.webp) and [mobile session list](docs/session-list.webp), plus [attachment previews](docs/attachments.webp), [file-grouped changes](docs/changes.webp) and [connection recovery](docs/connection-error.webp).
+Screenshots use demo sessions, not private conversation data, and are regenerated with `node tools/screenshots.mjs` (see [Running locally from source](#running-locally-from-source)). See the [session menu](docs/session-menu.webp), [desktop session rows](docs/session-list-desktop.webp) and [mobile session list](docs/session-list.webp), plus [attachment previews](docs/attachments.webp), [file-grouped changes](docs/changes.webp) and [connection recovery](docs/connection-error.webp).
 
 ## Install
 
@@ -115,6 +115,7 @@ Optional environment variables (none are required):
 | PI_COMPANION_AUTOSTART=0 | never launch a daemon, only connect |
 | PI_COMPANION_PUBLIC_URL | daemon-side: public URL embedded in pairing QR codes |
 | PI_COMPANION_ALLOWED_ORIGINS | daemon-side: extra comma-separated browser origins accepted besides the loopback addresses and the public URL |
+| PI_COMPANION_ADMIN_ADDR, PI_COMPANION_DEVICE_ADDR | daemon-side: loopback listen addresses (default `127.0.0.1:43721` / `127.0.0.1:43722`), for running a second daemon next to the usual one, e.g. for screenshots. The extension still looks for 43721 unless `PI_COMPANION_URL` points elsewhere |
 
 Local admin:
 
@@ -147,6 +148,16 @@ A paired device cannot access sessions that have not explicitly enabled remote c
 Pi's `companion_ask_user` tool asks one to four questions at once. Each question can offer options with descriptions, allow several choices (`multiSelect`), and accept a free-text "Other" answer; a question without options is free text. The browser shows them in a bottom sheet within thumb reach; "Later" hides it until you tap the waiting-question badge.
 
 Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. Question tools that draw their own `ctx.ui.custom` picker are relayed through a small adapter: pi-jar's `jar_ask` is supported, and a companion answer completes its terminal picker. Other `ctx.ui.custom` components and `ctx.ui.editor` stay terminal-only because they cannot be answered from outside. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
+
+## Notifications, camera and catching up
+
+Settings → **Notifications and camera** (on every device, not just the console) asks the browser for both permissions from a tap, as browsers require, and shows whether each is allowed, blocked or unavailable. Overview also offers a one-time "Turn on notifications" banner.
+
+With notifications on, the device gets a system notification (through the service worker, so it works for installed apps and Android) when Pi asks a question, finishes a turn or a session ends. Tapping it opens that session. Nothing is sent while you are already looking at that session. iPhone and iPad only allow web notifications from an app added to the Home Screen. The camera is used only for the pairing QR scanner.
+
+Activity no longer lives only in the open tab. The daemon keeps a bounded, in-memory log of each session's recent feed (streamed text is merged, up to 800 entries) at `GET /api/sessions/{id}/activity` on both surfaces (paired devices: shared sessions only). The UI rebuilds the feed from it when a session opens and after every reconnect or resync, so a phone that slept, dropped its connection or was closed catches up without sending a new message. Prompts, steers and answers from any device are added to that log too. The log is cleared when the daemon restarts or the session is archived.
+
+Attaching files uses plain HTTP, so it keeps working while the live socket is reconnecting (common right after a phone's file picker closes); only a deliberate disconnect or revoked access blocks it.
 
 ## Pairing and devices
 
@@ -248,9 +259,10 @@ A single-page SvelteKit app, embedded in the daemon binary:
 | Page | Who sees it | What it is for |
 |---|---|---|
 | Overview | everyone | Dot-field hero, live counts, sessions that need your answer, a labeled live-session table, and a spaced onboarding/help panel with Claymorphism actions |
-| Sessions | everyone | Searchable, filterable full-width session rows (Working / Waiting / Ended), with short titles, workspace/model metadata, View details and safe Archive actions. Paired devices only see shared sessions |
+| Sessions | everyone | Searchable, filterable full-width session rows (Working / Waiting / Ended); the whole row opens the session, the status badge sits top-right, and ended sessions offer a safe Archive action. Paired devices only see shared sessions |
 | Session detail | everyone | Activity-first transcript with Markdown, highlighted code, Mermaid diagrams, collapsible tool output/thinking and question sheets. Compact header and navigation leave more space for the shell. The expanding composer includes Auto/Plan selection, attachment previews and a full-width labeled Send/Steer action; Plan uses the existing `/plan` command, not an agent permission setting. The top-right session menu opens Shared files, Changes and Archive session. The session header shows a status dot; clicking its title reveals status and session metadata. Changes are grouped by file with clear separators and a filename filter |
-| Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings with a save bar that appears only for unsaved edits |
+| Devices | local console only | Pairing, connection status, disconnect and revoke |
+| Settings | everyone | Theme, notification and camera permissions; on the console also daemon settings with a save bar that appears only for unsaved edits |
 | Help, Privacy, Terms | everyone | Setup stepper, commands, tools, troubleshooting; data handling; terms of use. Help is opened from the Overview |
 
 The Live indicator in the header and sidebar opens the connection sheet (status, version and, on this computer, the console and device addresses and data folders).
@@ -268,7 +280,7 @@ Design notes:
 - installable PWA: scoped manifest with explicit 192×192 and 512×512 PNG icons plus a maskable icon, standalone display mode, Apple home-screen metadata, and a service worker that caches only the public shell and static assets; API/session traffic and uploads are never cached
 - mobile: bottom tab bar, safe-area insets, 44px touch targets, 16px inputs (no iOS zoom), Enter inserts a newline on touch keyboards
 - accessibility: skip link, visible focus rings, labeled controls and table metadata, accessible session menus, live regions for the feed and questions, reduced-motion support
-- the dot field is Raksara's component, loaded when the browser is idle, paused when hidden, and static under reduced motion
+- the dot field is Raksara's component, loaded when the browser is idle, paused when hidden, and static under reduced motion. It opens on the Pi Companion mark, then morphs through a computer, a phone and a terminal
 - dropping a file anywhere outside the Shared files drop zone is ignored. Without this, the browser tries to open the file itself (Firefox reports this as "may not load or link to file:///")
 
 ### Caching and updates
@@ -314,7 +326,7 @@ Clone the repository, then:
 
 `npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.2.2
+      Pi Companion v0.2.5
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722
@@ -346,6 +358,13 @@ For hot-reloading UI work, keep the daemon running and use:
 which proxies /api and /ws to the daemon on 43721.
 
 If you start Pi from the checkout without running `npm run serve`, running `/companion` can still auto-start a local daemon build if one exists under `server/target/debug` or `server/target/release`. For predictable UI work, prefer `npm run serve` in one terminal and `pi -e ./src/index.ts` in another.
+
+To regenerate the README screenshots from demo sessions (your running daemon is left alone; the demo daemon uses ports 43731/43732 and a throwaway data folder):
+
+    npm run ui:build && cargo build --release --manifest-path server/Cargo.toml
+    node tools/screenshots.mjs
+
+It needs Playwright and `cwebp`. Set `PLAYWRIGHT=/path/to/node_modules/playwright/index.mjs` if Playwright isn't installed in this repo, and `CHROME=/path/to/chrome` to use an existing browser.
 
 To test the same behavior as a published install, stop any development daemon first and install the package normally:
 

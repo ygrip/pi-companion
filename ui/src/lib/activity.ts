@@ -14,8 +14,11 @@ export type ActivityEntry = {
 const MAX_ENTRIES = 300;
 let nextId = 1;
 
+/** Daemon timestamp of the message being reduced (replays keep their original times). */
+let stamp: number | undefined;
+
 function entry(kind: ActivityKind, title: string, body = '', extra: Partial<ActivityEntry> = {}): ActivityEntry {
-  return { id: nextId++, kind, title, body, at: Date.now(), ...extra };
+  return { id: nextId++, kind, title, body, at: stamp ?? Date.now(), ...extra };
 }
 
 function cap(entries: ActivityEntry[]) {
@@ -35,6 +38,15 @@ export function replayActivity(messages: unknown[]): ActivityEntry[] {
 
 /** Reduce one bridge message into the activity feed. Returns the same array when nothing changes. */
 export function reduceBridgeMessage(entries: ActivityEntry[], message: any): ActivityEntry[] {
+  stamp = typeof message?.at === 'number' ? message.at : undefined;
+  try {
+    return reduce(entries, message);
+  } finally {
+    stamp = undefined;
+  }
+}
+
+function reduce(entries: ActivityEntry[], message: any): ActivityEntry[] {
   if (message?.type === 'error') return cap([...entries, entry('error', 'Something went wrong', String(message.message ?? ''))]);
   if (message?.type !== 'event') return entries;
 

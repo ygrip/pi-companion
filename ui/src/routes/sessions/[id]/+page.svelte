@@ -110,6 +110,8 @@
   const session = $derived(companion.session(id));
   const ended = $derived(session?.status === 'stopped');
   const feed = $derived(companion.activity[id] ?? []);
+  /** Uploads use HTTP, not the live socket; only a deliberate disconnect/revocation blocks them. */
+  const uploadBlocked = $derived(companion.connection === 'disconnected' || companion.connection === 'revoked');
   const asks = $derived(companion.asks[id] ?? []);
   const files = $derived(companion.files[id] ?? []);
   const diff = $derived(companion.diffs[id]);
@@ -327,7 +329,10 @@
     catch (error) { policyError = errorMessage(error); }
     for (const item of items) {
       if (disposed || id !== targetSession || generation !== draftGeneration) continue;
-      const error = policyError || validateAttachment(item.file, companion.uploadPolicy) || (companion.connection !== 'online' ? companion.connectionError || 'Reconnect to your workspace before attaching files.' : '');
+      // Uploads are plain HTTP and do not need the live socket. On phones the file picker
+      // backgrounds the page, so the socket is often still reconnecting when the picker
+      // returns; only a deliberate disconnect or revoked access blocks attaching.
+      const error = policyError || validateAttachment(item.file, companion.uploadPolicy) || (uploadBlocked ? 'Reconnect to your workspace before attaching files.' : '');
       if (error) { updateAttachment(item.key, { status: 'error', error }); continue; }
       try {
         if (canPreviewAttachment(item.file)) updateAttachment(item.key, { preview: URL.createObjectURL(item.file) });
@@ -441,7 +446,7 @@
           <button type="button" class="btn btn-ghost btn-icon" aria-label="Close {tab === 'files' ? 'shared files' : 'changes'}" onclick={() => selectTab('activity')}><Icon name="close" size={16} /></button>
         </header>
       {/if}
-      <input bind:this={fileInput} id="file-input" hidden type="file" multiple accept={companion.uploadPolicy.allowedUploadTypes.join(',') || undefined} disabled={ended || companion.connection !== 'online'} onchange={(e) => uploadFiles((e.currentTarget as HTMLInputElement).files)} />
+      <input bind:this={fileInput} id="file-input" hidden type="file" multiple accept={companion.uploadPolicy.allowedUploadTypes.join(',') || undefined} disabled={ended || uploadBlocked} onchange={(e) => uploadFiles((e.currentTarget as HTMLInputElement).files)} />
       <div class="body" id="panel" role="region" aria-label={tab === 'activity' ? 'Session activity' : tab === 'files' ? 'Shared files' : 'Changes'}>
         {#if tab === 'activity'}
           <div class="term">
@@ -551,7 +556,7 @@
               <span class="empty-icon"><Icon name="upload" /></span>
               <strong>{uploading ? 'Uploading…' : 'Share files with Pi'}</strong>
               <p class="muted">Private to this session and deleted when it ends.</p>
-              <button type="button" class="btn-bento primary pick" class:disabled={ended} disabled={ended || uploading > 0 || companion.connection !== 'online'} onclick={() => fileInput?.click()}><Icon name="plus" size={18} />Choose files</button>
+              <button type="button" class="btn-bento primary pick" class:disabled={ended} disabled={ended || uploading > 0 || uploadBlocked} onclick={() => fileInput?.click()}><Icon name="plus" size={18} />Choose files</button>
             </div>
             {#if invalidAttachments}
               <ul class="upload-errors" aria-label="Attachment errors">{#each attachments.filter((attachment) => attachment.status === 'error') as attachment (attachment.key)}<li role="alert"><strong>{attachment.file.name}</strong>: {attachment.error}<button type="button" class="btn btn-sm" onclick={() => detachAttachment(attachment.key)}>Dismiss</button></li>{/each}</ul>
@@ -663,7 +668,7 @@
                   Steer
                 </label>
               {/if}
-              <div class="composer-actions"><button type="button" class="btn btn-ghost btn-icon attach" aria-label={uploading ? 'Uploading files' : 'Attach files'} title="Attach files" disabled={uploading > 0 || companion.connection !== 'online'} onclick={() => fileInput?.click()}><Icon name="attach" size={20} /></button></div>
+              <div class="composer-actions"><button type="button" class="btn btn-ghost btn-icon attach" aria-label={uploading ? 'Uploading files' : 'Attach files'} title="Attach files" disabled={uploading > 0 || uploadBlocked} onclick={() => fileInput?.click()}><Icon name="attach" size={20} /></button></div>
             </div>
             {#if uploading || invalidAttachments}<p class="composer-notice" role="status">{uploading ? 'Wait for attachments to finish uploading before sending.' : 'Fix or remove invalid attachments before sending.'}</p>{/if}
             <button class="btn btn-primary send" aria-label={mode === 'plan' ? 'Send plan request' : steer && session.status === 'active' ? 'Steer current turn' : 'Send message'} disabled={companion.connection !== 'online' || uploading > 0 || invalidAttachments || (mode === 'auto' && !prompt.trim() && !attachments.some((attachment) => attachment.status === 'ready'))}>
