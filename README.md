@@ -263,7 +263,7 @@ Requirements: Node 22.17+ and stable Rust.
 
 This builds the UI, starts the daemon and prints where it is listening:
 
-      Pi Companion v0.1.0
+      Pi Companion v0.2.1
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722
