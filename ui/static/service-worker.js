@@ -1,5 +1,5 @@
-const CACHE = 'pi-companion-shell-v1';
-const SHELL = ['/', '/manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png'];
+const CACHE = 'pi-companion-shell-v2';
+const SHELL = ['/', '/manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png', '/pwa-icon.svg', '/pwa-maskable.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
