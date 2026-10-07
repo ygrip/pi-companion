@@ -11,9 +11,10 @@ export type SessionSnapshot = {
   name?: string;
   cwd: string;
   pid: number;
-  model?: string;
-  thinkingLevel?: string;
-  idle: boolean;
+  shortTitle: string;
+  status: "active" | "idle" | "stopped";
+  mainModel?: string;
+  effort?: string;
   remoteEnabled: boolean;
   connectedAt: string;
 };
