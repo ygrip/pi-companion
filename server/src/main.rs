@@ -70,6 +70,7 @@ struct AppState {
     extra_origins: Vec<String>,
     browser_tx: broadcast::Sender<Value>,
     kick_tx: broadcast::Sender<Kick>,
+    shutdown_tx: broadcast::Sender<()>,
     temp_root: PathBuf,
     data_dir: PathBuf,
 }
@@ -80,6 +81,7 @@ impl AppState {
         let devices = persisted.devices.into_iter().map(|d| (d.id.clone(), d)).collect();
         let (browser_tx, _) = broadcast::channel(1024);
         let (kick_tx, _) = broadcast::channel(64);
+        let (shutdown_tx, _) = broadcast::channel(2);
         Self {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             files: Arc::new(RwLock::new(HashMap::new())),
@@ -92,6 +94,7 @@ impl AppState {
             extra_origins,
             browser_tx,
             kick_tx,
+            shutdown_tx,
             temp_root,
             data_dir,
         }
@@ -215,6 +218,8 @@ async fn main() {
 
     let local = local_router(state.clone());
     let remote = remote_router(state.clone());
+    let mut local_shutdown = state.shutdown_tx.subscribe();
+    let mut remote_shutdown = state.shutdown_tx.subscribe();
 
     // Single instance per machine: if the ports are taken, another daemon is already
     // serving (started by another Pi session or manually). Exit quietly instead of panicking.
@@ -248,8 +253,10 @@ async fn main() {
 
     // Small, latency-sensitive frames (questions, answers, deltas): disable Nagle.
     let (local_result, remote_result) = tokio::join!(
-        axum::serve(local_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), local),
+        axum::serve(local_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), local)
+            .with_graceful_shutdown(async move { let _ = local_shutdown.recv().await; }),
         axum::serve(remote_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), remote)
+            .with_graceful_shutdown(async move { let _ = remote_shutdown.recv().await; })
     );
     local_result.expect("local server failed");
     remote_result.expect("remote server failed");
@@ -266,6 +273,7 @@ fn local_router(state: AppState) -> Router {
         .route("/api/devices/{device_id}", delete(revoke_device))
         .route("/api/devices/{device_id}/disconnect", post(disconnect_device))
         .route("/api/settings", get(get_settings).put(put_settings))
+        .route("/api/shutdown", post(shutdown_daemon))
         .route("/ws/browser", get(browser_ws))
         .route("/ws/bridge/{session_id}", get(bridge_ws))
         .fallback(get(assets::serve))
@@ -394,6 +402,12 @@ async fn local_context() -> Json<Value> {
 
 async fn remote_context() -> Json<Value> {
     Json(serde_json::json!({ "remote": true, "version": VERSION }))
+}
+
+/// Local-admin only. Used by the extension to replace an older daemon after a package upgrade.
+async fn shutdown_daemon(State(state): State<AppState>) -> StatusCode {
+    let _ = state.shutdown_tx.send(());
+    StatusCode::NO_CONTENT
 }
 
 async fn public_url(state: &AppState) -> String {
