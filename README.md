@@ -66,7 +66,7 @@ For a normal install:
 
     pi install npm:@yunazgr/pi-companion
 
-That is enough. Start Pi normally; the extension will start the daemon on demand. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
+That is enough. Start Pi normally; the extension will start the daemon on demand and keep its daemon version aligned with the installed extension. Updating the Pi package is therefore enough to update both pieces. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
 
 The lifecycle is:
 
@@ -76,7 +76,8 @@ The lifecycle is:
 4. If not, the extension resolves the daemon binary, downloading the matching GitHub Release on first use if necessary.
 5. It starts the daemon detached in the background.
 6. Other Pi sessions reuse the same daemon.
-7. The daemon keeps running independently until it is stopped or the machine restarts.
+7. On extension upgrades, the extension compares its package version with the running daemon. If they differ, it stops the old local daemon, resolves/downloads the matching release, and starts the new daemon automatically.
+8. The daemon keeps running independently until it is stopped or the machine restarts.
 
 There is exactly one daemon per machine, shared by every Pi session. The extension manages it with no configuration:
 
@@ -339,7 +340,7 @@ Before publishing, the workflow requires X.Y.Z to match both package.json and se
 
 Only after the GitHub Release exists, the same tag publishes @yunazgr/pi-companion to npm with provenance through npm Trusted Publishing (GitHub OIDC). No long-lived NPM_TOKEN is required. The trusted publisher should point to GitHub owner ygrip, repository pi-companion, workflow release.yml. Git installs need no npm credential.
 
-On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. A git install from a branch that is ahead of the newest tag falls back to the latest release.
+On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. On later extension upgrades it detects a running daemon with a different version, stops it locally, and starts the matching daemon automatically. A git install from a branch that is ahead of the newest tag falls back to the latest release.
 
 ## Security boundary
 
