@@ -133,7 +133,11 @@ Stopped sessions remain visible in the daemon registry so the dashboard does not
 The dashboard uses a compact bento + shell visual system:
 
 - bento cards for sessions, status, model/effort, files, and paired devices
-- shell-like activity surface for prompts, steering, plan, and git diff
+- shell-like activity feed: streamed assistant text and thinking, tool calls with running/ok/error state, prompts and lifecycle markers
+- inline answer cards for companion_ask_user questions, with option buttons
+- colored git diff with working-tree and staged views
+- accessible tabs (arrow keys), skip link, visible focus rings, polite live region for the feed
+- mobile first-class: safe-area insets, 44px touch targets on coarse pointers, 16px inputs to avoid iOS zoom, sticky composer, snap-scrolling session rail
 - responsive session rail that becomes horizontally scrollable on narrow screens
 - warm amber visual language aligned with Raksara/Punakawan
 - lightweight canvas dotfield inspired by Raksara, with focal density and smooth edge falloff
@@ -180,7 +184,9 @@ For extension work while running the server manually:
 
 ## Releases
 
-A tag matching vX.Y.Z triggers the release workflow.
+GitHub Actions run only for release tags. Pushing ordinary commits or opening pull requests does not trigger any workflow; CI can also be started manually with workflow_dispatch.
+
+A tag matching vX.Y.Z triggers both the CI and release workflows.
 
 Before publishing, the workflow requires X.Y.Z to match both package.json and server/Cargo.toml. It then runs TypeScript and Rust checks, builds native daemon archives for Linux x86_64, macOS arm64, macOS x86_64, and Windows x86_64, generates SHA-256 checksums, and creates a GitHub Release.
 

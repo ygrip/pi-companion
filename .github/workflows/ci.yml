@@ -1,9 +1,12 @@
 name: CI
 
+# Runs only for release tags (vX.Y.Z), not on every commit or pull request.
+# Use workflow_dispatch to run it manually.
 on:
   push:
-    branches: [main]
-  pull_request:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
 
 jobs:
   extension-ui:
