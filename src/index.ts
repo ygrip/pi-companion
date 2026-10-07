@@ -25,12 +25,12 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
   pi.on("agent_start", (_event, ctx) => {
     bridge.setContext(ctx);
-    bridge.updateIdle(false);
+    bridge.updateStatus("active");
     bridge.emit("agent.start", {});
   });
   pi.on("agent_end", (event, ctx) => {
     bridge.setContext(ctx);
-    bridge.updateIdle(true);
+    bridge.updateStatus("idle");
     bridge.emit("agent.end", event);
   });
   pi.on("message_update", (event, ctx) => {
@@ -46,6 +46,7 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.emit("tool.end", event);
   });
   pi.on("session_shutdown", event => {
+    bridge.updateStatus("stopped");
     bridge.emit("session.shutdown", event);
     bridge.close();
   });
