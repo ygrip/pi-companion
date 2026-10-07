@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - "release-v0.2.2"
 
 permissions:
   contents: write
@@ -23,7 +23,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="0.2.2"
           NPM_VERSION="$(node -p "require('./package.json').version")"
           CARGO_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' server/Cargo.toml | head -1)"
           test "$VERSION" = "$NPM_VERSION" || { echo "tag $VERSION != package.json $NPM_VERSION"; exit 1; }
@@ -143,7 +143,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          gh release create "v0.2.2" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
+            --target "${GITHUB_SHA}" \
             --generate-notes \
             --title "Pi Companion ${{ needs.validate.outputs.version }}"
