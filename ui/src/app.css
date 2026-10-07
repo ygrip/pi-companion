@@ -78,6 +78,7 @@
   --radius-sm: 8px;
   --radius: 12px;
   --radius-lg: 18px;
+  --radius-bento: 20px;
   --sidebar: 244px;
   --tabbar: 64px;
   --ease: cubic-bezier(0.2, 0.7, 0.2, 1);
@@ -299,6 +300,61 @@ pre,
   padding: 0;
 }
 
+/* Bento button: a tall, thumb-friendly tile with an icon above its label. */
+.btn-bento {
+  display: grid;
+  align-content: space-between;
+  justify-items: start;
+  gap: 10px;
+  min-height: 76px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-bento);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 600;
+  text-align: left;
+  text-decoration: none;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), transform 120ms var(--ease);
+}
+
+.btn-bento:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-3);
+}
+
+.btn-bento:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-bento:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn-bento.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.btn-bento.primary:hover:not(:disabled) {
+  background: var(--accent-hover);
+}
+
+.btn-bento .icon {
+  color: var(--accent-text);
+}
+
+.btn-bento.primary .icon {
+  color: inherit;
+}
+
+.btn-block {
+  width: 100%;
+}
+
 /* ---------- Form controls ---------- */
 
 .input,
@@ -413,6 +469,202 @@ pre,
   gap: 12px;
   padding: 16px 20px;
   border-bottom: 1px solid var(--border);
+}
+
+/* Bento layout: modular tiles on a responsive grid. Use .span-2 / .span-row for emphasis. */
+.bento {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+  gap: 14px;
+}
+
+.tile {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-width: 0;
+  padding: 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-bento);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.tile.sunken {
+  background: var(--bg-sunken);
+  box-shadow: none;
+}
+
+.tile.accent {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+@media (min-width: 720px) {
+  .bento .span-2 {
+    grid-column: span 2;
+  }
+
+  .bento .span-row {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Chips: compact labels for metadata and selectable options. Badges: counts and status. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 0.8rem;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.chip > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.chip {
+  cursor: pointer;
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease);
+}
+
+button.chip:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.chip[aria-pressed='true'],
+.chip[aria-checked='true'],
+.chip.on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.chip.mono {
+  font-family: var(--mono);
+  font-size: 0.76rem;
+}
+
+.badge.count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  justify-content: center;
+  border: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 0.7rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge.count.quiet {
+  background: var(--surface-3);
+  color: var(--text-2);
+}
+
+/*
+ * Bottom sheet built on <dialog>: anchored to the bottom edge so actions sit under the thumb,
+ * full width on phones, a floating panel on wide screens. Its body scrolls; it never crops.
+ */
+.sheet {
+  position: fixed;
+  inset: auto 0 0 0;
+  width: min(640px, 100%);
+  max-width: 100%;
+  max-height: min(88dvh, 820px);
+  margin: 0 auto;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-bottom: 0;
+  border-radius: 24px 24px 0 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 -18px 50px -20px rgb(0 0 0 / 0.5);
+}
+
+.sheet[open] {
+  display: flex;
+  flex-direction: column;
+  animation: sheet-in 260ms var(--ease);
+}
+
+.sheet::backdrop {
+  background: var(--overlay);
+}
+
+.sheet-grip {
+  flex: none;
+  width: 40px;
+  height: 4px;
+  margin: 10px auto 2px;
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.sheet-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 20px 12px;
+}
+
+.sheet-body {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 4px 20px 16px;
+}
+
+.sheet-foot {
+  flex: none;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  gap: 10px;
+  padding: 12px 20px calc(14px + env(safe-area-inset-bottom));
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+@media (min-width: 900px) {
+  .sheet {
+    bottom: 24px;
+    border-bottom: 1px solid var(--border-strong);
+    border-radius: 24px;
+  }
+
+  .sheet-foot {
+    border-radius: 0 0 24px 24px;
+  }
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
 }
 
 .badge {

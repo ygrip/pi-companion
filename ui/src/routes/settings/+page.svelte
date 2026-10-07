@@ -77,7 +77,7 @@
     </div>
   </header>
 
-  <section class="card section" aria-labelledby="appearance">
+  <section class="card tile section" aria-labelledby="appearance">
     <div class="section-copy">
       <h2 id="appearance">Appearance</h2>
       <p class="muted">Saved in this browser only.</p>
@@ -97,7 +97,7 @@
     <div class="card empty"><span class="empty-icon"><Icon name="alert" /></span><h2>Couldn’t load settings</h2><p>{loadError}</p></div>
   {:else if data}
     <form class="stack" onsubmit={(event) => { event.preventDefault(); void save(); }}>
-      <section class="card section" aria-labelledby="pairing">
+      <section class="card tile section" aria-labelledby="pairing">
         <div class="section-copy">
           <h2 id="pairing">Pairing</h2>
           <p class="muted">Where paired devices reach this computer, and how long a pairing code stays valid.</p>
@@ -121,7 +121,7 @@
         </div>
       </section>
 
-      <section class="card section" aria-labelledby="files">
+      <section class="card tile section" aria-labelledby="files">
         <div class="section-copy">
           <h2 id="files">Files</h2>
           <p class="muted">Files you hand to a session live in its private temporary folder.</p>
@@ -135,15 +135,15 @@
         </div>
       </section>
 
-      <div class="savebar" class:visible={dirty || error}>
+      <div class="savebar">
         {#if error}<span class="error" role="alert"><Icon name="alert" size={16} />{error}</span>
-        {:else}<span class="muted">You have unsaved changes.</span>{/if}
+        {:else}<span class="muted">{dirty ? 'You have unsaved changes.' : 'All changes saved.'}</span>{/if}
         <button type="button" class="btn btn-ghost" onclick={() => data && apply(data)} disabled={!dirty || saving}>Discard</button>
         <button class="btn btn-primary" disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save changes'}</button>
       </div>
     </form>
 
-    <section class="card section" aria-labelledby="about">
+    <section class="card tile section" aria-labelledby="about">
       <div class="section-copy">
         <h2 id="about">About this daemon</h2>
         <p class="muted">Pi Companion v{data.about.version}</p>
@@ -196,6 +196,19 @@
     font-size: 0.88rem;
   }
 
+  .fields .field,
+  .fields .input,
+  .unit,
+  .unit .input {
+    width: 100%;
+    max-width: none;
+  }
+
+  .field {
+    display: grid;
+    align-content: start;
+    gap: 7px;
+  }
   .fields {
     display: grid;
     gap: 20px;
@@ -212,7 +225,9 @@
   }
 
   .unit .input {
-    width: 110px;
+    width: 100%;
+    min-width: 0;
+    flex: 1;
   }
 
   .unit span {
@@ -278,19 +293,15 @@
 
   .savebar {
     position: sticky;
-    bottom: 12px;
-    display: none;
+    bottom: 8px;
+    display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 10px 10px 16px;
+    padding: 10px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-lg);
     background: var(--surface);
     box-shadow: var(--shadow);
-  }
-
-  .savebar.visible {
-    display: flex;
   }
 
   .savebar > span {
@@ -354,6 +365,19 @@
 
     .short {
       max-width: none;
+    }
+    .savebar {
+      flex-wrap: wrap;
+      padding: 10px;
+    }
+
+    .savebar > span {
+      flex: 1 0 100%;
+    }
+
+    .savebar .btn {
+      flex: 1;
+      min-height: 48px;
     }
   }
 </style>

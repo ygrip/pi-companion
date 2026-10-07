@@ -6,6 +6,7 @@
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
   import { companion } from '#lib/companion.svelte.ts';
+  import { toasts } from '#lib/toast.svelte.ts';
 
   // The dot field morphs Pi → computer → companion, on the same loop as Raksara.
   const art = [piArt, computerArt, companionArt];
@@ -33,16 +34,27 @@
   const steps = $derived(
     companion.isAdmin
       ? [
-          { title: 'Run Pi as usual', body: 'Every Pi session with the extension shows up here on its own. Nothing to configure.' },
-          { title: 'Pair your phone once', body: 'Scan a code from Devices. The phone stays trusted until you revoke it.' },
-          { title: 'Share what you want', body: 'Type /remote-control inside a Pi session to make it visible on paired devices.' }
+          { title: 'Install the Pi package', body: 'Install the extension once. The matching daemon binary downloads automatically on first use.', code: 'pi install git:github.com/ygrip/pi-companion' },
+          { title: 'Enable each Pi session', body: 'Open Pi in your project and run /companion in every session you want to control. It starts the daemon, prints this dashboard URL and enables remote control for that session. /remote-control toggles sharing off or on.' },
+          { title: 'Open this dashboard', body: 'Keep this dashboard open on your computer to follow the sessions you enabled.' },
+          { title: 'Pair your phone', body: 'From Devices, scan the QR code or enter the one-time code. Pairing is an admin-only setup step.' },
+          { title: 'Follow and steer', body: 'Watch activity, answer Pi’s questions, drop files into a session and review changes.' }
         ]
       : [
-          { title: 'Pick a session', body: 'Only sessions your computer has chosen to share appear here.' },
-          { title: 'Follow along', body: 'Read Pi’s replies, tool calls and questions as they happen.' },
-          { title: 'Step in when needed', body: 'Answer questions, send a prompt, steer the current turn, or stop it.' }
+          { title: 'Choose a shared session', body: 'Your computer shares sessions only when remote control is enabled for them.' },
+          { title: 'Follow activity', body: 'Read Pi’s replies and tool activity as it happens.' },
+          { title: 'Answer and steer', body: 'Answer questions, send a prompt, drop files and review changes.' }
         ]
   );
+
+  async function copyInstall() {
+    try {
+      await navigator.clipboard.writeText('pi install git:github.com/ygrip/pi-companion');
+      toasts.show('Install command copied.', 'success');
+    } catch {
+      toasts.show('Copy failed.', 'error');
+    }
+  }
 
   onMount(() => {
     // The canvas is decorative: load it after first paint and when the browser is idle.
@@ -91,10 +103,10 @@
 
   <section class="stats" aria-label="At a glance">
     {#each stats as stat (stat.label)}
-      <a class="stat card" href={stat.href}>
+      <a class="stat tile" href={stat.href}>
         <span class="stat-icon"><Icon name={stat.icon} /></span>
         <span class="stat-label">{stat.label}</span>
-        <strong>{stat.value}</strong>
+        <span class="badge count">{stat.value}</span>
         <span class="subtle">{stat.hint}</span>
       </a>
     {/each}
@@ -128,10 +140,20 @@
   <section class="steps" aria-labelledby="steps-heading">
     <h2 id="steps-heading" class="sr-only">How it works</h2>
     {#each steps as step, index (step.title)}
-      <article class="step">
+      <article class="step tile" class:span-2={companion.isAdmin && index === 1}>
         <span class="step-index">{index + 1}</span>
         <h3>{step.title}</h3>
-        <p class="muted">{step.body}</p>
+        {#if companion.isAdmin && index === 1}
+          <p class="muted">Open Pi in your project and run <code>/companion</code> in every session you want to control. It starts the daemon, prints this dashboard URL and enables remote control for that session. <code>/remote-control</code> toggles sharing off or on.</p>
+        {:else}
+          <p class="muted">{step.body}</p>
+        {/if}
+        {#if 'code' in step && step.code}
+          <div class="install-command">
+            <code>{step.code}</code>
+            <button class="btn btn-ghost btn-icon" aria-label="Copy install command" onclick={copyInstall}><Icon name="copy" /></button>
+          </div>
+        {/if}
       </article>
     {/each}
   </section>
@@ -255,13 +277,10 @@
     color: var(--text-2);
   }
 
-  .stat strong {
+  .stat .badge {
     grid-area: value;
+    justify-self: start;
     margin-top: 8px;
-    font-size: 1.9rem;
-    line-height: 1;
-    letter-spacing: -0.03em;
-    font-variant-numeric: tabular-nums;
   }
 
   .stat .subtle {
@@ -285,26 +304,26 @@
   .steps {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+    gap: 14px;
   }
 
   .step {
     display: grid;
-    gap: 6px;
+    align-content: start;
+    gap: 8px;
+    min-width: 0;
     padding: 18px;
-    border: 1px dashed var(--border-strong);
-    border-radius: var(--radius-lg);
   }
 
   .step-index {
     display: grid;
     place-items: center;
-    width: 26px;
-    height: 26px;
+    width: 30px;
+    height: 30px;
     margin-bottom: 4px;
-    border-radius: 50%;
-    background: var(--surface-3);
-    font: 700 0.8rem/1 var(--mono);
+    border-radius: 10px;
+    background: var(--accent-soft);
+    font: 700 0.85rem/1 var(--mono);
     color: var(--accent-text);
   }
 
@@ -312,6 +331,26 @@
     font-size: 0.9rem;
   }
 
+  .install-command {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    min-width: 0;
+    padding: 4px 4px 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-sunken);
+  }
+
+  .install-command code {
+    overflow-wrap: anywhere;
+    font-size: 0.78rem;
+  }
+
+  .install-command button {
+    flex: none;
+  }
   @media (max-width: 900px) {
     .hero {
       grid-template-columns: minmax(0, 1fr);
@@ -337,11 +376,14 @@
     }
 
     .steps {
-      grid-template-columns: minmax(0, 1fr);
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
   }
 
   @media (max-width: 520px) {
+    .steps {
+      grid-template-columns: minmax(0, 1fr);
+    }
     .stats {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;
@@ -351,9 +393,6 @@
       padding: 12px;
     }
 
-    .stat strong {
-      font-size: 1.5rem;
-    }
 
     .cta .btn {
       flex: 1;

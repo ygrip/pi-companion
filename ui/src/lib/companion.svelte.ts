@@ -1,6 +1,7 @@
-import { pushUser, reduceBridgeMessage, type ActivityEntry, type AskRequest } from './activity.ts';
+import { pushUser, reduceBridgeMessage, type ActivityEntry } from './activity.ts';
 import { sortSessions } from './format.ts';
-import type { PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
+import { toasts } from './toast.svelte.ts';
+import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
 
 /**
  * Single live connection to the daemon, shared by every page.
@@ -26,7 +27,7 @@ export class ApiError extends Error {
   }
 }
 
-type Diff = { staged: boolean; text: string; at: number };
+type Diff = { staged: boolean; text: string; at: number; error?: string };
 
 class Companion {
   booted = $state(false);
@@ -40,7 +41,6 @@ class Companion {
   devices = $state<PairedDevice[]>([]);
   // Per-session live data. Raw state + reassignment keeps streaming cheap.
   activity = $state.raw<Record<string, ActivityEntry[]>>({});
-  asks = $state.raw<Record<string, AskRequest[]>>({});
   files = $state.raw<Record<string, TempFile[]>>({});
   diffs = $state.raw<Record<string, Diff>>({});
 
@@ -59,6 +59,15 @@ class Companion {
 
   session(id: string) {
     return this.sessions.find((session) => session.id === id) ?? null;
+  }
+
+  /** Pending questions per live session. They travel in the session snapshot, so late joiners see them. */
+  get asks(): Record<string, AskRequest[]> {
+    const result: Record<string, AskRequest[]> = {};
+    for (const session of this.sessions) {
+      if (session.status !== 'stopped' && session.asks?.length) result[session.id] = session.asks;
+    }
+    return result;
   }
 
   pendingAsks(id: string) {
@@ -215,12 +224,9 @@ class Companion {
   private handleBridge(sessionId: string, inner: any) {
     if (!sessionId || !inner) return;
     if (inner.type === 'git.diff') {
-      this.diffs = { ...this.diffs, [sessionId]: { staged: Boolean(inner.staged), text: inner.diff ?? '', at: Date.now() } };
-      return;
-    }
-    if (inner.type === 'ask.request') {
-      const list = (this.asks[sessionId] ?? []).filter((ask) => ask.requestId !== inner.requestId);
-      this.asks = { ...this.asks, [sessionId]: [...list, inner as AskRequest] };
+      const error = typeof inner.error === 'string' ? inner.error : undefined;
+      this.diffs = { ...this.diffs, [sessionId]: { staged: Boolean(inner.staged), text: inner.diff ?? '', at: Date.now(), error } };
+      if (error) toasts.show(error, 'error');
       return;
     }
     const current = this.activity[sessionId] ?? [];
@@ -240,10 +246,24 @@ class Companion {
     return true;
   }
 
-  answer(sessionId: string, requestId: string, answer: string) {
-    if (!this.send(sessionId, { type: 'ask_answer', requestId, answer })) return false;
-    this.asks = { ...this.asks, [sessionId]: (this.asks[sessionId] ?? []).filter((ask) => ask.requestId !== requestId) };
-    this.activity = { ...this.activity, [sessionId]: pushUser(this.activity[sessionId] ?? [], 'You · answer', answer) };
+  /** Drop an ask locally right away; the bridge's session.update confirms it. */
+  private withoutAsk(sessionId: string, requestId: string) {
+    this.sessions = this.sessions.map((session) =>
+      session.id === sessionId ? { ...session, asks: (session.asks ?? []).filter((ask) => ask.requestId !== requestId) } : session
+    );
+  }
+
+  answer(sessionId: string, requestId: string, answers: AskAnswers) {
+    if (!this.send(sessionId, { type: 'ask_answer', requestId, answers })) return false;
+    this.withoutAsk(sessionId, requestId);
+    const summary = Object.values(answers).map((values) => values.join(', ')).join(' · ');
+    this.activity = { ...this.activity, [sessionId]: pushUser(this.activity[sessionId] ?? [], 'You · answer', summary) };
+    return true;
+  }
+
+  dismissAsk(sessionId: string, requestId: string) {
+    if (!this.send(sessionId, { type: 'ask_cancel', requestId })) return false;
+    this.withoutAsk(sessionId, requestId);
     return true;
   }
 

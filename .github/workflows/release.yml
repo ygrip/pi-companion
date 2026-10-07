@@ -108,9 +108,13 @@ jobs:
             ${{ matrix.artifact }}.zip
           if-no-files-found: error
 
+  # Publish to npm only after the GitHub release exists, so the extension's first-run
+  # binary download (releases/download/v<version>/…) never races a missing release.
   npm:
-    needs: [validate, test]
+    needs: [validate, release]
     runs-on: ubuntu-latest
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -120,18 +124,13 @@ jobs:
       - run: npm install
       - name: Publish npm package
         if: env.NODE_AUTH_TOKEN != ''
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish --access public --provenance
       - name: Explain skipped npm publication
         if: env.NODE_AUTH_TOKEN == ''
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: echo "NPM_TOKEN is not configured; native release artifacts will still be published."
+        run: echo "NPM_TOKEN is not configured; git installs (pi install git:github.com/ygrip/pi-companion) still work."
 
   release:
-    needs: [validate, rust, npm]
-    if: always() && needs.validate.result == 'success' && needs.rust.result == 'success' && (needs.npm.result == 'success' || needs.npm.result == 'skipped')
+    needs: [validate, rust]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4

@@ -139,7 +139,10 @@
   <section class="card list-card" aria-labelledby="list-heading">
     <div class="card-head">
       <h2 id="list-heading">Paired devices</h2>
-      <span class="subtle">{companion.devices.length} paired · {connected} connected</span>
+      <div class="chips" aria-label="Device counts">
+        <span class="badge count">{companion.devices.length}<span class="sr-only"> paired devices</span></span>
+        <span class="badge count quiet">{connected}<span class="sr-only"> connected</span></span>
+      </div>
     </div>
     {#if companion.devices.length === 0}
       <div class="empty">
@@ -154,9 +157,9 @@
             <span class="device-icon"><Icon name="devices" /></span>
             <div class="device-main">
               <div class="device-title">
-                <strong>{device.name}</strong>
+                <strong class="chip"><span>{device.name}</span></strong>
                 {#if device.connected}
-                  <span class="badge ok"><span class="dot online" aria-hidden="true"></span>Connected{device.connections > 1 ? ' · ' + device.connections + ' tabs' : ''}</span>
+                  <span class="badge ok"><span class="dot online" aria-hidden="true"></span>Connected{#if device.connections > 1}<span class="badge count quiet" aria-label="{device.connections} connections">{device.connections}</span>{/if}</span>
                 {:else}
                   <span class="badge"><span class="dot" aria-hidden="true"></span>Disconnected</span>
                 {/if}

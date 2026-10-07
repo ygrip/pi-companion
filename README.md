@@ -21,7 +21,7 @@ or straight from git:
 
     pi install git:github.com/ygrip/pi-companion
 
-Then start pi as usual and run /companion to get the dashboard address. Nothing else to configure: the extension finds or starts the daemon on its own (see Daemon).
+Then start pi as usual and run /companion in each session you want to follow from the dashboard or your phone. It starts the daemon if needed, prints the dashboard address and shares that session with paired devices (`/companion off` stops sharing). Nothing else to configure: the extension finds or starts the daemon on its own, downloading the matching sha256-verified daemon binary from GitHub Releases on first use (see Daemon).
 
 ## Architecture
 
@@ -104,11 +104,17 @@ The configured public URL is used only to construct pairing invitations.
 
 Inside any Pi session:
 
-    /remote-control
-
-This toggles whether that session is visible and controllable from paired devices.
+    /companion          # enable for this session (and print the dashboard address)
+    /companion off      # stop sharing this session
+    /remote-control     # toggle sharing on/off
 
 A paired device cannot access sessions that have not explicitly enabled remote control.
+
+## Questions from Pi
+
+Pi's `companion_ask_user` tool asks one to four questions at once. Each question can offer options with descriptions, allow several choices (`multiSelect`), and accept a free-text "Other" answer; a question without options is free text. The browser shows them in a bottom sheet within thumb reach; "Later" hides it until you tap the waiting-question badge.
+
+Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. `ctx.ui.editor` and `ctx.ui.custom` stay terminal-only because they cannot be dismissed programmatically. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
 
 ## Pairing and devices
 
@@ -125,7 +131,7 @@ Each paired device shows a live **Connected** / **Disconnected** status (with th
 
 Paired devices and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json` (mode 0600; override the directory with `PI_COMPANION_HOME`).
 
-A phone pairs once with the daemon. Individual Pi sessions still opt in using /remote-control.
+A phone pairs once with the daemon. Individual Pi sessions still opt in using /companion.
 
 ## Settings
 
@@ -186,14 +192,17 @@ Stopped sessions remain visible in the daemon registry so the dashboard does not
 
 ## UI
 
-A single-page SvelteKit app, embedded in the daemon binary, with four sections:
+A single-page SvelteKit app, embedded in the daemon binary:
 
 | Page | Who sees it | What it is for |
 |---|---|---|
-| Overview | everyone | Dot-field hero that morphs the Pi symbol into a computer, then a phone; live counts; recent sessions; how it works |
+| Overview | everyone | Dot-field hero, live counts, recent sessions, step-by-step setup |
 | Sessions | everyone | Searchable, filterable list (Working / Waiting / Ended). Paired devices only see shared sessions |
-| Session detail | everyone | Activity stream, answer cards for Pi's questions, files, git changes, /plan, message / steer / stop |
+| Session detail | everyone | Terminal-style activity transcript, question sheet, files, git changes, /plan, message / steer. Session details are collapsed under the title |
 | Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings |
+| Help, Privacy, Terms | everyone | Usage guide and troubleshooting, data handling, terms of use |
+
+Git problems on the Changes tab (for example a folder that is not a git repository) show as a toast, never in the transcript.
 
 Design notes:
 
@@ -282,7 +291,9 @@ A tag matching vX.Y.Z triggers both the CI and release workflows.
 
 Before publishing, the workflow requires X.Y.Z to match both package.json and server/Cargo.toml. It then runs TypeScript and Rust checks, builds native daemon archives for Linux x86_64, macOS arm64, macOS x86_64, and Windows x86_64, generates SHA-256 checksums, and creates a GitHub Release.
 
-If the repository has an NPM_TOKEN secret, the same validated tag also publishes @ygrip/pi-companion to npm with provenance. Without that secret, the native GitHub Release still proceeds.
+Only after the GitHub Release exists, and only if the repository has an NPM_TOKEN secret, the same tag publishes @ygrip/pi-companion to npm with provenance, so an npm install never looks for a daemon binary that is not uploaded yet. Git installs need no token.
+
+On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. A git install from a branch that is ahead of the newest tag falls back to the latest release.
 
 ## Security boundary
 

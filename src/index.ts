@@ -1,12 +1,32 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import { formatAnswers, toQuestions } from "./ask.js";
 import { CompanionBridge } from "./bridge.js";
 import { adminHttpUrl, ensureDaemon } from "./daemon.js";
 
-const AskParams = Type.Object({
-  question: Type.String({ description: "Question to ask through Pi Companion" }),
-  options: Type.Optional(Type.Array(Type.String()))
+const AskOptionParam = Type.Union([
+  Type.String(),
+  Type.Object({
+    label: Type.String({ description: "Short choice label (1-5 words)" }),
+    description: Type.Optional(Type.String({ description: "What choosing this means" }))
+  })
+]);
+
+const AskQuestionParam = Type.Object({
+  question: Type.String({ description: "The full question" }),
+  header: Type.Optional(Type.String({ description: "Very short topic label shown as a chip, e.g. \"Database\"" })),
+  options: Type.Optional(Type.Array(AskOptionParam, { description: "2-6 choices. Omit for a free-text answer." })),
+  multiSelect: Type.Optional(Type.Boolean({ description: "Allow choosing several options" })),
+  allowCustom: Type.Optional(Type.Boolean({ description: "Offer an 'Other' free-text answer (default true)" }))
 });
+
+const AskParams = Type.Object({
+  question: Type.Optional(Type.String({ description: "Single question (shorthand for one entry in questions)" })),
+  options: Type.Optional(Type.Array(Type.String(), { description: "Choices for the single question" })),
+  questions: Type.Optional(Type.Array(AskQuestionParam, { minItems: 1, maxItems: 4, description: "1-4 related questions answered together" }))
+});
+
+const ASK_TIMEOUT_MS = 10 * 60_000;
 
 const DeleteTempFileParams = Type.Object({
   fileId: Type.String({ description: "Opaque Pi Companion temporary file id" })
@@ -82,14 +102,35 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "companion_ask_user",
     label: "Ask via Companion",
-    description: "Ask the user through the Pi Companion web UI when remote control is active.",
+    description:
+      "Ask the user one to four questions through the Pi Companion web/phone UI. Each question can offer options (single or multi-select) and an optional free-text answer.",
     parameters: AskParams,
     executionMode: "sequential",
-    async execute(_toolCallId, params) {
-      const answer = await bridge.ask(params.question, params.options);
+    async execute(_toolCallId, params, signal) {
+      const items = params.questions?.length
+        ? params.questions
+        : params.question
+          ? [{ question: params.question, options: params.options }]
+          : [];
+      if (!items.length) {
+        return { content: [{ type: "text", text: "Provide `question` or `questions`." }], details: { questions: [], answers: null } };
+      }
+      const questions = toQuestions(items);
+      const timeout = AbortSignal.timeout(ASK_TIMEOUT_MS);
+      const answers = await bridge.ask(
+        { source: "companion", questions },
+        signal ? AbortSignal.any([signal, timeout]) : timeout
+      );
       return {
-        content: [{ type: "text", text: answer || "No answer received from Pi Companion." }],
-        details: { question: params.question, answer }
+        content: [{
+          type: "text",
+          text: answers
+            ? formatAnswers(questions, answers)
+            : timeout.aborted
+              ? "No answer received from Pi Companion within 10 minutes."
+              : "The user dismissed the question in Pi Companion."
+        }],
+        details: { questions, answers }
       };
     }
   });
@@ -129,12 +170,21 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("companion", {
-    description: "Show the Pi Companion dashboard address (starts the daemon if needed)",
-    handler: async (_args, ctx) => {
+    description: "Enable Pi Companion for this session and show the dashboard address (`/companion off` to stop sharing)",
+    handler: async (args, ctx) => {
       const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
+      if (!up) {
+        ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
+        return;
+      }
+      void bridge.connect();
+      const enabled = args.trim().toLowerCase() !== "off";
+      bridge.setRemoteEnabled(enabled);
       ctx.ui.notify(
-        up ? "Pi Companion: " + adminHttpUrl() : "Pi Companion daemon is not reachable at " + adminHttpUrl(),
-        up ? "info" : "warning"
+        enabled
+          ? "Pi Companion enabled for this session: " + adminHttpUrl() + " (paired devices can now see it)"
+          : "Pi Companion: this session is no longer shared with paired devices.",
+        "info"
       );
     }
   });

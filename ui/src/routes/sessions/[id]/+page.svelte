@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
   import { page } from '$app/state';
+  import AskSheet from '#lib/AskSheet.svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
@@ -22,7 +23,8 @@
   let steer = $state(false);
   let plan = $state('');
   let staged = $state(false);
-  let askDrafts = $state<Record<string, string>>({});
+  let infoOpen = $state(false);
+  let askOpen = $state(false);
   let uploading = $state(0);
   let dragging = $state(false);
   let follow = $state(true);
@@ -44,6 +46,7 @@
     if (id === lastId) return;
     lastId = id;
     tab = 'activity';
+    infoOpen = false;
     follow = true;
     unseen = 0;
     if (session && !ended) void companion.refreshFiles(id).catch(() => {});
@@ -121,7 +124,7 @@
   function submit() {
     const text = prompt.trim();
     if (!text || ended) return;
-    if (!companion.prompt(id, text, steer)) {
+    if (!companion.prompt(id, text, steer && session?.status === 'active')) {
       toasts.show('Not connected. Your message was not sent.', 'error');
       return;
     }
@@ -145,17 +148,6 @@
     if (!promptEl) return;
     promptEl.style.height = 'auto';
     promptEl.style.height = Math.min(promptEl.scrollHeight, 180) + 'px';
-  }
-
-  function answer(requestId: string, value: string) {
-    const text = value.trim();
-    if (!text) return;
-    if (!companion.answer(id, requestId, text)) toasts.show('Not connected. Try again in a moment.', 'error');
-  }
-
-  function stop() {
-    if (companion.send(id, { type: 'abort' })) toasts.show('Asked Pi to stop the current turn.');
-    else toasts.show('Not connected.', 'error');
   }
 
   function loadDiff(nextStaged = staged) {
@@ -201,13 +193,14 @@
     void uploadFiles(event.dataTransfer?.files);
   }
 
-  const kindIcon: Record<ActivityEntry['kind'], IconName> = {
-    assistant: 'sparkle',
-    thinking: 'brain',
-    tool: 'tool',
-    lifecycle: 'dot',
-    error: 'alert',
-    user: 'user'
+  // Shell-style line prefixes for the activity transcript.
+  const glyph: Record<ActivityEntry['kind'], string> = {
+    assistant: '│',
+    thinking: '∴',
+    tool: '$',
+    lifecycle: '·',
+    error: '!',
+    user: '❯'
   };
 
   const diffStats = $derived.by(() => {
@@ -244,33 +237,37 @@
 {:else}
   <div class="detail">
     <header class="head">
-      <a class="back" href="/sessions"><Icon name="back" size={16} />Sessions</a>
-      <div class="title-row">
-        <div class="title">
-          <h1>{sessionTitle(session)}</h1>
-          <code title={session.cwd}>{prettyPath(session.cwd)}</code>
-        </div>
-        <button class="btn btn-danger" onclick={stop} disabled={ended || session.status !== 'active'} title="Stop Pi's current turn">
-          <Icon name="stop" size={16} />Stop
+      <a class="btn btn-ghost btn-icon" href="/sessions" aria-label="All sessions"><Icon name="back" /></a>
+      <h1 class="title">
+        <button aria-expanded={infoOpen} aria-controls="session-info" onclick={() => (infoOpen = !infoOpen)}>
+          <span>{sessionTitle(session)}</span>
+          <Icon name="chevron" size={16} class="caret" />
         </button>
-      </div>
-      <div class="chips scroll-x">
-        <span class="badge" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}>
-          <span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}
-        </span>
-        <span class="badge">{session.mainModel ?? 'Model not reported'}</span>
-        {#if session.effort}<span class="badge">Thinking: {session.effort}</span>{/if}
-        {#if companion.isAdmin}
-          <span class="badge" title={session.remoteEnabled ? 'Visible on paired devices' : 'Type /remote-control in Pi to share'}>
-            <Icon name="link" size={12} />{session.remoteEnabled ? 'Shared with devices' : 'This computer only'}
-          </span>
-        {/if}
-        <span class="badge">Started {relativeTime(session.connectedAt)}</span>
-      </div>
+      </h1>
+      <span class="badge" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}>
+        <span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}
+      </span>
+      {#if asks.length}
+        <button class="badge count ask-count" onclick={() => (askOpen = true)} aria-label="{asks.length} {asks.length === 1 ? 'question' : 'questions'} waiting, open">
+          {asks.length}
+        </button>
+      {/if}
     </header>
 
-    <section class="panel card">
-      <div class="tabs scroll-x" role="tablist" aria-label="Session views" tabindex="-1" onkeydown={onTabKey}>
+    <div class="info chips" id="session-info" hidden={!infoOpen}>
+      <span class="chip mono" title={session.cwd}><Icon name="folder" size={13} /><span>{prettyPath(session.cwd)}</span></span>
+      {#if session.mainModel}<span class="chip"><Icon name="sparkle" size={13} /><span>{session.mainModel}</span></span>{/if}
+      {#if session.effort}<span class="chip"><Icon name="brain" size={13} /><span>{session.effort}</span></span>{/if}
+      {#if companion.isAdmin}
+        <span class="chip" class:on={session.remoteEnabled}>
+          <Icon name="link" size={13} /><span>{session.remoteEnabled ? 'Shared with devices' : 'Not shared · run /companion'}</span>
+        </span>
+      {/if}
+      <span class="chip"><span>Started {relativeTime(session.connectedAt)}</span></span>
+    </div>
+
+    <section class="panel">
+      <div class="tabs" role="tablist" aria-label="Session views" tabindex="-1" onkeydown={onTabKey}>
         {#each tabs as item (item.key)}
           <button
             id="tab-{item.key}"
@@ -279,73 +276,63 @@
             aria-controls="panel"
             tabindex={tab === item.key ? 0 : -1}
             onclick={() => selectTab(item.key)}>
-            <Icon name={item.icon} size={16} />{item.label}
-            {#if item.key === 'activity' && asks.length}<span class="count">{asks.length}</span>{/if}
-            {#if item.key === 'files' && files.length}<span class="count muted-count">{files.length}</span>{/if}
+            <Icon name={item.icon} size={18} />
+            <span>{item.label}</span>
+            {#if item.key === 'files' && files.length}<span class="badge count quiet" aria-label="{files.length} files">{files.length}</span>{/if}
+            {#if item.key === 'changes' && diff?.text && diffStats.files}<span class="badge count quiet" aria-label="{diffStats.files} changed files">{diffStats.files}</span>{/if}
           </button>
         {/each}
       </div>
 
-      {#if asks.length}
-        <div class="asks scroll" role="region" aria-label="Questions from Pi" aria-live="assertive">
-          {#each asks as ask (ask.requestId)}
-            <form class="ask" onsubmit={(event) => { event.preventDefault(); answer(ask.requestId, askDrafts[ask.requestId] ?? ''); }}>
-              <div class="ask-head"><Icon name="question" size={16} /><span class="eyebrow">Pi is asking</span></div>
-              <p>{ask.question}</p>
-              {#if ask.options?.length}
-                <div class="options">
-                  {#each ask.options as option (option)}
-                    <button type="button" class="btn btn-sm" onclick={() => answer(ask.requestId, option)}>{option}</button>
-                  {/each}
-                </div>
-              {/if}
-              <div class="ask-input">
-                <label class="sr-only" for="ask-{ask.requestId}">Your answer</label>
-                <input id="ask-{ask.requestId}" class="input" bind:value={askDrafts[ask.requestId]} placeholder="Or type your own answer" autocomplete="off" />
-                <button class="btn btn-primary" type="submit">Answer</button>
-              </div>
-            </form>
-          {/each}
-        </div>
-      {/if}
-
       <div class="body" id="panel" role="tabpanel" aria-labelledby="tab-{tab}">
         {#if tab === 'activity'}
-          <!-- Scrollable region must be keyboard-focusable (WCAG 2.1.1). -->
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-          <div class="feed scroll" bind:this={feedEl} onscroll={onFeedScroll} tabindex="0" aria-label="Session activity">
-            {#if feed.length === 0}
-              <div class="empty quiet">
-                <span class="empty-icon"><Icon name="activity" /></span>
-                <p>Nothing yet. Pi's replies, tool calls and questions will stream in here as they happen.</p>
-              </div>
-            {:else}
-              <ol aria-live="polite" aria-relevant="additions">
-                {#each feed as entry (entry.id)}
-                  <li class="entry {entry.kind} {entry.status ?? ''}">
-                    <span class="marker"><Icon name={kindIcon[entry.kind]} size={14} /></span>
-                    <div class="entry-main">
-                      <div class="entry-meta">
-                        <strong>{entry.title}</strong>
-                        {#if entry.status === 'running'}<span class="badge accent">Running</span>
-                        {:else if entry.status === 'ok'}<span class="badge ok">Done</span>
-                        {:else if entry.status === 'error'}<span class="badge danger">Failed</span>{/if}
-                        <time datetime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time>
+          <div class="term">
+            <!-- Scrollable region must be keyboard-focusable (WCAG 2.1.1). -->
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+            <div class="feed scroll" bind:this={feedEl} onscroll={onFeedScroll} tabindex="0" aria-label="Session activity">
+              <p class="line banner"><span class="glyph">~</span><span>{prettyPath(session.cwd)}</span></p>
+              {#if feed.length === 0}
+                <p class="line dim"><span class="glyph">#</span><span>Waiting for Pi. Replies, tool calls and questions stream here.</span></p>
+              {:else}
+                <ol aria-live="polite" aria-relevant="additions">
+                  {#each feed as entry (entry.id)}
+                    <li class="line {entry.kind} {entry.status ?? ''}">
+                      <span class="glyph" aria-hidden="true">{glyph[entry.kind]}</span>
+                      <div class="line-main">
+                        {#if entry.kind === 'tool'}
+                          <div class="cmd">
+                            <b>{entry.title}</b>
+                            {#if entry.status === 'running'}<span class="state run">running</span>
+                            {:else if entry.status === 'ok'}<span class="state ok">ok</span>
+                            {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
+                          </div>
+                          {#if entry.body}<pre class="out">{entry.body}</pre>{/if}
+                        {:else if entry.kind === 'lifecycle'}
+                          <span>{entry.title}{entry.body ? ' · ' + entry.body : ''}</span>
+                        {:else if entry.kind === 'error'}
+                          <pre><b>{entry.title}:</b> {entry.body}</pre>
+                        {:else}
+                          {#if entry.kind === 'user' && entry.title !== 'You'}<span class="tag">{entry.title.replace('You · ', '')}</span>{/if}
+                          <pre>{entry.body}</pre>
+                        {/if}
                       </div>
-                      {#if entry.body}<pre>{entry.body}</pre>{/if}
-                    </div>
-                  </li>
-                {/each}
-              </ol>
+                      <time datetime={new Date(entry.at).toISOString()}>{new Date(entry.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</time>
+                    </li>
+                  {/each}
+                </ol>
+              {/if}
+              {#if session.status === 'active'}
+                <p class="line working" role="status"><span class="glyph" aria-hidden="true">›</span><span>Pi is working<span class="cursor" aria-hidden="true"></span></span></p>
+              {/if}
+            </div>
+            {#if unseen > 0 && !follow}
+              <button class="btn btn-sm jump" onclick={jumpToLatest}>Jump to latest<Icon name="chevron" size={14} /></button>
             {/if}
           </div>
-          {#if unseen > 0 && !follow}
-            <button class="btn btn-sm jump" onclick={jumpToLatest}>Jump to latest<Icon name="chevron" size={14} /></button>
-          {/if}
         {:else if tab === 'files'}
-          <div class="files scroll">
+          <div class="pane scroll">
             <div
-              class="dropzone"
+              class="tile sunken dropzone"
               class:dragging
               data-dropzone
               role="group"
@@ -355,93 +342,100 @@
               ondragleave={(e) => { if (!(e.currentTarget as Element).contains(e.relatedTarget as Node)) dragging = false; }}
               ondrop={onDrop}>
               <span class="empty-icon"><Icon name="upload" /></span>
-              <div>
-                <strong>{uploading ? 'Uploading…' : 'Drop files for Pi'}</strong>
-                <p class="muted">Files go to a private folder for this session only. Pi finds them with <code>companion_temp_files</code>. They are deleted when the session ends.</p>
-              </div>
+              <strong>{uploading ? 'Uploading…' : 'Share files with Pi'}</strong>
+              <p class="muted">Private to this session and deleted when it ends.</p>
               <input bind:this={fileInput} id="file-input" class="sr-only" type="file" multiple disabled={ended} onchange={(e) => uploadFiles((e.currentTarget as HTMLInputElement).files)} />
-              <label for="file-input" class="btn" class:disabled={ended}><Icon name="plus" size={16} />Choose files</label>
+              <label for="file-input" class="btn-bento primary pick" class:disabled={ended}><Icon name="plus" size={18} />Choose files</label>
             </div>
 
             {#if files.length}
-              <ul class="file-list">
+              <ul class="bento file-list">
                 {#each files as file (file.id)}
-                  <li>
+                  <li class="tile file">
                     <Icon name="file" />
                     <div class="file-main">
                       <strong title={file.name}>{file.name}</strong>
-                      <span class="subtle">{formatBytes(file.size)} · added {relativeTime(file.createdAt)}</span>
+                      <span class="chips"><span class="chip">{formatBytes(file.size)}</span><span class="chip">{relativeTime(file.createdAt)}</span></span>
                     </div>
                     <button class="btn btn-ghost btn-icon" aria-label="Remove {file.name}" onclick={() => remove(file.id, file.name)}><Icon name="trash" size={16} /></button>
                   </li>
                 {/each}
               </ul>
-            {:else}
-              <p class="subtle none">No files shared with this session.</p>
             {/if}
           </div>
         {:else if tab === 'changes'}
           <div class="changes">
             <div class="changes-bar">
               <div class="segmented" role="group" aria-label="Which changes">
-                <button aria-pressed={!staged} onclick={() => loadDiff(false)}>Not staged</button>
+                <button aria-pressed={!staged} onclick={() => loadDiff(false)}>Unstaged</button>
                 <button aria-pressed={staged} onclick={() => loadDiff(true)}>Staged</button>
               </div>
               {#if diff?.text}
-                <span class="stat"><b class="plus">+{diffStats.add}</b> <b class="minus">−{diffStats.del}</b> · {diffStats.files} {diffStats.files === 1 ? 'file' : 'files'}</span>
+                <span class="chips">
+                  <span class="chip plus">+{diffStats.add}</span>
+                  <span class="chip minus">−{diffStats.del}</span>
+                </span>
               {/if}
-              <button class="btn btn-ghost btn-sm" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={14} />Refresh</button>
+              <button class="btn btn-ghost btn-icon refresh" aria-label="Refresh changes" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={16} /></button>
             </div>
             <div class="diff scroll">
               {#if !diff}
-                <p class="subtle none">Loading changes from the session’s working folder…</p>
+                <p class="subtle none">Loading changes…</p>
+              {:else if diff.error}
+                <p class="subtle none">Changes unavailable. {diff.error}</p>
               {:else if !diff.text.trim()}
-                <p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes. The working tree is clean.</p>
+                <p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
               {:else}
                 <pre>{#each diff.text.split('\n') as line, index (index)}<span class={lineClass(line)}>{line || ' '}</span>{/each}</pre>
               {/if}
             </div>
           </div>
         {:else}
-          <form class="plan scroll" onsubmit={(event) => { event.preventDefault(); runPlan(); }}>
+          <form class="pane plan scroll" onsubmit={(event) => { event.preventDefault(); runPlan(); }}>
             <div class="field">
               <label for="plan-goal">What should Pi plan?</label>
               <textarea id="plan-goal" class="textarea" rows="5" bind:value={plan} disabled={ended}
-                placeholder="For example: split the settings page into sections and add validation"></textarea>
-              <span class="hint">Runs <code>/plan</code> in this session. Leave it empty to plan from the current conversation.</span>
+                placeholder="Leave empty to plan from the current conversation"></textarea>
+              <span class="hint">Runs <code>/plan</code> in this session.</span>
             </div>
-            <div><button class="btn btn-primary" disabled={ended}><Icon name="plan" size={16} />Ask Pi to plan</button></div>
+            <button class="btn-bento primary" disabled={ended}><Icon name="plan" size={18} />Ask Pi to plan</button>
           </form>
         {/if}
       </div>
 
       <form class="composer" onsubmit={(event) => { event.preventDefault(); submit(); }}>
         {#if ended}
-          <p class="ended"><Icon name="alert" size={16} />This session has ended. You can still read its history.</p>
+          <p class="ended"><span class="glyph">!</span>Session ended. History is read-only.</p>
         {:else}
-          <label class="sr-only" for="prompt">Message Pi</label>
-          <textarea
-            id="prompt"
-            class="textarea"
-            rows="1"
-            bind:this={promptEl}
-            bind:value={prompt}
-            oninput={autosize}
-            onkeydown={onComposerKey}
-            placeholder={steer ? 'Redirect the current turn…' : 'Message Pi…'}></textarea>
-          <div class="composer-bar">
-            <label class="toggle" title="Send into the turn Pi is working on, instead of queueing a new prompt">
-              <input type="checkbox" bind:checked={steer} disabled={session.status !== 'active'} />
-              <span class="track" aria-hidden="true"></span>
-              Steer current turn
-            </label>
-            <span class="hint">Enter to send · Shift+Enter for a new line</span>
-            <button class="btn btn-primary" disabled={!prompt.trim()}><Icon name="send" size={16} />Send</button>
+          {#if asks.length && !askOpen}
+            <button type="button" class="ask-pill" onclick={() => (askOpen = true)}>
+              <Icon name="question" size={16} />
+              <span>Pi is waiting for your answer</span>
+              <span class="badge count">{asks.length}</span>
+            </button>
+          {/if}
+          <div class="prompt-row">
+            <span class="ps1" aria-hidden="true">❯</span>
+            <label class="sr-only" for="prompt">Message Pi</label>
+            <textarea
+              id="prompt"
+              rows="1"
+              bind:this={promptEl}
+              bind:value={prompt}
+              oninput={autosize}
+              onkeydown={onComposerKey}
+              placeholder={steer && session.status === 'active' ? 'steer the current turn…' : 'message pi…'}></textarea>
+            {#if session.status === 'active'}
+              <button type="button" class="chip steer" aria-pressed={steer} onclick={() => (steer = !steer)} title="Send into the turn Pi is working on">steer</button>
+            {/if}
+            <button class="btn btn-primary btn-icon send" aria-label="Send" disabled={!prompt.trim()}><Icon name="send" size={16} /></button>
           </div>
         {/if}
       </form>
     </section>
   </div>
+
+  {#if !ended}<AskSheet sessionId={id} {asks} bind:open={askOpen} />{/if}
 {/if}
 
 <style>
@@ -450,64 +444,75 @@
     height: 100%;
     width: min(1180px, 100%);
     margin: 0 auto;
-    padding: 20px 32px 24px;
+    padding: 16px 28px 20px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     min-height: 0;
   }
 
   .head {
-    display: grid;
-    gap: 10px;
     flex: none;
-  }
-
-  .back {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    width: fit-content;
-    color: var(--text-2);
-    font-size: 0.85rem;
-    font-weight: 550;
-    text-decoration: none;
-  }
-
-  .back:hover {
-    color: var(--accent-text);
-  }
-
-  .title-row {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-  }
-
-  .title {
-    display: grid;
-    gap: 2px;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
   }
 
-  .title h1 {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .title {
+    flex: 1;
+    min-width: 0;
+    font-size: 1.15rem;
   }
 
-  .title code {
-    color: var(--text-3);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .chips {
+  .title button {
     display: flex;
+    align-items: center;
     gap: 6px;
-    padding-bottom: 2px;
+    max-width: 100%;
+    min-height: 40px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 12px;
+    background: none;
+    font: inherit;
+    letter-spacing: inherit;
+    text-align: left;
+  }
+
+  .title button:hover {
+    background: var(--surface-2);
+  }
+
+  .title span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .title :global(.caret) {
+    flex: none;
+    color: var(--text-3);
+    transition: rotate 150ms var(--ease);
+  }
+
+  .title button[aria-expanded='true'] :global(.caret) {
+    rotate: 90deg;
+  }
+
+  .ask-count {
+    cursor: pointer;
+    height: 24px;
+    min-width: 24px;
+  }
+
+  .info {
+    flex: none;
+    padding: 0 4px;
+  }
+
+  .info[hidden] {
+    display: none;
   }
 
   .panel {
@@ -515,98 +520,48 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    gap: 10px;
   }
 
+  /* Wide, equal-width tabs: big targets that are easy to hit with a thumb. */
   .tabs {
-    display: flex;
-    gap: 2px;
     flex: none;
-    padding: 6px 8px 0;
-    border-bottom: 1px solid var(--border);
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-bento);
+    background: var(--bg-sunken);
   }
 
   .tabs button {
-    display: inline-flex;
+    display: flex;
     align-items: center;
-    gap: 7px;
-    min-height: 40px;
-    padding: 0 12px;
-    border: 0;
-    border-bottom: 2px solid transparent;
+    justify-content: center;
+    gap: 8px;
+    min-width: 0;
+    min-height: 48px;
+    padding: 0 10px;
+    border: 1px solid transparent;
+    border-radius: 14px;
     background: none;
     color: var(--text-2);
-    font-weight: 550;
+    font-weight: 600;
     white-space: nowrap;
+    transition: background-color 150ms var(--ease), color 150ms var(--ease);
   }
 
   .tabs button:hover {
     color: var(--text);
+    background: var(--surface-2);
   }
 
   .tabs button[aria-selected='true'] {
-    color: var(--text);
-    border-bottom-color: var(--accent);
-  }
-
-  .count {
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    display: grid;
-    place-items: center;
-    border-radius: 999px;
-    background: var(--accent);
-    color: var(--accent-ink);
-    font-size: 0.7rem;
-    font-weight: 800;
-  }
-
-  .muted-count {
-    background: var(--surface-3);
-    color: var(--text-2);
-  }
-
-  .asks {
-    flex: none;
-    max-height: 40%;
-    display: grid;
-    gap: 10px;
-    padding: 12px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-sunken);
-  }
-
-  .ask {
-    display: grid;
-    gap: 10px;
-    padding: 14px;
-    border: 1px solid var(--accent-line);
-    border-radius: var(--radius);
-    background: var(--accent-soft);
-  }
-
-  .ask-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    border-color: var(--border);
+    background: var(--surface);
     color: var(--accent-text);
-  }
-
-  .ask p {
-    white-space: pre-wrap;
-    font-weight: 550;
-  }
-
-  .options {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-
-  .ask-input {
-    display: flex;
-    gap: 8px;
+    box-shadow: var(--shadow-sm);
   }
 
   .body {
@@ -615,14 +570,48 @@
     min-height: 0;
     display: flex;
     flex-direction: column;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-bento);
+    background: var(--surface);
+    overflow: hidden;
   }
 
-  .feed,
-  .files,
-  .plan {
+  /* ---------- Terminal transcript ---------- */
+
+  .term,
+  .composer {
+    --term-bg: #0d0d0f;
+    --term-line: #1f1f24;
+    --term-text: #ece8df;
+    --term-dim: #8f8a80;
+    --term-accent: #f8bf4f;
+    --term-ok: #5fd39a;
+    --term-err: #ff8a80;
+  }
+
+  :global([data-theme='light']) .term,
+  :global([data-theme='light']) .composer {
+    --term-bg: #1d1b18;
+    --term-line: #2e2b27;
+    --term-dim: #a39d92;
+  }
+
+  .term {
+    position: relative;
     flex: 1;
     min-height: 0;
-    padding: 16px 20px;
+    display: flex;
+    background: var(--term-bg);
+    color: var(--term-text);
+  }
+
+  .feed {
+    flex: 1;
+    min-height: 0;
+    padding: 14px 16px 18px;
+    font-family: var(--mono);
+    font-size: 0.84rem;
+    line-height: 1.6;
   }
 
   .feed ol {
@@ -630,99 +619,140 @@
     margin: 0;
     padding: 0;
     display: grid;
-    gap: 14px;
+    gap: 6px;
   }
 
-  .entry {
+  .line {
     display: grid;
-    grid-template-columns: 26px minmax(0, 1fr);
-    gap: 10px;
+    grid-template-columns: 1.4ch minmax(0, 1fr) auto;
+    column-gap: 1ch;
+    margin: 0;
   }
 
-  .marker {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 8px;
-    background: var(--surface-2);
-    color: var(--text-3);
+  .glyph {
+    color: var(--term-dim);
+    user-select: none;
   }
 
-  .entry.assistant .marker,
-  .entry.user .marker {
-    background: var(--accent-soft);
-    color: var(--accent-text);
-  }
-
-  .entry.tool.ok .marker {
-    color: var(--ok);
-  }
-
-  .entry.tool.error .marker,
-  .entry.error .marker {
-    background: var(--danger-soft);
-    color: var(--danger);
-  }
-
-  .entry-main {
+  .line-main {
     min-width: 0;
   }
 
-  .entry-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 26px;
-    font-size: 0.85rem;
+  .line pre {
+    margin: 0;
+    font: inherit;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
 
-  .entry-meta time {
-    margin-left: auto;
-    font-size: 0.75rem;
-    color: var(--text-3);
+  .line time {
+    color: var(--term-dim);
+    font-size: 0.72rem;
     font-variant-numeric: tabular-nums;
   }
 
-  .entry pre {
-    margin: 4px 0 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-    font-size: 0.85rem;
-    line-height: 1.6;
-    color: var(--text);
+  .banner,
+  .dim,
+  .lifecycle {
+    color: var(--term-dim);
   }
 
-  .entry.assistant pre,
-  .entry.user pre {
-    font-family: var(--font);
-    font-size: 0.95rem;
+  .banner {
+    margin-bottom: 8px;
   }
 
-  .entry.thinking pre {
-    color: var(--text-3);
+  .banner .glyph {
+    color: var(--term-accent);
+  }
+
+  .user .glyph,
+  .user pre {
+    color: var(--term-accent);
+    font-weight: 600;
+  }
+
+  .thinking pre,
+  .thinking .glyph {
+    color: var(--term-dim);
     font-style: italic;
   }
 
-  .entry.tool pre {
-    max-height: 240px;
+  .error,
+  .error .glyph {
+    color: var(--term-err);
+  }
+
+  .tool .glyph {
+    color: var(--term-ok);
+  }
+
+  .cmd {
+    display: flex;
+    align-items: baseline;
+    gap: 1ch;
+  }
+
+  .cmd b {
+    color: var(--term-text);
+  }
+
+  .state {
+    font-size: 0.75rem;
+  }
+
+  .state.run {
+    color: var(--term-accent);
+  }
+
+  .state.ok {
+    color: var(--term-ok);
+  }
+
+  .state.err {
+    color: var(--term-err);
+  }
+
+  .out {
+    max-height: 220px;
     overflow: auto;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--code-bg);
-    color: var(--text-2);
-    white-space: pre;
-    overflow-wrap: normal;
+    margin-top: 2px !important;
+    padding-left: 1.5ch;
+    border-left: 1px solid var(--term-line);
+    color: var(--term-dim);
+    white-space: pre !important;
+    overflow-wrap: normal !important;
+    scrollbar-width: thin;
   }
 
-  .entry.lifecycle {
-    opacity: 0.8;
+  .tag {
+    display: inline-block;
+    margin-bottom: 2px;
+    padding: 0 6px;
+    border: 1px solid var(--term-line);
+    border-radius: 6px;
+    color: var(--term-dim);
+    font-size: 0.72rem;
   }
 
-  .entry.lifecycle .entry-meta strong {
-    font-weight: 500;
-    color: var(--text-2);
+  .working {
+    margin-top: 6px;
+    color: var(--term-accent);
+  }
+
+  .cursor {
+    display: inline-block;
+    width: 0.6em;
+    height: 1.1em;
+    margin-left: 4px;
+    vertical-align: text-bottom;
+    background: var(--term-accent);
+    animation: blink 1s steps(1) infinite;
+  }
+
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
   }
 
   .jump {
@@ -733,19 +763,21 @@
     box-shadow: var(--shadow);
   }
 
-  .quiet {
-    padding: 32px 12px;
+  /* ---------- Files / plan ---------- */
+
+  .pane {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    align-content: start;
+    gap: 14px;
+    padding: 16px;
   }
 
   .dropzone {
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 14px;
-    padding: 18px;
-    border: 1.5px dashed var(--border-strong);
-    border-radius: var(--radius-lg);
-    background: var(--bg-sunken);
+    justify-items: start;
+    border-style: dashed;
+    border-width: 1.5px;
     transition: border-color 150ms var(--ease), background-color 150ms var(--ease);
   }
 
@@ -756,54 +788,67 @@
 
   .dropzone p {
     font-size: 0.85rem;
-    margin-top: 2px;
   }
 
-  .dropzone .disabled {
+  .pick {
+    width: 100%;
+    cursor: pointer;
+  }
+
+  .pick.disabled {
     opacity: 0.45;
     pointer-events: none;
   }
 
-  .file-list {
-    list-style: none;
-    margin: 14px 0 0;
-    padding: 0;
+  .empty-icon {
     display: grid;
-    gap: 6px;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+    background: var(--accent-soft);
+    color: var(--accent-text);
   }
 
-  .file-list li {
+  .file-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .file {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px 8px 8px 14px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    padding: 12px 8px 12px 14px;
     color: var(--text-3);
   }
 
   .file-main {
     display: grid;
+    gap: 6px;
     min-width: 0;
     flex: 1;
   }
 
   .file-main strong {
     color: var(--text);
-    font-weight: 550;
+    font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .file-main span {
-    font-size: 0.8rem;
+  .plan {
+    max-width: 720px;
   }
 
   .none {
-    padding: 16px 0;
+    padding: 16px 20px;
     font-size: 0.9rem;
   }
+
+  /* ---------- Changes ---------- */
 
   .changes {
     flex: 1;
@@ -816,26 +861,20 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-    padding: 12px 16px;
+    gap: 10px;
+    padding: 10px 12px;
     border-bottom: 1px solid var(--border);
   }
 
-  .changes-bar .btn {
+  .refresh {
     margin-left: auto;
   }
 
-  .stat {
-    font-size: 0.82rem;
-    color: var(--text-2);
-  }
-
-  .plus {
+  .chip.plus {
     color: var(--ok);
   }
 
-  .minus {
+  .chip.minus {
     color: var(--danger);
   }
 
@@ -843,10 +882,6 @@
     flex: 1;
     min-height: 0;
     background: var(--code-bg);
-  }
-
-  .diff .none {
-    padding: 16px 20px;
   }
 
   .diff pre {
@@ -886,148 +921,139 @@
     font-weight: 700;
   }
 
-  .plan {
-    display: grid;
-    align-content: start;
-    gap: 14px;
-    max-width: 720px;
-  }
+  /* ---------- Composer: a shell prompt ---------- */
 
   .composer {
     flex: none;
     display: grid;
     gap: 8px;
-    padding: 12px;
-    border-top: 1px solid var(--border);
-    background: var(--surface-2);
   }
 
-  .composer .textarea {
-    min-height: 44px;
-    max-height: 180px;
-    resize: none;
-    background: var(--surface);
-  }
-
-  .composer-bar {
+  .ask-pill {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
+    min-height: 48px;
+    padding: 0 14px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius-bento);
+    background: var(--accent-soft);
+    color: var(--accent-text);
+    font-weight: 600;
+    text-align: left;
   }
 
-  .composer-bar .hint {
-    margin-left: auto;
-    font-size: 0.78rem;
-    color: var(--text-3);
+  .ask-pill span:first-of-type {
+    flex: 1;
   }
 
-  .toggle {
-    display: inline-flex;
-    align-items: center;
+  .prompt-row {
+    display: flex;
+    align-items: flex-end;
     gap: 8px;
-    font-size: 0.85rem;
-    color: var(--text-2);
-    cursor: pointer;
+    padding: 8px 8px 8px 14px;
+    border: 1px solid var(--term-line);
+    border-radius: var(--radius-bento);
+    background: var(--term-bg);
+    color: var(--term-text);
+    font-family: var(--mono);
   }
 
-  .toggle input {
-    position: absolute;
-    opacity: 0;
-    width: 1px;
-    height: 1px;
-  }
-
-  .track {
-    position: relative;
-    width: 32px;
-    height: 18px;
-    border-radius: 999px;
-    background: var(--surface-3);
-    border: 1px solid var(--border-strong);
-    transition: background-color 150ms var(--ease);
-  }
-
-  .track::after {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--text-3);
-    transition: translate 150ms var(--ease), background-color 150ms var(--ease);
-  }
-
-  .toggle input:checked + .track {
-    background: var(--accent);
+  .prompt-row:focus-within {
     border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
   }
 
-  .toggle input:checked + .track::after {
-    translate: 14px 0;
-    background: var(--accent-ink);
+  .ps1 {
+    align-self: center;
+    color: var(--term-accent);
+    font-weight: 700;
   }
 
-  .toggle input:focus-visible + .track {
-    outline: 2px solid var(--accent);
-    outline-offset: 2px;
+  .prompt-row textarea {
+    flex: 1;
+    min-width: 0;
+    min-height: 36px;
+    max-height: 180px;
+    padding: 7px 0;
+    border: 0;
+    background: transparent;
+    color: var(--term-text);
+    caret-color: var(--term-accent);
+    font: 0.9rem/1.5 var(--mono);
+    resize: none;
+    outline: none;
   }
 
-  .toggle:has(input:disabled) {
-    opacity: 0.5;
-    cursor: not-allowed;
+  .prompt-row textarea::placeholder {
+    color: var(--term-dim);
+  }
+
+  .steer {
+    align-self: center;
+    border-color: var(--term-line);
+    background: transparent;
+    color: var(--term-dim);
+    font-family: var(--mono);
+  }
+
+  .send {
+    flex: none;
+    border-radius: 12px;
   }
 
   .ended {
     display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--text-2);
-    font-size: 0.9rem;
+    gap: 1ch;
+    padding: 12px 14px;
+    border-radius: var(--radius-bento);
+    background: var(--term-bg);
+    color: var(--term-dim);
+    font: 0.85rem var(--mono);
+  }
+
+  .ended .glyph {
+    color: var(--term-err);
   }
 
   @media (max-width: 900px) {
     .detail {
-      padding: 12px 10px 10px;
-      gap: 10px;
+      padding: 8px 10px 10px;
+      gap: 8px;
     }
 
-    .title h1 {
-      font-size: 1.3rem;
+    .title {
+      font-size: 1.05rem;
     }
 
-    .feed,
-    .files,
-    .plan {
-      padding: 14px;
-    }
-
-    .composer-bar .hint {
-      display: none;
-    }
-
-    .composer-bar .btn {
-      margin-left: auto;
-    }
-
-    .dropzone {
-      grid-template-columns: minmax(0, 1fr);
-      justify-items: start;
-    }
-
-    .ask-input {
+    /* Icon over label gives each tab a taller, wider target. */
+    .tabs button {
       flex-direction: column;
+      gap: 2px;
+      min-height: 56px;
+      font-size: 0.78rem;
     }
 
-    .entry-meta time {
+    .tabs .badge {
+      position: absolute;
+      translate: 14px -14px;
+    }
+
+    .tabs button {
+      position: relative;
+    }
+
+    .feed {
+      padding: 12px;
+      font-size: 0.8rem;
+    }
+
+    .line time {
       display: none;
     }
-  }
 
-  @media (max-width: 900px) and (max-height: 640px) {
-    .chips {
-      display: none;
+    .line {
+      grid-template-columns: 1.4ch minmax(0, 1fr);
     }
   }
 </style>

@@ -16,7 +16,8 @@
     { href: '/', label: 'Overview', icon: 'home' },
     { href: '/sessions', label: 'Sessions', icon: 'sessions' },
     { href: '/devices', label: 'Devices', icon: 'devices', admin: true },
-    { href: '/settings', label: 'Settings', icon: 'settings', admin: true }
+    { href: '/settings', label: 'Settings', icon: 'settings', admin: true },
+    { href: '/help', label: 'Help', icon: 'help' }
   ];
   const visibleNav = $derived(nav.filter((item) => !item.admin || companion.isAdmin));
   const path = $derived(page.url.pathname);
@@ -52,7 +53,7 @@
   // Paired devices only see sessions; unpaired devices only see the pairing screen.
   $effect(() => {
     if (!companion.booted) return;
-    if (bare && path !== '/pair') void goto('/pair', { replaceState: true });
+    if (bare && path !== '/pair' && path !== '/privacy' && path !== '/terms') void goto('/pair', { replaceState: true });
     else if (companion.remote && (path.startsWith('/devices') || path.startsWith('/settings'))) void goto('/', { replaceState: true });
   });
 
@@ -124,6 +125,9 @@
               onclick={() => theme.set(option.value)}><Icon name={option.icon} size={16} /></button>
           {/each}
         </div>
+        <nav class="legal-links" aria-label="Information">
+          <a href="/help">Help</a><span aria-hidden="true">·</span><a href="/privacy">Privacy</a><span aria-hidden="true">·</span><a href="/terms">Terms</a>
+        </nav>
       </div>
     </aside>
 
@@ -299,6 +303,25 @@
     font-weight: 800;
   }
 
+  .legal-links {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 7px;
+    padding: 0 4px;
+    color: var(--text-3);
+    font-size: 0.78rem;
+  }
+
+  .legal-links a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  .legal-links a:hover {
+    color: var(--accent-text);
+    text-decoration: underline;
+  }
   .sidebar-foot {
     margin-top: auto;
     display: grid;

@@ -3,12 +3,13 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { relayDialogs, type AskChannel, type AskInput } from "./ask.js";
 import { ensureDaemon } from "./daemon.js";
-import type { BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
+import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
 
-export class CompanionBridge {
+export class CompanionBridge implements AskChannel {
   readonly sessionId = randomUUID();
   private ws?: WebSocket;
   private ctx?: ExtensionContext;
@@ -20,7 +21,7 @@ export class CompanionBridge {
   private retryDelay = 1000;
   private lastWarning = "";
   private tempFiles: TempFile[] = [];
-  private pendingAsks = new Map<string, { resolve: (answer: string) => void; timer: NodeJS.Timeout }>();
+  private asks = new Map<string, { request: AskRequest; settle: (answers: AskAnswers | null) => void }>();
   private pendingDeletes = new Map<string, { resolve: (result: { ok: boolean; error?: string }) => void; timer: NodeJS.Timeout }>();
   private snapshot: SessionSnapshot = {
     id: this.sessionId,
@@ -29,13 +30,15 @@ export class CompanionBridge {
     shortTitle: process.cwd().split(/[\\/]/).filter(Boolean).pop() ?? "Pi",
     status: "idle",
     remoteEnabled: false,
-    connectedAt: new Date().toISOString()
+    connectedAt: new Date().toISOString(),
+    asks: []
   };
 
   constructor(private readonly pi: ExtensionAPI) {}
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
+    if (ctx.hasUI) relayDialogs(ctx.ui, this);
     this.snapshot = {
       ...this.snapshot,
       cwd: ctx.cwd,
@@ -67,6 +70,7 @@ export class CompanionBridge {
   /** Connect to the shared daemon, launching it only when nothing is listening. */
   async connect() {
     if (this.closed || this.connecting) return;
+    if (this.ws && this.ws.readyState <= WebSocket.OPEN) return; // connecting or already live
     this.connecting = true;
     try {
       // After a live connection drops (e.g. a dev daemon restarting), give it a grace
@@ -123,16 +127,35 @@ export class CompanionBridge {
     this.send({ type: "session.update", session: { status } });
   }
 
-  async ask(question: string, options?: string[]) {
-    const requestId = randomUUID();
-    this.send({ type: "ask.request", requestId, question, options });
-    return await new Promise<string>(resolve => {
-      const timer = setTimeout(() => {
-        this.pendingAsks.delete(requestId);
-        resolve("");
-      }, 10 * 60_000);
-      this.pendingAsks.set(requestId, { resolve, timer });
+  isConnected() {
+    return this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * Publish a question to the companion UI. Pending questions live in the session snapshot,
+   * so browsers that connect later still see them.
+   */
+  ask(input: AskInput, signal?: AbortSignal) {
+    const request: AskRequest = { ...input, requestId: randomUUID(), createdAt: new Date().toISOString() };
+    return new Promise<AskAnswers | null>(resolve => {
+      if (signal?.aborted) return resolve(null);
+      const onAbort = () => settle(null);
+      const settle = (answers: AskAnswers | null) => {
+        if (!this.asks.delete(request.requestId)) return;
+        signal?.removeEventListener("abort", onAbort);
+        this.publishAsks();
+        resolve(answers);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.asks.set(request.requestId, { request, settle });
+      this.publishAsks();
     });
+  }
+
+  private publishAsks() {
+    const asks = [...this.asks.values()].map(entry => entry.request);
+    this.snapshot.asks = asks;
+    this.send({ type: "session.update", session: { asks } });
   }
 
   async deleteTempFile(fileId: string) {
@@ -190,13 +213,12 @@ export class CompanionBridge {
       case "git_diff":
         await this.sendGitDiff(Boolean(command.staged));
         break;
-      case "ask_answer": {
-        const pending = this.pendingAsks.get(command.requestId);
-        if (!pending) return;
-        clearTimeout(pending.timer);
-        this.pendingAsks.delete(command.requestId);
-        pending.resolve(command.answer);
-      }
+      case "ask_answer":
+        this.asks.get(command.requestId)?.settle(command.answers ?? {});
+        break;
+      case "ask_cancel":
+        this.asks.get(command.requestId)?.settle(null);
+        break;
     }
   }
 
@@ -210,7 +232,16 @@ export class CompanionBridge {
       });
       this.send({ type: "git.diff", staged, diff: result.stdout });
     } catch (error) {
-      this.send({ type: "error", message: "git diff failed: " + String(error) });
+      // Reported with the diff (shown as a toast), never as a session activity error.
+      const failure = error && typeof error === "object" ? error : {};
+      const stderr = "stderr" in failure ? String(failure.stderr ?? "") : "";
+      const missingGit = "code" in failure && failure.code === "ENOENT";
+      const message = /not a git repository/i.test(stderr)
+        ? "This project is not tracked by git."
+        : missingGit
+          ? "git is not installed on this computer."
+          : "git diff failed: " + (stderr.trim().split("\n")[0] || String(error));
+      this.send({ type: "git.diff", staged, diff: "", error: message });
     }
   }
 }

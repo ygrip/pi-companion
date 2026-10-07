@@ -1,21 +1,20 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
   import { companion } from './companion.svelte.ts';
-  import { prettyPath, relativeTime, sessionTitle, statusLabel } from './format.ts';
+  import { prettyPath, sessionTitle, statusLabel } from './format.ts';
   import type { Session } from './types.ts';
 
   let { session }: { session: Session } = $props();
   const waiting = $derived(companion.pendingAsks(session.id));
 </script>
 
-<a class="session-card" class:stopped={session.status === 'stopped'} href="/sessions/{encodeURIComponent(session.id)}">
+<a class="session-card tile" class:stopped={session.status === 'stopped'} href="/sessions/{encodeURIComponent(session.id)}">
   <div class="row top">
-    <span class="state">
-      <span class="dot {session.status}" aria-hidden="true"></span>
-      {statusLabel[session.status]}
+    <span class="badge" class:ok={session.status === 'active'} class:danger={session.status === 'stopped'}>
+      <span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}
     </span>
     {#if waiting}
-      <span class="badge accent"><Icon name="question" size={12} />{waiting === 1 ? 'Needs your answer' : waiting + ' questions'}</span>
+      <span class="badge count" aria-label="{waiting} questions waiting"><Icon name="question" size={12} />{waiting}</span>
     {:else if session.remoteEnabled && companion.isAdmin}
       <span class="badge" title="Visible on paired devices"><Icon name="link" size={12} />Shared</span>
     {/if}
@@ -24,10 +23,9 @@
     <strong>{sessionTitle(session)}</strong>
     {#if session.name && session.shortTitle !== session.name}<span class="subtle">{session.shortTitle}</span>{/if}
   </div>
-  <code class="path" title={session.cwd}>{prettyPath(session.cwd)}</code>
-  <div class="row meta">
-    <span class="model">{session.mainModel ?? 'Model not reported'}{session.effort ? ' · ' + session.effort : ''}</span>
-    <span class="subtle">{relativeTime(session.connectedAt)}</span>
+  <div class="chips">
+    <span class="chip"><span>{session.mainModel ?? 'Model not reported'}</span></span>
+    <span class="chip mono"><Icon name="folder" size={13} /><span title={session.cwd}>{prettyPath(session.cwd)}</span></span>
   </div>
   <Icon name="chevron" class="chev" />
 </a>
@@ -65,13 +63,22 @@
     min-width: 0;
   }
 
-  .state {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: var(--text-2);
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-width: 0;
+  }
+
+  .chips .chip {
+    max-width: 100%;
+    min-width: 0;
+  }
+
+  .chips .chip span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .title {
@@ -80,9 +87,7 @@
   }
 
   .title strong,
-  .title span,
-  .path,
-  .model {
+  .title span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -97,23 +102,6 @@
     font-size: 0.82rem;
   }
 
-  .path {
-    color: var(--text-3);
-    font-size: 0.78rem;
-  }
-
-  .meta {
-    font-size: 0.8rem;
-    color: var(--text-2);
-  }
-
-  .model {
-    min-width: 0;
-  }
-
-  .meta .subtle {
-    flex: none;
-  }
 
   .session-card :global(.chev) {
     position: absolute;

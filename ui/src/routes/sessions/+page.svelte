@@ -61,7 +61,7 @@
     <div class="segmented scroll-x" role="group" aria-label="Filter by status">
       {#each filters as option (option.value)}
         <button aria-pressed={filter === option.value} onclick={() => (filter = option.value)}>
-          {option.label}<span class="n">{counts[option.value]}</span>
+          {option.label}<span class="badge count quiet">{counts[option.value]}</span>
         </button>
       {/each}
     </div>
@@ -122,15 +122,6 @@
     max-width: 100%;
   }
 
-  .n {
-    min-width: 18px;
-    padding: 0 5px;
-    border-radius: 999px;
-    background: var(--surface-3);
-    color: var(--text-3);
-    font-size: 0.72rem;
-    font-variant-numeric: tabular-nums;
-  }
 
   .grid {
     display: grid;

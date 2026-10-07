@@ -10,12 +10,6 @@ export type ActivityEntry = {
   at: number;
 };
 
-export type AskRequest = {
-  requestId: string;
-  question: string;
-  options?: string[];
-};
-
 const MAX_ENTRIES = 300;
 let nextId = 1;
 

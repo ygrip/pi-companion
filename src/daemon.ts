@@ -94,14 +94,20 @@ async function downloadRelease(version: string, log: DaemonLog) {
   if (!asset) throw new Error("no prebuilt daemon for " + process.platform + "/" + process.arch);
   const dir = cacheDir(version);
   const target = join(dir, EXE);
-  const base = "https://github.com/" + REPO + "/releases/download/v" + version + "/";
+  const exact = "https://github.com/" + REPO + "/releases/download/v" + version + "/";
+  // A git install from a branch can be ahead of the newest tag; fall back to the latest release.
+  const latest = "https://github.com/" + REPO + "/releases/latest/download/";
 
   log("Downloading Pi Companion daemon v" + version + "…");
-  const [archiveRes, sumsRes] = await Promise.all([
-    fetch(base + asset, { signal: AbortSignal.timeout(120_000) }),
-    fetch(base + "SHA256SUMS", { signal: AbortSignal.timeout(30_000) })
-  ]);
+  let base = exact;
+  let archiveRes = await fetch(base + asset, { signal: AbortSignal.timeout(120_000) });
+  if (archiveRes.status === 404) {
+    log("No daemon release for v" + version + "; using the latest release.", "warning");
+    base = latest;
+    archiveRes = await fetch(base + asset, { signal: AbortSignal.timeout(120_000) });
+  }
   if (!archiveRes.ok) throw new Error("download failed: " + archiveRes.status + " " + asset);
+  const sumsRes = await fetch(base + "SHA256SUMS", { signal: AbortSignal.timeout(30_000) });
   if (!sumsRes.ok) throw new Error("checksum download failed: " + sumsRes.status);
 
   const archive = Buffer.from(await archiveRes.arrayBuffer());
