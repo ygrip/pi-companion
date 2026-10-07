@@ -6,7 +6,12 @@ Pi Companion is deliberately not another agent runtime. Pi owns execution and co
 
 The UI is a static SvelteKit application. There is no Node runtime in production and no Tauri shell. Rust embeds the generated frontend into the daemon binary.
 
-![Pi Companion dashboard](docs/dashboard.png)
+![Pi Companion overview, dark theme](docs/dashboard.webp)
+
+<p>
+  <img src="docs/session-light.webp" alt="Session detail, light theme" width="68%" />
+  <img src="docs/mobile.webp" alt="Session detail on a phone" width="28%" />
+</p>
 
 ## Install
 
@@ -105,20 +110,35 @@ This toggles whether that session is visible and controllable from paired device
 
 A paired device cannot access sessions that have not explicitly enabled remote control.
 
-## Pairing
+## Pairing and devices
 
-Pairing is daemon-wide rather than session-specific:
+Pairing is daemon-wide rather than session-specific. Everything lives on the **Devices** page of the local console (port 43721):
 
-1. Open the local dashboard on port 43721.
-2. Select Pair device.
-3. The daemon creates a single-use invitation valid for five minutes.
-4. The dashboard shows a short human-readable code and a QR containing the invitation URL.
-5. Scan the QR on the phone.
-6. The phone names itself and claims the invitation.
-7. The daemon returns a long random device credential and stores only its SHA-256 hash.
-8. The paired device appears on the local dashboard with its last-seen time and can be revoked there.
+1. Choose **Pair a device**. The daemon creates a single-use invitation (5 minutes by default, configurable in Settings) and shows it as a QR code and a copyable link.
+2. Scan it with the phone and give the device a name.
+3. The daemon issues a long random credential and stores only its SHA-256 hash.
+
+Each paired device shows a live **Connected** / **Disconnected** status (with the number of open tabs), when it was last seen and when it was paired. From the console you can:
+
+- **Disconnect**: end the device's live connections (WebSocket close code 4001). It stays paired and can reconnect when its user chooses.
+- **Revoke**: delete its credential and drop its connections (close code 4003). The device clears its stored credential and must scan a new code.
+
+Paired devices and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json` (mode 0600; override the directory with `PI_COMPANION_HOME`).
 
 A phone pairs once with the daemon. Individual Pi sessions still opt in using /remote-control.
+
+## Settings
+
+The **Settings** page (local console only) covers:
+
+| Setting | Default | Notes |
+|---|---|---|
+| Theme | System | Light, dark or follow the OS. Stored per browser. |
+| Public address | empty | The tunnel / reverse-proxy URL embedded in pairing codes. `PI_COMPANION_PUBLIC_URL` overrides it and locks the field. |
+| Pairing code lifetime | 5 minutes | 1 to 60. |
+| Largest file | 25 MB | 1 to 100 MB per upload. |
+
+It also shows the daemon version, both addresses, and where settings and session files are stored.
 
 ## Temporary files
 
@@ -166,20 +186,37 @@ Stopped sessions remain visible in the daemon registry so the dashboard does not
 
 ## UI
 
-The dashboard uses a compact bento + shell visual system:
+A single-page SvelteKit app, embedded in the daemon binary, with four sections:
 
-- bento cards for sessions, status, model/effort, files, and paired devices
-- shell-like activity feed: streamed assistant text and thinking, tool calls with running/ok/error state, prompts and lifecycle markers
-- inline answer cards for companion_ask_user questions, with option buttons
-- colored git diff with working-tree and staged views
-- accessible tabs (arrow keys), skip link, visible focus rings, polite live region for the feed
-- mobile first-class: safe-area insets, 44px touch targets on coarse pointers, 16px inputs to avoid iOS zoom, sticky composer, snap-scrolling session rail
-- responsive session rail that becomes horizontally scrollable on narrow screens
-- warm amber visual language aligned with Raksara/Punakawan
-- lightweight canvas dotfield inspired by Raksara, with focal density and smooth edge falloff
-- dotfield start deferred until browser idle time, paused while hidden, and reduced under prefers-reduced-motion
+| Page | Who sees it | What it is for |
+|---|---|---|
+| Overview | everyone | Dot-field hero that morphs the Pi symbol into a computer, then a phone; live counts; recent sessions; how it works |
+| Sessions | everyone | Searchable, filterable list (Working / Waiting / Ended). Paired devices only see shared sessions |
+| Session detail | everyone | Activity stream, answer cards for Pi's questions, files, git changes, /plan, message / steer / stop |
+| Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings |
 
-SvelteKit is compiled with adapter-static to server/web-dist. CI builds that bundle once and Rust embeds it using rust-embed. Generated web-dist files are not committed.
+Design notes:
+
+- light and dark themes with a system default, applied before first paint so there is no flash
+- warm amber on graphite or paper, matching the logo; system fonts only, so nothing loads from the network
+- the window never scrolls. The sidebar, page content, activity feed, file list, diff, chips and tabs each scroll inside their own container, and the composer and mobile tab bar stay put
+- the activity feed follows new output and stops following when you scroll up ("Jump to latest" brings you back)
+- mobile: bottom tab bar, safe-area insets, 44px touch targets, 16px inputs (no iOS zoom), Enter inserts a newline on touch keyboards
+- accessibility: skip link, visible focus rings, arrow-key tabs, labelled controls, live regions for the feed and questions, reduced-motion support
+- the dot field is Raksara's component, loaded when the browser is idle, paused when hidden, and static under reduced motion
+- dropping a file anywhere outside the Files drop zone is ignored. Without this, the browser tries to open the file itself (Firefox reports this as "may not load or link to file:///")
+
+### Caching and updates
+
+The UI is built with `adapter-static` in SPA mode (`200.html` fallback) and embedded with `rust-embed`:
+
+- `/_app/immutable/**` is content-hashed and served with `Cache-Control: public, max-age=31536000, immutable`
+- the shell, `version.json` and icons are served with `no-cache` and a strong ETag, so a reload costs a 304 until something changes
+- unknown file-like paths return 404 instead of the HTML shell, so a stale tab never parses HTML as JavaScript
+- the app polls `version.json` every minute; when a new build is detected it shows a reload banner and the next navigation loads the new version
+- HTML responses carry a same-origin Content-Security-Policy and `X-Frame-Options: DENY`
+
+Generated `server/web-dist` files are not committed. CI builds them once and every native build embeds the same bundle.
 
 ## Browser controls
 
@@ -201,10 +238,16 @@ There is deliberately no arbitrary shell, arbitrary tool invocation, or arbitrar
 
 ## Development
 
-Requirements: Node 22+ and stable Rust.
+Requirements: Node 22.17+ and stable Rust.
 
     npm install
     npm run server:dev
+
+Type checks cover the extension (`tsc`) and the UI (`svelte-check`, warnings fail):
+
+    npm run check
+
+UI modules import shared code through the `#lib/*` subpath import declared in `ui/package.json` (SvelteKit 3 replaced `$lib`).
 
 Then, in another shell, start Pi with the extension from this checkout:
 

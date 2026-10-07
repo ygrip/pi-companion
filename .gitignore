@@ -5,3 +5,7 @@ server/target/
 
 server/web-dist/
 ui/.svelte-kit/
+
+# local tooling
+.shots/
+.preview/

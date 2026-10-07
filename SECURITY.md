@@ -8,7 +8,7 @@ Pi Companion intentionally exposes less power than Pi itself.
 
 127.0.0.1:43721
 
-Trusted local administrator only. It can create pairing invitations, view and revoke paired devices, and inspect all registered sessions.
+Trusted local administrator only. It can create pairing invitations, see which paired devices are connected, disconnect or revoke them, change daemon settings, and inspect all registered sessions.
 
 Do not place this listener behind a tunnel or reverse proxy.
 
@@ -19,6 +19,16 @@ Do not place this listener behind a tunnel or reverse proxy.
 Designed to sit behind an HTTPS/WSS tunnel. Every control/data endpoint requires a paired-device credential, except the one-time pairing claim endpoint and static pairing UI.
 
 Paired devices can see only sessions that explicitly enabled remote control.
+
+Revoking a device deletes its credential hash and closes its open connections immediately (WebSocket close 4003). Disconnecting closes them without deleting the credential (close 4001).
+
+### Stored state
+
+Paired devices (SHA-256 credential hashes only) and settings are written atomically to `~/.pi/agent/pi-companion/state.json` with mode 0600 on Unix.
+
+### Web UI hardening
+
+HTML responses send a same-origin Content-Security-Policy (no third-party scripts, styles, fonts or connections), `X-Frame-Options: DENY`, `Referrer-Policy: no-referrer` and `X-Content-Type-Options: nosniff`. The UI loads nothing from the network beyond the daemon itself.
 
 ### Pi bridge
 
