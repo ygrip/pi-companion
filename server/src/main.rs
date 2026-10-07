@@ -146,9 +146,11 @@ type ApiResult<T> = Result<T, ApiError>;
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
-        .init();
+    // Without RUST_LOG, show this daemon's info logs and other crates' warnings.
+    // (EnvFilter's own default is ERROR only, which hid the startup addresses.)
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,pi_companion_server=info"));
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let temp_root = std::env::temp_dir().join("pi-companion");
     fs::create_dir_all(&temp_root).await.expect("create temp root");
@@ -184,7 +186,16 @@ async fn main() {
     let local_listener = match tokio::net::TcpListener::bind(LOCAL_ADDR).await {
         Ok(listener) => listener,
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            eprintln!("pi-companion-server: {LOCAL_ADDR} already in use; another daemon is running. Exiting.");
+            eprintln!();
+            eprintln!("  Pi Companion is already running.");
+            eprintln!();
+            eprintln!("  Console   http://{LOCAL_ADDR}");
+            eprintln!();
+            eprintln!("  Another daemon (often one started automatically by a Pi session) owns the port,");
+            eprintln!("  so this one is exiting. To run this build instead, stop the other one first:");
+            eprintln!("    macOS/Linux:  pkill -f pi-companion-server");
+            eprintln!("    Windows:      taskkill /IM pi-companion-server.exe /F");
+            eprintln!();
             return;
         }
         Err(error) => panic!("bind local admin {LOCAL_ADDR}: {error}"),
@@ -192,14 +203,13 @@ async fn main() {
     let remote_listener = match tokio::net::TcpListener::bind(REMOTE_ADDR).await {
         Ok(listener) => listener,
         Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            eprintln!("pi-companion-server: {REMOTE_ADDR} already in use. Exiting.");
-            return;
+            eprintln!("pi-companion-server: {REMOTE_ADDR} is used by another program. Free that port and try again.");
+            std::process::exit(1);
         }
         Err(error) => panic!("bind remote surface {REMOTE_ADDR}: {error}"),
     };
 
-    tracing::info!("Pi Companion admin: http://{LOCAL_ADDR}");
-    tracing::info!("Pi Companion paired-device surface: http://{REMOTE_ADDR}");
+    print_banner(&state).await;
 
     let (local_result, remote_result) = tokio::join!(
         axum::serve(local_listener, local),
@@ -240,6 +250,29 @@ fn remote_router(state: AppState) -> Router {
         .layer(DefaultBodyLimit::max(body_limit()))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
+}
+
+/// Always printed, independent of RUST_LOG, so `npm run serve` / `cargo run` show where to go.
+async fn print_banner(state: &AppState) {
+    let public = public_url(state).await;
+    let public_note = if state.env_public_url.is_some() {
+        "from PI_COMPANION_PUBLIC_URL"
+    } else if public == config::DEFAULT_PUBLIC_URL {
+        "default, this computer only; set one in Settings"
+    } else {
+        "from Settings"
+    };
+    let devices = state.devices.read().await.len();
+    println!();
+    println!("  Pi Companion v{VERSION}");
+    println!();
+    println!("  Console          http://{LOCAL_ADDR}");
+    println!("  Paired devices   http://{REMOTE_ADDR}");
+    println!("  Pairing links    {public}  ({public_note})");
+    println!("  Data             {}  ({devices} paired)", config::data_dir().display());
+    println!();
+    println!("  Open the console in your browser. Press Ctrl+C to stop.");
+    println!();
 }
 
 fn body_limit() -> usize {

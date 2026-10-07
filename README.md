@@ -241,7 +241,18 @@ There is deliberately no arbitrary shell, arbitrary tool invocation, or arbitrar
 Requirements: Node 22.17+ and stable Rust.
 
     npm install
-    npm run server:dev
+    npm run serve
+
+This builds the UI, starts the daemon and prints where it is listening:
+
+      Pi Companion v0.1.0
+
+      Console          http://127.0.0.1:43721
+      Paired devices   http://127.0.0.1:43722
+      Pairing links    http://127.0.0.1:43722  (default, this computer only; set one in Settings)
+      Data             ~/.pi/agent/pi-companion  (0 paired)
+
+If a daemon is already running (for example one a Pi session started automatically), `npm run serve` prints its console address and exits instead of starting a second copy. Stop the running one first (`pkill -f pi-companion-server`) if you want your fresh build to take over. Set `RUST_LOG` (for example `RUST_LOG=debug`) for more detailed logs.
 
 Type checks cover the extension (`tsc`) and the UI (`svelte-check`, warnings fail):
 
@@ -259,7 +270,7 @@ For hot-reloading UI work, keep the daemon running and use:
 
 which proxies /api and /ws to the daemon on 43721.
 
-Running the daemon manually with npm run server:dev and the extension side by side just works: the extension sees the running daemon and connects to it. If you don't run it, the extension launches your local cargo build automatically.
+Running the daemon manually with npm run serve and the extension side by side just works: the extension sees the running daemon and connects to it. If you don't run it, the extension launches your local cargo build automatically.
 
 ## Releases
 

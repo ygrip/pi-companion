@@ -34,11 +34,12 @@
     "node": ">=22.17"
   },
   "scripts": {
-    "check": "tsc --noEmit && npm run ui:check",
+    "serve": "npm run --silent ui:build -- --logLevel warn && cargo run -q --manifest-path server/Cargo.toml",
+    "server:dev": "npm run serve",
+    "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml",
     "ui:dev": "cd ui && vite dev",
     "ui:build": "cd ui && vite build",
-    "server:dev": "npm run ui:build && cargo run --manifest-path server/Cargo.toml",
-    "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml",
+    "check": "tsc --noEmit && npm run ui:check",
     "ui:check": "cd ui && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings"
   },
   "pi": {
