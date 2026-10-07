@@ -22,6 +22,7 @@
 
   const sourceLabel: Record<AskRequest['source'], string> = {
     companion: 'Pi is asking',
+    tool: 'Pi is asking',
     select: 'Choose an option',
     confirm: 'Confirm',
     input: 'Pi needs input'
@@ -284,9 +285,14 @@
     border-color: var(--border-strong);
   }
 
+  .option {
+    box-shadow: var(--clay-soft);
+  }
+
   .option.on {
     border-color: var(--accent);
     background: var(--accent-soft);
+    box-shadow: var(--clay-pressed);
   }
 
   .option input {

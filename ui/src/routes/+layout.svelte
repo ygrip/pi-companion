@@ -4,6 +4,7 @@
   import { beforeNavigate, goto } from '$app/navigation';
   import { page, updated } from '$app/state';
   import logo from '../assets/pi-companion.webp';
+  import AboutSheet from '#lib/AboutSheet.svelte';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
@@ -16,13 +17,13 @@
     { href: '/', label: 'Overview', icon: 'home' },
     { href: '/sessions', label: 'Sessions', icon: 'sessions' },
     { href: '/devices', label: 'Devices', icon: 'devices', admin: true },
-    { href: '/settings', label: 'Settings', icon: 'settings', admin: true },
-    { href: '/help', label: 'Help', icon: 'help' }
+    { href: '/settings', label: 'Settings', icon: 'settings', admin: true }
   ];
   const visibleNav = $derived(nav.filter((item) => !item.admin || companion.isAdmin));
   const path = $derived(page.url.pathname);
   const bare = $derived(companion.remote && !companion.paired);
   const waiting = $derived(Object.values(companion.asks).reduce((total, list) => total + list.length, 0));
+  let aboutOpen = $state(false);
 
   const connectionLabel = $derived(
     {
@@ -110,11 +111,11 @@
       </nav>
 
       <div class="sidebar-foot">
-        <div class="status" role="status">
+        <button class="status status-trigger" aria-haspopup="dialog" onclick={() => (aboutOpen = true)}>
           <span class="dot {companion.connection}" aria-hidden="true"></span>
           <span>{connectionLabel}</span>
           {#if companion.version}<span class="subtle mono">v{companion.version}</span>{/if}
-        </div>
+        </button>
         <div class="segmented theme-switch" role="radiogroup" aria-label="Theme">
           {#each themes as option (option.value)}
             <button
@@ -126,7 +127,7 @@
           {/each}
         </div>
         <nav class="legal-links" aria-label="Information">
-          <a href="/help">Help</a><span aria-hidden="true">·</span><a href="/privacy">Privacy</a><span aria-hidden="true">·</span><a href="/terms">Terms</a>
+          <a href="/privacy">Privacy</a><span aria-hidden="true">·</span><a href="/terms">Terms</a>
         </nav>
       </div>
     </aside>
@@ -138,10 +139,10 @@
           <strong>Pi Companion</strong>
         </a>
         <div class="topbar-actions">
-          <span class="status compact" role="status" title={connectionLabel}>
+          <button class="status compact status-trigger" aria-haspopup="dialog" onclick={() => (aboutOpen = true)} title={connectionLabel}>
             <span class="dot {companion.connection}" aria-hidden="true"></span>
             <span>{connectionLabel}</span>
-          </span>
+          </button>
           <button
             class="btn btn-ghost btn-icon"
             aria-label={theme.resolved === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
@@ -184,6 +185,7 @@
     </div>
   </div>
 {/if}
+<AboutSheet bind:open={aboutOpen} />
 
 <div class="toasts" aria-live="polite">
   {#each toasts.items as toast (toast.id)}
@@ -534,5 +536,58 @@
     .status.compact span:last-child {
       display: none;
     }
+  }
+  .sidebar {
+    margin: 10px 0 10px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--clay-radius);
+    background: var(--clay-surface);
+    box-shadow: var(--clay-raised);
+  }
+  .nav { gap: 6px; }
+  .nav a {
+    min-height: 44px;
+    border-radius: var(--clay-radius);
+    transition: background-color 200ms ease-out, color 200ms ease-out, box-shadow 200ms ease-out, transform 200ms ease-out;
+  }
+  .nav a:hover { background: var(--clay-surface); color: var(--text); box-shadow: var(--clay-soft); }
+  .nav a.active { background: var(--clay-surface); color: var(--accent-text); box-shadow: var(--clay-pressed); }
+  .nav a:active { transform: scale(0.97); }
+  .status-trigger {
+    width: 100%;
+    min-height: 42px;
+    border: 1px solid var(--border);
+    border-radius: var(--clay-radius);
+    background: var(--clay-surface);
+    box-shadow: var(--clay-soft);
+    text-align: left;
+    cursor: pointer;
+  }
+  .status-trigger:hover { color: var(--text); }
+  .status-trigger:active { transform: scale(0.97); }
+  .topbar, .tabbar { background: var(--clay-surface); box-shadow: var(--clay-raised); }
+  @media (max-width: 900px) {
+    .topbar {
+      margin: 8px 10px 0;
+      border: 1px solid var(--border);
+      border-radius: var(--clay-radius);
+      box-shadow: var(--clay-raised);
+    }
+    .tabbar {
+      margin: 0 10px max(8px, env(safe-area-inset-bottom));
+      border: 1px solid var(--border);
+      border-radius: var(--clay-radius);
+      box-shadow: var(--clay-raised);
+      gap: 4px;
+    }
+    .tabbar a.active { color: var(--accent-text); background: var(--clay-surface); box-shadow: var(--clay-pressed); }
+    .tabbar a:active { transform: scale(0.97); }
+    .tab-icon, .tabbar a.active .tab-icon { background: transparent; }
+    .status-trigger.compact { width: auto; min-height: 40px; padding: 0 10px; }
+  }
+  :global(:focus-visible) { outline: 3px solid var(--accent); outline-offset: 3px; }
+  @media (prefers-reduced-motion: reduce) {
+    .nav a, .status-trigger, .tabbar a { transition: none; }
+    .nav a:active, .status-trigger:active, .tabbar a:active { transform: none; }
   }
 </style>

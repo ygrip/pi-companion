@@ -21,11 +21,12 @@ export type AskQuestion = {
 
 /**
  * A pending question shown in the companion UI. `source` is "companion" for the
- * companion_ask_user tool, otherwise the relayed ctx.ui dialog kind.
+ * companion_ask_user tool, "tool" for another extension's question tool (e.g. pi-jar's
+ * jar_ask), otherwise the relayed ctx.ui dialog kind.
  */
 export type AskRequest = {
   requestId: string;
-  source: "companion" | "select" | "confirm" | "input";
+  source: "companion" | "tool" | "select" | "confirm" | "input";
   title?: string;
   questions: AskQuestion[];
   createdAt: string;

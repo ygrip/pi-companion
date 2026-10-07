@@ -30,7 +30,7 @@ export type AskQuestion = {
 export type AskRequest = {
   requestId: string;
   /** "companion" for Pi's companion_ask_user tool; otherwise a relayed extension dialog. */
-  source: 'companion' | 'select' | 'confirm' | 'input';
+  source: 'companion' | 'tool' | 'select' | 'confirm' | 'input';
   title?: string;
   questions: AskQuestion[];
   createdAt: string;

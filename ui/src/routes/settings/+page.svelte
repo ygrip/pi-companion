@@ -56,15 +56,6 @@
       saving = false;
     }
   }
-
-  async function copy(text: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      toasts.show('Copied.', 'success');
-    } catch {
-      toasts.show('Copy failed.', 'error');
-    }
-  }
 </script>
 
 <svelte:head><title>Settings · Pi Companion</title></svelte:head>
@@ -135,37 +126,23 @@
         </div>
       </section>
 
-      <div class="savebar">
-        {#if error}<span class="error" role="alert"><Icon name="alert" size={16} />{error}</span>
-        {:else}<span class="muted">{dirty ? 'You have unsaved changes.' : 'All changes saved.'}</span>{/if}
-        <button type="button" class="btn btn-ghost" onclick={() => data && apply(data)} disabled={!dirty || saving}>Discard</button>
-        <button class="btn btn-primary" disabled={!dirty || saving}>{saving ? 'Saving…' : 'Save changes'}</button>
-      </div>
-    </form>
-
-    <section class="card tile section" aria-labelledby="about">
-      <div class="section-copy">
-        <h2 id="about">About this daemon</h2>
-        <p class="muted">Pi Companion v{data.about.version}</p>
-      </div>
-      <dl class="facts">
-        {#each [
-          ['Console', data.about.adminUrl, 'Only reachable from this computer. Never expose it.'],
-          ['Device address', data.about.deviceUrl, 'Point your tunnel here.'],
-          ['Settings and devices', data.about.dataDir, 'Device keys are stored hashed.'],
-          ['Session files', data.about.tempDir, 'Cleared when a session ends.']
-        ] as [label, value, hint] (label)}
-          <div>
-            <dt>{label}</dt>
-            <dd>
-              <code title={value}>{value}</code>
-              <button class="btn btn-ghost btn-icon btn-sm" aria-label="Copy {label}" onclick={() => copy(value)}><Icon name="copy" size={14} /></button>
-            </dd>
-            <dd class="subtle">{hint}</dd>
+      <!-- Appears only with unsaved edits (or a save error), docked at the bottom in thumb reach. -->
+      {#if dirty || error}
+        <div class="savebar" role="region" aria-label="Unsaved changes">
+          <div class="savebar-copy">
+            {#if error}
+              <span class="error" role="alert"><Icon name="alert" size={16} />{error}</span>
+            {:else}
+              <span class="chip on"><span class="dot idle" aria-hidden="true"></span><span>Unsaved changes</span></span>
+            {/if}
           </div>
-        {/each}
-      </dl>
-    </section>
+          <div class="savebar-actions">
+            <button type="button" class="btn" onclick={() => { error = ''; if (data) apply(data); }} disabled={saving}><Icon name="close" size={16} />Discard</button>
+            <button class="btn btn-primary" disabled={!dirty || saving}><Icon name="check" size={16} />{saving ? 'Saving…' : 'Save'}</button>
+          </div>
+        </div>
+      {/if}
+    </form>
   {/if}
 </div>
 
@@ -293,20 +270,38 @@
 
   .savebar {
     position: sticky;
-    bottom: 8px;
+    bottom: 12px;
+    z-index: 2;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 10px;
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-lg);
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 10px 10px 16px;
+    border: 1px solid var(--accent-line);
+    border-radius: var(--radius-bento);
     background: var(--surface);
     box-shadow: var(--shadow);
+    animation: savebar-in 200ms var(--ease);
   }
 
-  .savebar > span {
-    flex: 1;
-    font-size: 0.9rem;
+  .savebar-copy {
+    min-width: 0;
+  }
+
+  .savebar-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .savebar-actions .btn {
+    min-width: 112px;
+    border-radius: 14px;
+  }
+
+  @keyframes savebar-in {
+    from {
+      transform: translateY(12px);
+    }
   }
 
   .error {
@@ -314,42 +309,7 @@
     align-items: center;
     gap: 6px;
     color: var(--danger);
-  }
-
-  .facts {
-    display: grid;
-    gap: 14px;
-    margin: 0;
-  }
-
-  .facts div {
-    display: grid;
-    gap: 2px;
-    min-width: 0;
-  }
-
-  .facts dt {
-    font-size: 0.85rem;
-    font-weight: 600;
-  }
-
-  .facts dd {
-    margin: 0;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 0;
-  }
-
-  .facts dd code {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-2);
-  }
-
-  .facts dd.subtle {
-    font-size: 0.8rem;
+    font-size: 0.9rem;
   }
 
   @media (max-width: 760px) {
@@ -367,15 +327,12 @@
       max-width: none;
     }
     .savebar {
-      flex-wrap: wrap;
-      padding: 10px;
+      flex-direction: column;
+      align-items: stretch;
+      padding: 12px;
     }
 
-    .savebar > span {
-      flex: 1 0 100%;
-    }
-
-    .savebar .btn {
+    .savebar-actions .btn {
       flex: 1;
       min-height: 48px;
     }

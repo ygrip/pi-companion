@@ -83,9 +83,11 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.on("tool_execution_start", (event, ctx) => {
     bridge.setContext(ctx);
     bridge.emit("tool.start", { toolCallId: event.toolCallId, toolName: event.toolName, args: summarize(event.args) });
+    bridge.toolDialogs.start(event.toolName, event.toolCallId, event.args);
   });
   pi.on("tool_execution_end", (event, ctx) => {
     bridge.setContext(ctx);
+    bridge.toolDialogs.end(event.toolCallId);
     bridge.emit("tool.end", {
       toolCallId: event.toolCallId,
       toolName: event.toolName,

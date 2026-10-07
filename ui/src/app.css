@@ -300,14 +300,14 @@ pre,
   padding: 0;
 }
 
-/* Bento button: a tall, thumb-friendly tile with an icon above its label. */
+/* Bento button: a large, thumb-friendly rounded button; icon and label sit inline. */
 .btn-bento {
-  display: grid;
-  align-content: space-between;
-  justify-items: start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   gap: 10px;
-  min-height: 76px;
-  padding: 14px 16px;
+  min-height: 52px;
+  padding: 0 18px;
   border: 1px solid var(--border);
   border-radius: var(--radius-bento);
   background: var(--surface-2);
@@ -660,10 +660,10 @@ button.chip:hover {
   }
 }
 
+/* Slide only: a sheet must never be stuck transparent if animations are throttled. */
 @keyframes sheet-in {
   from {
     transform: translateY(24px);
-    opacity: 0;
   }
 }
 
@@ -845,4 +845,119 @@ kbd {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ---------- Claymorphism ----------
+ * Soft, solid "clay" surfaces: an outer drop shadow plus inset highlight and inset shade.
+ * Raised = resting controls and cards; pressed = active/selected wells. No blur, no glass.
+ */
+
+:root,
+[data-theme='dark'] {
+  --clay-radius: 22px;
+  --clay-surface: var(--surface);
+  --clay-raised: 0 12px 26px -12px rgb(0 0 0 / 0.65), inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 -4px 8px rgb(0 0 0 / 0.38);
+  --clay-soft: 0 5px 12px -6px rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.07),
+    inset 0 -2px 5px rgb(0 0 0 / 0.32);
+  --clay-pressed: inset 0 3px 8px rgb(0 0 0 / 0.5), inset 0 -1px 0 rgb(255 255 255 / 0.05);
+  --clay-accent: 0 10px 20px -10px rgb(245 176 39 / 0.6), inset 0 2px 1px rgb(255 255 255 / 0.35),
+    inset 0 -4px 7px rgb(140 80 0 / 0.4);
+}
+
+[data-theme='light'] {
+  --clay-raised: 0 14px 26px -14px rgb(120 90 40 / 0.35), inset 0 2px 1px rgb(255 255 255 / 0.95),
+    inset 0 -4px 8px rgb(150 120 70 / 0.14);
+  --clay-soft: 0 6px 12px -7px rgb(120 90 40 / 0.35), inset 0 1px 1px rgb(255 255 255 / 0.95),
+    inset 0 -2px 5px rgb(150 120 70 / 0.14);
+  --clay-pressed: inset 0 3px 7px rgb(150 120 70 / 0.24), inset 0 -1px 0 rgb(255 255 255 / 0.85);
+  --clay-accent: 0 10px 20px -10px rgb(200 130 0 / 0.55), inset 0 2px 1px rgb(255 255 255 / 0.55),
+    inset 0 -4px 7px rgb(160 95 0 / 0.3);
+}
+
+.clay {
+  border: 1px solid var(--border);
+  border-radius: var(--clay-radius);
+  background: var(--clay-surface);
+  box-shadow: var(--clay-raised);
+}
+
+/* A raised rounded square that holds a small vector icon. */
+.clay-well {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  background: var(--surface-2);
+  color: var(--accent-text);
+  box-shadow: var(--clay-soft);
+}
+
+.card,
+.tile {
+  border-radius: var(--clay-radius);
+  box-shadow: var(--clay-raised);
+}
+
+.tile.sunken {
+  box-shadow: var(--clay-pressed);
+}
+
+.btn,
+.btn-bento {
+  box-shadow: var(--clay-soft);
+  transition: background-color 150ms var(--ease), border-color 150ms var(--ease), color 150ms var(--ease),
+    transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 200ms ease-out;
+}
+
+.btn {
+  border-radius: 12px;
+}
+
+.btn-primary,
+.btn-bento.primary {
+  box-shadow: var(--clay-accent);
+}
+
+.btn-ghost {
+  box-shadow: none;
+}
+
+.btn:active:not(:disabled),
+.btn-bento:active:not(:disabled) {
+  transform: scale(0.97);
+  box-shadow: var(--clay-pressed);
+}
+
+.chip {
+  box-shadow: var(--clay-soft);
+}
+
+.chip[aria-pressed='true'],
+.chip[aria-checked='true'],
+.chip.on {
+  box-shadow: var(--clay-pressed);
+}
+
+.segmented {
+  border-radius: 14px;
+  box-shadow: var(--clay-pressed);
+}
+
+.segmented button[aria-pressed='true'],
+.segmented button[aria-checked='true'],
+.segmented button[aria-selected='true'] {
+  box-shadow: var(--clay-soft);
+}
+
+.input,
+.textarea {
+  border-radius: 12px;
+  box-shadow: var(--clay-pressed);
+}
+
+.sheet {
+  box-shadow: 0 -18px 50px -20px rgb(0 0 0 / 0.5), inset 0 1px 0 rgb(255 255 255 / 0.06);
 }

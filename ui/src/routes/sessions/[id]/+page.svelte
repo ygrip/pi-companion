@@ -5,8 +5,18 @@
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
+  import { codeBlock, looksLikeJson, prettify, prettyJson, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
+
+  /** A tool entry's body is its arguments, then "\n→ " and the result once it finishes. */
+  function toolParts(entry: ActivityEntry) {
+    const split = entry.body.indexOf('\n→ ');
+    if (split >= 0) return { args: entry.body.slice(0, split), result: entry.body.slice(split + 3) };
+    return entry.toolCallId ? { args: entry.body, result: '' } : { args: '', result: entry.body };
+  }
+
+  const lineCount = (text: string) => text.split('\n').length;
 
   type Tab = 'activity' | 'files' | 'changes' | 'plan';
 
@@ -300,17 +310,39 @@
                       <span class="glyph" aria-hidden="true">{glyph[entry.kind]}</span>
                       <div class="line-main">
                         {#if entry.kind === 'tool'}
+                          {@const parts = toolParts(entry)}
                           <div class="cmd">
                             <b>{entry.title}</b>
+                            {#if parts.args}<code class="args" title={parts.args}>{parts.args}</code>{/if}
                             {#if entry.status === 'running'}<span class="state run">running</span>
                             {:else if entry.status === 'ok'}<span class="state ok">ok</span>
                             {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
                           </div>
-                          {#if entry.body}<pre class="out">{entry.body}</pre>{/if}
+                          {#if parts.result}
+                            {@const json = looksLikeJson(parts.result)}
+                            {@const shown = json ? prettyJson(parts.result) : parts.result}
+                            {@const lines = lineCount(shown)}
+                            <details class="out" open={entry.status === 'error' || lines <= 6}>
+                              <summary>output · {lines} {lines === 1 ? 'line' : 'lines'}</summary>
+                              {#if json}
+                                <div use:prettify={{ text: shown, final: true }}>{@html codeBlock(shown, 'json')}</div>
+                              {:else}
+                                <pre>{shown}</pre>
+                              {/if}
+                            </details>
+                          {/if}
                         {:else if entry.kind === 'lifecycle'}
                           <span>{entry.title}{entry.body ? ' · ' + entry.body : ''}</span>
                         {:else if entry.kind === 'error'}
                           <pre><b>{entry.title}:</b> {entry.body}</pre>
+                        {:else if entry.kind === 'thinking'}
+                          <details class="thought">
+                            <summary>thinking · {lineCount(entry.body)} {lineCount(entry.body) === 1 ? 'line' : 'lines'}</summary>
+                            <pre>{entry.body}</pre>
+                          </details>
+                        {:else if entry.kind === 'assistant'}
+                          {@const final = entry !== feed.at(-1) || session.status !== 'active'}
+                          <div class="md" use:prettify={{ text: entry.body, final }}>{@html renderMarkdown(entry.body)}</div>
                         {:else}
                           {#if entry.kind === 'user' && entry.title !== 'You'}<span class="tag">{entry.title.replace('You · ', '')}</span>{/if}
                           <pre>{entry.body}</pre>
@@ -403,35 +435,46 @@
         {/if}
       </div>
 
-      <form class="composer" onsubmit={(event) => { event.preventDefault(); submit(); }}>
-        {#if ended}
-          <p class="ended"><span class="glyph">!</span>Session ended. History is read-only.</p>
-        {:else}
-          {#if asks.length && !askOpen}
-            <button type="button" class="ask-pill" onclick={() => (askOpen = true)}>
-              <Icon name="question" size={16} />
-              <span>Pi is waiting for your answer</span>
-              <span class="badge count">{asks.length}</span>
-            </button>
+      {#if !ended && asks.length && !askOpen}
+        <button type="button" class="ask-pill" onclick={() => (askOpen = true)}>
+          <Icon name="question" size={16} />
+          <span>Pi is waiting for your answer</span>
+          <span class="badge count">{asks.length}</span>
+        </button>
+      {/if}
+
+      {#if tab === 'activity'}
+        <form class="composer" onsubmit={(event) => { event.preventDefault(); submit(); }}>
+          {#if ended}
+            <p class="ended"><span class="glyph">!</span>Session ended. History is read-only.</p>
+          {:else}
+            <div class="prompt-row">
+              <span class="ps1" aria-hidden="true">❯</span>
+              <label class="sr-only" for="prompt">Message Pi</label>
+              <textarea
+                id="prompt"
+                rows="1"
+                bind:this={promptEl}
+                bind:value={prompt}
+                oninput={autosize}
+                onkeydown={onComposerKey}
+                placeholder={steer && session.status === 'active' ? 'steer the current turn…' : 'message pi…'}></textarea>
+            </div>
+            <div class="composer-bar">
+              {#if session.status === 'active'}
+                <label class="toggle" title="Send into the turn Pi is working on instead of queueing a new prompt">
+                  <input type="checkbox" bind:checked={steer} />
+                  <span class="track" aria-hidden="true"></span>
+                  Steer current turn
+                </label>
+              {:else}
+                <span class="hint">Enter to send · Shift+Enter for a new line</span>
+              {/if}
+              <button class="btn btn-primary send" disabled={!prompt.trim()}><Icon name="send" size={16} />{steer && session.status === 'active' ? 'Steer' : 'Send'}</button>
+            </div>
           {/if}
-          <div class="prompt-row">
-            <span class="ps1" aria-hidden="true">❯</span>
-            <label class="sr-only" for="prompt">Message Pi</label>
-            <textarea
-              id="prompt"
-              rows="1"
-              bind:this={promptEl}
-              bind:value={prompt}
-              oninput={autosize}
-              onkeydown={onComposerKey}
-              placeholder={steer && session.status === 'active' ? 'steer the current turn…' : 'message pi…'}></textarea>
-            {#if session.status === 'active'}
-              <button type="button" class="chip steer" aria-pressed={steer} onclick={() => (steer = !steer)} title="Send into the turn Pi is working on">steer</button>
-            {/if}
-            <button class="btn btn-primary btn-icon send" aria-label="Send" disabled={!prompt.trim()}><Icon name="send" size={16} /></button>
-          </div>
-        {/if}
-      </form>
+        </form>
+      {/if}
     </section>
   </div>
 
@@ -531,8 +574,9 @@
     gap: 6px;
     padding: 6px;
     border: 1px solid var(--border);
-    border-radius: var(--radius-bento);
+    border-radius: var(--clay-radius);
     background: var(--bg-sunken);
+    box-shadow: var(--clay-pressed);
   }
 
   .tabs button {
@@ -561,7 +605,7 @@
     border-color: var(--border);
     background: var(--surface);
     color: var(--accent-text);
-    box-shadow: var(--shadow-sm);
+    box-shadow: var(--clay-soft);
   }
 
   .body {
@@ -571,29 +615,24 @@
     display: flex;
     flex-direction: column;
     border: 1px solid var(--border);
-    border-radius: var(--radius-bento);
+    border-radius: var(--clay-radius);
     background: var(--surface);
+    box-shadow: var(--clay-raised);
     overflow: hidden;
   }
 
   /* ---------- Terminal transcript ---------- */
 
+  /* The shell follows the app theme. */
   .term,
   .composer {
-    --term-bg: #0d0d0f;
-    --term-line: #1f1f24;
-    --term-text: #ece8df;
-    --term-dim: #8f8a80;
-    --term-accent: #f8bf4f;
-    --term-ok: #5fd39a;
-    --term-err: #ff8a80;
-  }
-
-  :global([data-theme='light']) .term,
-  :global([data-theme='light']) .composer {
-    --term-bg: #1d1b18;
-    --term-line: #2e2b27;
-    --term-dim: #a39d92;
+    --term-bg: var(--code-bg);
+    --term-line: var(--border);
+    --term-text: var(--text);
+    --term-dim: var(--text-3);
+    --term-accent: var(--accent-text);
+    --term-ok: var(--ok);
+    --term-err: var(--danger);
   }
 
   .term {
@@ -690,13 +729,25 @@
     display: flex;
     align-items: baseline;
     gap: 1ch;
+    min-width: 0;
   }
 
   .cmd b {
+    flex: none;
     color: var(--term-text);
   }
 
+  .args {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--term-dim);
+    font-size: 0.78rem;
+  }
+
   .state {
+    flex: none;
     font-size: 0.75rem;
   }
 
@@ -712,16 +763,200 @@
     color: var(--term-err);
   }
 
-  .out {
-    max-height: 220px;
-    overflow: auto;
-    margin-top: 2px !important;
-    padding-left: 1.5ch;
-    border-left: 1px solid var(--term-line);
+  /* Collapsible tool output and thinking. */
+  details.out,
+  details.thought {
+    margin-top: 2px;
+  }
+
+  details summary {
+    width: fit-content;
+    padding: 0 6px;
+    border-radius: 6px;
     color: var(--term-dim);
-    white-space: pre !important;
-    overflow-wrap: normal !important;
+    font-size: 0.75rem;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  details summary::-webkit-details-marker {
+    display: none;
+  }
+
+  details summary::before {
+    content: '▸ ';
+  }
+
+  details[open] > summary::before {
+    content: '▾ ';
+  }
+
+  details summary:hover {
+    color: var(--term-text);
+    background: var(--surface-2);
+  }
+
+  .out > pre,
+  .out > div {
+    max-height: 260px;
+    overflow: auto;
+    margin-top: 4px;
+    padding-left: 1.5ch;
+    border-left: 2px solid var(--term-line);
+    color: var(--term-dim);
     scrollbar-width: thin;
+  }
+
+  .out > pre,
+  .out :global(pre) {
+    margin: 0;
+    font: inherit;
+    white-space: pre;
+    overflow-wrap: normal;
+  }
+
+  .thought pre {
+    margin-top: 4px;
+    padding-left: 1.5ch;
+    border-left: 2px solid var(--term-line);
+  }
+
+  /* ---------- Rendered Markdown (Pi's replies) ---------- */
+
+  .md {
+    font-family: var(--font);
+    font-size: 0.92rem;
+    line-height: 1.6;
+    overflow-wrap: anywhere;
+  }
+
+  .md :global(> :first-child) {
+    margin-top: 0;
+  }
+
+  .md :global(> :last-child) {
+    margin-bottom: 0;
+  }
+
+  .md :global(p),
+  .md :global(ul),
+  .md :global(ol),
+  .md :global(blockquote),
+  .md :global(table),
+  .md :global(pre),
+  .md :global(figure) {
+    margin: 0 0 10px;
+  }
+
+  .md :global(h1),
+  .md :global(h2),
+  .md :global(h3),
+  .md :global(h4) {
+    margin: 14px 0 6px;
+    font-size: 1rem;
+    line-height: 1.3;
+  }
+
+  .md :global(h1) {
+    font-size: 1.15rem;
+  }
+
+  .md :global(ul),
+  .md :global(ol) {
+    padding-left: 22px;
+  }
+
+  .md :global(a) {
+    color: var(--accent-text);
+  }
+
+  .md :global(code) {
+    padding: 1px 5px;
+    border-radius: 6px;
+    background: var(--surface-2);
+    font-size: 0.85em;
+  }
+
+  .md :global(pre),
+  .out :global(pre) {
+    overflow: auto;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    font-size: 0.8rem;
+  }
+
+  .md :global(pre code) {
+    padding: 0;
+    background: none;
+  }
+
+  .md :global(blockquote) {
+    padding-left: 12px;
+    border-left: 3px solid var(--accent-line);
+    color: var(--text-2);
+  }
+
+  .md :global(table) {
+    display: block;
+    overflow-x: auto;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+  }
+
+  .md :global(th),
+  .md :global(td) {
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+  }
+
+  .md :global(.mermaid-diagram) {
+    overflow-x: auto;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--surface);
+    text-align: center;
+  }
+
+  .md :global(.mermaid-diagram svg) {
+    max-width: 100%;
+    height: auto;
+  }
+
+  /* highlight.js tokens mapped to theme colors (works in both themes). */
+  .term :global(.hljs-keyword),
+  .term :global(.hljs-selector-tag),
+  .term :global(.hljs-built_in),
+  .term :global(.hljs-literal) {
+    color: var(--accent-text);
+  }
+
+  .term :global(.hljs-string),
+  .term :global(.hljs-attr),
+  .term :global(.hljs-template-tag) {
+    color: var(--ok);
+  }
+
+  .term :global(.hljs-number),
+  .term :global(.hljs-symbol),
+  .term :global(.hljs-variable) {
+    color: var(--danger);
+  }
+
+  .term :global(.hljs-comment),
+  .term :global(.hljs-quote) {
+    color: var(--text-3);
+    font-style: italic;
+  }
+
+  .term :global(.hljs-title),
+  .term :global(.hljs-function),
+  .term :global(.hljs-type),
+  .term :global(.hljs-property) {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .tag {
@@ -989,17 +1224,79 @@
     color: var(--term-dim);
   }
 
-  .steer {
-    align-self: center;
-    border-color: var(--term-line);
-    background: transparent;
-    color: var(--term-dim);
-    font-family: var(--mono);
+  .composer-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 0 4px;
+  }
+
+  .composer-bar .hint {
+    font-size: 0.78rem;
+    color: var(--text-3);
+  }
+
+  .toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
+    color: var(--text-2);
+    font-size: 0.88rem;
+    font-weight: 550;
+    cursor: pointer;
+  }
+
+  .toggle input {
+    position: absolute;
+    opacity: 0;
+    width: 1px;
+    height: 1px;
+  }
+
+  .track {
+    position: relative;
+    width: 38px;
+    height: 22px;
+    border-radius: 999px;
+    background: var(--surface-3);
+    box-shadow: var(--clay-pressed);
+    transition: background-color 150ms var(--ease);
+  }
+
+  .track::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    background: var(--text-3);
+    box-shadow: var(--clay-soft);
+    transition: translate 200ms ease-out, background-color 150ms var(--ease);
+  }
+
+  .toggle input:checked + .track {
+    background: var(--accent);
+  }
+
+  .toggle input:checked + .track::after {
+    translate: 16px 0;
+    background: var(--accent-ink);
+  }
+
+  .toggle input:focus-visible + .track {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .send {
     flex: none;
-    border-radius: 12px;
+    min-width: 112px;
+    min-height: 44px;
+    border-radius: 14px;
   }
 
   .ended {
@@ -1026,21 +1323,22 @@
       font-size: 1.05rem;
     }
 
-    /* Icon over label gives each tab a taller, wider target. */
+    /* Icon and label stay inline; tabs are compact but still 48px tall. */
+    .tabs {
+      gap: 4px;
+      padding: 4px;
+    }
+
     .tabs button {
-      flex-direction: column;
-      gap: 2px;
-      min-height: 56px;
+      gap: 5px;
+      min-height: 48px;
+      padding: 0 4px;
       font-size: 0.78rem;
     }
 
-    .tabs .badge {
-      position: absolute;
-      translate: 14px -14px;
-    }
-
-    .tabs button {
-      position: relative;
+    .tabs button :global(.icon) {
+      width: 16px;
+      height: 16px;
     }
 
     .feed {

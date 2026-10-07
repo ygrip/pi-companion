@@ -1,23 +1,31 @@
 <script lang="ts">
   import { onMount, type Component } from 'svelte';
   import piArt from '../assets/morph/pi.png';
-  import computerArt from '../assets/morph/computer.svg';
-  import companionArt from '../assets/morph/companion.svg';
+  import computerClay from '../assets/clay/computer.webp';
+  import mobileClay from '../assets/clay/mobile.webp';
+  import bulbClay from '../assets/clay/bulb.webp';
+  import chatBubbleClay from '../assets/clay/chat-bubble.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
   import { companion } from '#lib/companion.svelte.ts';
-  import { toasts } from '#lib/toast.svelte.ts';
 
   // The dot field morphs Pi → computer → companion, on the same loop as Raksara.
-  const art = [piArt, computerArt, companionArt];
+  const art = [piArt, computerClay, mobileClay];
   let visual = $state<HTMLDivElement | null>(null);
   let DotField = $state<Component<any> | null>(null);
 
-  const live = $derived(companion.sessions.filter((s) => s.status !== 'stopped'));
-  const working = $derived(companion.sessions.filter((s) => s.status === 'active').length);
+  const live = $derived(companion.sessions.filter((session) => session.status !== 'stopped'));
+  const needsAnswer = $derived(live.filter((session) => companion.pendingAsks(session.id) > 0));
+  const liveNow = $derived(
+    live
+      .filter((session) => companion.pendingAsks(session.id) === 0)
+      .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active'))
+      .slice(0, 6)
+  );
+  const working = $derived(companion.sessions.filter((session) => session.status === 'active').length);
   const waiting = $derived(Object.values(companion.asks).reduce((n, list) => n + list.length, 0));
   const connected = $derived(companion.devices.filter((d) => d.connected).length);
-  const recent = $derived(companion.sessions.slice(0, 4));
+  const totalSessions = $derived(companion.sessions.length);
 
   type Stat = { label: string; value: number | string; hint: string; icon: IconName; href: string };
   const stats = $derived<Stat[]>([
@@ -31,30 +39,7 @@
       : [])
   ]);
 
-  const steps = $derived(
-    companion.isAdmin
-      ? [
-          { title: 'Install the Pi package', body: 'Install the extension once. The matching daemon binary downloads automatically on first use.', code: 'pi install git:github.com/ygrip/pi-companion' },
-          { title: 'Enable each Pi session', body: 'Open Pi in your project and run /companion in every session you want to control. It starts the daemon, prints this dashboard URL and enables remote control for that session. /remote-control toggles sharing off or on.' },
-          { title: 'Open this dashboard', body: 'Keep this dashboard open on your computer to follow the sessions you enabled.' },
-          { title: 'Pair your phone', body: 'From Devices, scan the QR code or enter the one-time code. Pairing is an admin-only setup step.' },
-          { title: 'Follow and steer', body: 'Watch activity, answer Pi’s questions, drop files into a session and review changes.' }
-        ]
-      : [
-          { title: 'Choose a shared session', body: 'Your computer shares sessions only when remote control is enabled for them.' },
-          { title: 'Follow activity', body: 'Read Pi’s replies and tool activity as it happens.' },
-          { title: 'Answer and steer', body: 'Answer questions, send a prompt, drop files and review changes.' }
-        ]
-  );
 
-  async function copyInstall() {
-    try {
-      await navigator.clipboard.writeText('pi install git:github.com/ygrip/pi-companion');
-      toasts.show('Install command copied.', 'success');
-    } catch {
-      toasts.show('Copy failed.', 'error');
-    }
-  }
 
   onMount(() => {
     // The canvas is decorative: load it after first paint and when the browser is idle.
@@ -88,6 +73,7 @@
       </p>
       <div class="cta">
         <a class="btn btn-primary" href="/sessions"><Icon name="sessions" />Open sessions</a>
+        <a class="btn" href="/help"><Icon name="help" />Help</a>
         {#if companion.isAdmin}
           <a class="btn" href="/devices"><Icon name="devices" />Pair a phone</a>
         {/if}
@@ -111,51 +97,49 @@
       </a>
     {/each}
   </section>
+  <a class="guide-tile tile" href="/help">
+    <img src={bulbClay} alt="" aria-hidden="true" />
+    <span><strong>New here?</strong><span class="subtle">Follow the setup guide to get connected.</span></span>
+    <span class="btn btn-ghost">Setup guide<Icon name="chevron" size={14} /></span>
+  </a>
 
-  <section class="recent" aria-labelledby="recent-heading">
-    <div class="section-head">
-      <h2 id="recent-heading">Recent sessions</h2>
-      {#if companion.sessions.length > recent.length}
-        <a class="btn btn-ghost btn-sm" href="/sessions">View all {companion.sessions.length}<Icon name="chevron" size={14} /></a>
-      {/if}
-    </div>
-    {#if recent.length}
-      <div class="session-grid">
-        {#each recent as session (session.id)}<SessionCard {session} />{/each}
+
+  {#if needsAnswer.length}
+    <section class="recent" aria-labelledby="needs-answer-heading">
+      <div class="section-head">
+        <h2 id="needs-answer-heading"><img src={chatBubbleClay} alt="" aria-hidden="true" />Needs your answer</h2>
       </div>
+      <div class="session-grid">
+        {#each needsAnswer as session (session.id)}<SessionCard {session} highlighted />{/each}
+      </div>
+    </section>
+  {/if}
+
+  <section class="recent" aria-labelledby="live-heading">
+    <div class="section-head">
+      <h2 id="live-heading">Live now</h2>
+      <a class="btn btn-ghost btn-sm" href="/sessions">View all {totalSessions}<Icon name="chevron" size={14} /></a>
+    </div>
+    {#if live.length}
+      {#if liveNow.length}
+        <div class="session-grid">
+          {#each liveNow as session (session.id)}<SessionCard {session} />{/each}
+        </div>
+      {:else}
+        <p class="muted">All live sessions are shown above because they need your answer.</p>
+      {/if}
     {:else}
-      <div class="card empty">
-        <span class="empty-icon"><Icon name="sessions" /></span>
+      <div class="tile empty">
+        <span class="empty-icon"><img src={computerClay} alt="" aria-hidden="true" /></span>
+        <h2>No live sessions</h2>
         {#if companion.isAdmin}
-          <h2>No Pi sessions yet</h2>
-          <p>Start <code>pi</code> in any project. With the companion extension installed, the session appears here within a second.</p>
+          <p>Run <code>/companion</code> in a Pi session to bring it here. Install the extension first if you haven't already.</p>
         {:else}
-          <h2>Nothing shared yet</h2>
-          <p>On your computer, type <code>/remote-control</code> inside a Pi session to share it with this device.</p>
+          <p>Ask the administrator to share a session by enabling remote control with <code>/companion</code>.</p>
         {/if}
+        <a class="btn" href="/help"><Icon name="help" />Setup guide</a>
       </div>
     {/if}
-  </section>
-
-  <section class="steps" aria-labelledby="steps-heading">
-    <h2 id="steps-heading" class="sr-only">How it works</h2>
-    {#each steps as step, index (step.title)}
-      <article class="step tile" class:span-2={companion.isAdmin && index === 1}>
-        <span class="step-index">{index + 1}</span>
-        <h3>{step.title}</h3>
-        {#if companion.isAdmin && index === 1}
-          <p class="muted">Open Pi in your project and run <code>/companion</code> in every session you want to control. It starts the daemon, prints this dashboard URL and enables remote control for that session. <code>/remote-control</code> toggles sharing off or on.</p>
-        {:else}
-          <p class="muted">{step.body}</p>
-        {/if}
-        {#if 'code' in step && step.code}
-          <div class="install-command">
-            <code>{step.code}</code>
-            <button class="btn btn-ghost btn-icon" aria-label="Copy install command" onclick={copyInstall}><Icon name="copy" /></button>
-          </div>
-        {/if}
-      </article>
-    {/each}
   </section>
 </div>
 
@@ -301,55 +285,24 @@
     gap: 12px;
   }
 
-  .steps {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 14px;
-  }
-
-  .step {
-    display: grid;
-    align-content: start;
-    gap: 8px;
-    min-width: 0;
-    padding: 18px;
-  }
-
-  .step-index {
-    display: grid;
-    place-items: center;
-    width: 30px;
-    height: 30px;
-    margin-bottom: 4px;
-    border-radius: 10px;
-    background: var(--accent-soft);
-    font: 700 0.85rem/1 var(--mono);
-    color: var(--accent-text);
-  }
-
-  .step p {
-    font-size: 0.9rem;
-  }
-
-  .install-command {
+  .guide-tile {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    min-width: 0;
-    padding: 4px 4px 4px 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    background: var(--bg-sunken);
+    gap: 14px;
+    padding: 12px 18px;
+    text-decoration: none;
   }
-
-  .install-command code {
-    overflow-wrap: anywhere;
-    font-size: 0.78rem;
-  }
-
-  .install-command button {
-    flex: none;
+  .guide-tile > img, .section-head h2 img { width: 56px; height: 56px; object-fit: contain; flex: none; }
+  .guide-tile > span:nth-child(2) { display: grid; gap: 3px; }
+  .guide-tile .btn { margin-left: auto; }
+  .section-head h2 { display: flex; align-items: center; gap: 10px; }
+  .empty .empty-icon img { width: 64px; height: 64px; object-fit: contain; }
+  .empty .btn { justify-self: start; }
+  @media (max-width: 520px) {
+    .guide-tile { gap: 8px; padding: 10px; }
+    .guide-tile > img { width: 44px; height: 44px; }
+    .guide-tile .btn { font-size: 0.76rem; gap: 4px; padding: 8px; }
+    .guide-tile .btn :global(svg) { width: 16px; height: 16px; }
   }
   @media (max-width: 900px) {
     .hero {
@@ -375,15 +328,9 @@
       gap: 12px;
     }
 
-    .steps {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
   }
 
   @media (max-width: 520px) {
-    .steps {
-      grid-template-columns: minmax(0, 1fr);
-    }
     .stats {
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 8px;

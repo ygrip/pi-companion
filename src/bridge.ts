@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { relayDialogs, type AskChannel, type AskInput } from "./ask.js";
+import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from "./ask.js";
 import { ensureDaemon } from "./daemon.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 
 export class CompanionBridge implements AskChannel {
   readonly sessionId = randomUUID();
+  /** Relays question tools that ask through ctx.ui.custom (fed from tool_execution_* events). */
+  readonly toolDialogs = new ToolDialogRelay(this);
   private ws?: WebSocket;
   private ctx?: ExtensionContext;
   private reconnect?: NodeJS.Timeout;
@@ -38,7 +40,7 @@ export class CompanionBridge implements AskChannel {
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
-    if (ctx.hasUI) relayDialogs(ctx.ui, this);
+    if (ctx.hasUI) relayDialogs(ctx.ui, this, this.toolDialogs);
     this.snapshot = {
       ...this.snapshot,
       cwd: ctx.cwd,

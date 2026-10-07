@@ -114,7 +114,7 @@ A paired device cannot access sessions that have not explicitly enabled remote c
 
 Pi's `companion_ask_user` tool asks one to four questions at once. Each question can offer options with descriptions, allow several choices (`multiSelect`), and accept a free-text "Other" answer; a question without options is free text. The browser shows them in a bottom sheet within thumb reach; "Later" hides it until you tap the waiting-question badge.
 
-Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. `ctx.ui.editor` and `ctx.ui.custom` stay terminal-only because they cannot be dismissed programmatically. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
+Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. Question tools that draw their own `ctx.ui.custom` picker are relayed through a small adapter: pi-jar's `jar_ask` is supported, and a companion answer completes its terminal picker. Other `ctx.ui.custom` components and `ctx.ui.editor` stay terminal-only because they cannot be answered from outside. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
 
 ## Pairing and devices
 
@@ -196,18 +196,21 @@ A single-page SvelteKit app, embedded in the daemon binary:
 
 | Page | Who sees it | What it is for |
 |---|---|---|
-| Overview | everyone | Dot-field hero, live counts, recent sessions, step-by-step setup |
+| Overview | everyone | Dot-field hero, live counts, sessions that need your answer, live sessions, Help entry |
 | Sessions | everyone | Searchable, filterable list (Working / Waiting / Ended). Paired devices only see shared sessions |
-| Session detail | everyone | Terminal-style activity transcript, question sheet, files, git changes, /plan, message / steer. Session details are collapsed under the title |
-| Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings |
-| Help, Privacy, Terms | everyone | Usage guide and troubleshooting, data handling, terms of use |
+| Session detail | everyone | Shell-style transcript that follows the theme: Markdown replies with highlight.js code and Mermaid diagrams, collapsible tool output and thinking. Question sheet, files, git changes, /plan; the composer (message / steer) appears on Activity only. Session details are collapsed under the title |
+| Devices, Settings | local console only | Pairing, connection status, disconnect and revoke; daemon settings with a save bar that appears only for unsaved edits |
+| Help, Privacy, Terms | everyone | Setup stepper, commands, tools, troubleshooting; data handling; terms of use. Help is opened from the Overview |
+
+The Live indicator in the header and sidebar opens the connection sheet (status, version and, on this computer, the console and device addresses and data folders).
 
 Git problems on the Changes tab (for example a folder that is not a git repository) show as a toast, never in the transcript.
 
 Design notes:
 
 - light and dark themes with a system default, applied before first paint so there is no flash
-- warm amber on graphite or paper, matching the logo; system fonts only, so nothing loads from the network
+- claymorphism: solid surfaces with an outer drop shadow plus inset highlight and shade (no blur or glass); small icons are Lucide line icons on raised clay wells, feature art is 3D clay renders from [3dicons](https://3dicons.co) (CC0)
+- warm amber on graphite or paper, matching the logo; system fonts only, so nothing loads from the network. highlight.js and Mermaid load only when a reply contains code or a diagram
 - the window never scrolls. The sidebar, page content, activity feed, file list, diff, chips and tabs each scroll inside their own container, and the composer and mobile tab bar stay put
 - the activity feed follows new output and stops following when you scroll up ("Jump to latest" brings you back)
 - mobile: bottom tab bar, safe-area insets, 44px touch targets, 16px inputs (no iOS zoom), Enter inserts a newline on touch keyboards

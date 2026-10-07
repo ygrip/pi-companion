@@ -1,6 +1,6 @@
 {
   "name": "@ygrip/pi-companion",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",
@@ -62,6 +62,10 @@
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@types/node": "^24.7.0",
     "@types/ws": "^8.18.1",
+    "dompurify": "^3.4.16",
+    "highlight.js": "^11.12.0",
+    "marked": "^18.1.0",
+    "mermaid": "^12.1.0",
     "svelte": "^5.57.2",
     "svelte-check": "^4.7.6",
     "typebox": "^1.0.13",

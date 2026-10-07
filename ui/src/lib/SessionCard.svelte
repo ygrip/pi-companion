@@ -4,19 +4,17 @@
   import { prettyPath, sessionTitle, statusLabel } from './format.ts';
   import type { Session } from './types.ts';
 
-  let { session }: { session: Session } = $props();
+  let { session, highlighted = false }: { session: Session; highlighted?: boolean } = $props();
   const waiting = $derived(companion.pendingAsks(session.id));
 </script>
 
-<a class="session-card tile" class:stopped={session.status === 'stopped'} href="/sessions/{encodeURIComponent(session.id)}">
+<a class="session-card tile" class:stopped={session.status === 'stopped'} class:accent={highlighted} href="/sessions/{encodeURIComponent(session.id)}">
   <div class="row top">
     <span class="badge" class:ok={session.status === 'active'} class:danger={session.status === 'stopped'}>
       <span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}
     </span>
     {#if waiting}
       <span class="badge count" aria-label="{waiting} questions waiting"><Icon name="question" size={12} />{waiting}</span>
-    {:else if session.remoteEnabled && companion.isAdmin}
-      <span class="badge" title="Visible on paired devices"><Icon name="link" size={12} />Shared</span>
     {/if}
   </div>
   <div class="title">
