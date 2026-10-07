@@ -1,8 +1,9 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { ensureDaemon } from "./daemon.js";
 import type { BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -11,8 +12,13 @@ export class CompanionBridge {
   readonly sessionId = randomUUID();
   private ws?: WebSocket;
   private ctx?: ExtensionContext;
-  private startedServer = false;
   private reconnect?: NodeJS.Timeout;
+  private closed = false;
+  private connecting = false;
+  private everConnected = false;
+  private downSince = 0;
+  private retryDelay = 1000;
+  private lastWarning = "";
   private tempFiles: TempFile[] = [];
   private pendingAsks = new Map<string, { resolve: (answer: string) => void; timer: NodeJS.Timeout }>();
   private pendingDeletes = new Map<string, { resolve: (result: { ok: boolean; error?: string }) => void; timer: NodeJS.Timeout }>();
@@ -58,26 +64,52 @@ export class CompanionBridge {
     return [...this.tempFiles];
   }
 
-  connect() {
+  /** Connect to the shared daemon, launching it only when nothing is listening. */
+  async connect() {
+    if (this.closed || this.connecting) return;
+    this.connecting = true;
+    try {
+      // After a live connection drops (e.g. a dev daemon restarting), give it a grace
+      // period to come back before launching a replacement.
+      const allowSpawn = !this.everConnected || (this.downSince > 0 && Date.now() - this.downSince > 20_000);
+      if (allowSpawn) await ensureDaemon((message, level = "info") => this.log(message, level));
+      if (this.closed) return;
+      this.open();
+    } finally {
+      this.connecting = false;
+    }
+  }
+
+  private open() {
     const base = process.env.PI_COMPANION_URL ?? "ws://127.0.0.1:43721";
-    this.ws = new WebSocket(base.replace(/\/$/, "") + "/ws/bridge/" + this.sessionId);
-    this.ws.on("open", () => this.send({ type: "register", session: this.snapshot }));
-    this.ws.on("message", raw => {
+    const ws = new WebSocket(base.replace(/\/$/, "") + "/ws/bridge/" + this.sessionId);
+    this.ws = ws;
+    ws.on("open", () => {
+      this.everConnected = true;
+      this.downSince = 0;
+      this.retryDelay = 1000;
+      this.send({ type: "register", session: this.snapshot });
+    });
+    ws.on("message", raw => {
       try { void this.handle(JSON.parse(raw.toString()) as ServerMessage); }
       catch (error) { this.send({ type: "error", message: "Invalid server message: " + String(error) }); }
     });
-    this.ws.on("close", () => this.scheduleReconnect());
-    this.ws.on("error", () => {
-      if (!this.startedServer && (process.env.PI_COMPANION_AUTOSTART ?? "1") !== "0") {
-        this.startedServer = true;
-        const binary = process.env.PI_COMPANION_SERVER ?? "pi-companion-server";
-        const child = spawn(binary, [], { detached: true, stdio: "ignore" });
-        child.unref();
-      }
+    ws.on("close", () => {
+      if (this.ws !== ws) return;
+      if (!this.downSince) this.downSince = Date.now();
+      this.scheduleReconnect();
     });
+    ws.on("error", () => { /* close follows; reconnect is scheduled there */ });
+  }
+
+  private log(message: string, level: "info" | "warning" | "error") {
+    if (level !== "info" && message === this.lastWarning) return;
+    if (level !== "info") this.lastWarning = message;
+    this.ctx?.ui.notify(message, level);
   }
 
   close() {
+    this.closed = true;
     if (this.reconnect) clearTimeout(this.reconnect);
     this.ws?.close();
   }
@@ -121,7 +153,9 @@ export class CompanionBridge {
 
   private scheduleReconnect() {
     if (this.reconnect) clearTimeout(this.reconnect);
-    this.reconnect = setTimeout(() => this.connect(), 1500);
+    if (this.closed) return;
+    this.reconnect = setTimeout(() => void this.connect(), this.retryDelay);
+    this.retryDelay = Math.min(this.retryDelay * 2, 10_000);
   }
 
   private async handle(message: ServerMessage) {

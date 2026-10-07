@@ -161,8 +161,24 @@ async fn main() {
     let local = local_router(state.clone());
     let remote = remote_router(state.clone());
 
-    let local_listener = tokio::net::TcpListener::bind(LOCAL_ADDR).await.expect("bind local admin");
-    let remote_listener = tokio::net::TcpListener::bind(REMOTE_ADDR).await.expect("bind remote surface");
+    // Single instance per machine: if the ports are taken, another daemon is already
+    // serving (started by another Pi session or manually). Exit quietly instead of panicking.
+    let local_listener = match tokio::net::TcpListener::bind(LOCAL_ADDR).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!("pi-companion-server: {LOCAL_ADDR} already in use; another daemon is running. Exiting.");
+            return;
+        }
+        Err(error) => panic!("bind local admin {LOCAL_ADDR}: {error}"),
+    };
+    let remote_listener = match tokio::net::TcpListener::bind(REMOTE_ADDR).await {
+        Ok(listener) => listener,
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            eprintln!("pi-companion-server: {REMOTE_ADDR} already in use. Exiting.");
+            return;
+        }
+        Err(error) => panic!("bind remote surface {REMOTE_ADDR}: {error}"),
+    };
 
     tracing::info!("Pi Companion admin: http://{LOCAL_ADDR}");
     tracing::info!("Pi Companion paired-device surface: http://{REMOTE_ADDR}");

@@ -1,6 +1,7 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { CompanionBridge } from "./bridge.js";
+import { adminHttpUrl, ensureDaemon } from "./daemon.js";
 
 const AskParams = Type.Object({
   question: Type.String({ description: "Question to ask through Pi Companion" }),
@@ -30,7 +31,7 @@ export default function companionExtension(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     bridge.setContext(ctx);
-    bridge.connect();
+    void bridge.connect();
     bridge.emit("session.start", { cwd: ctx.cwd });
   });
   pi.on("session_info_changed", (event, ctx) => {
@@ -128,9 +129,13 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("companion", {
-    description: "Show the local Pi Companion address",
+    description: "Show the Pi Companion dashboard address (starts the daemon if needed)",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("Pi Companion: http://127.0.0.1:43721", "info");
+      const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
+      ctx.ui.notify(
+        up ? "Pi Companion: " + adminHttpUrl() : "Pi Companion daemon is not reachable at " + adminHttpUrl(),
+        up ? "info" : "warning"
+      );
     }
   });
 
