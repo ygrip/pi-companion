@@ -88,6 +88,7 @@ pub async fn serve(uri: Uri, request_headers: HeaderMap) -> Response {
     }
     if name.ends_with(".html") {
         headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+        headers.insert(header::HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(self)"));
         headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
     }
 
