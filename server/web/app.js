@@ -8,13 +8,10 @@ const state = {
 };
 const byId = id => document.getElementById(id);
 
-function withToken(path) {
-  if (!remoteMode || !state.token) return path;
-  return path + (path.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(state.token);
-}
-
-async function api(path, options) {
-  const response = await fetch(withToken(path), options);
+async function api(path, options = {}) {
+  const headers = new Headers(options.headers || {});
+  if (remoteMode && state.token) headers.set("authorization", "Bearer " + state.token);
+  const response = await fetch(path, { ...options, headers });
   if (!response.ok) throw new Error((await response.text()) || response.statusText);
   if (response.status === 204) return null;
   return response.json();
@@ -188,8 +185,9 @@ function handle(message) {
 function connect() {
   if (remoteMode && !state.token) return;
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const suffix = remoteMode ? "?token=" + encodeURIComponent(state.token) : "";
-  state.ws = new WebSocket(proto + "//" + location.host + "/ws/browser" + suffix);
+  state.ws = remoteMode
+    ? new WebSocket(proto + "//" + location.host + "/ws/browser", ["pi-companion", "token." + state.token])
+    : new WebSocket(proto + "//" + location.host + "/ws/browser");
   state.ws.onopen = () => { byId("connection").textContent = remoteMode ? "paired" : "connected"; };
   state.ws.onclose = () => {
     byId("connection").textContent = "reconnecting";
