@@ -580,7 +580,10 @@
               {:else}
                 <span class="hint">Enter to send · Shift+Enter for a new line</span>
               {/if}
-              <button class="btn btn-primary send" disabled={!prompt.trim()}><Icon name="send" size={16} />{steer && session.status === 'active' ? 'Steer' : 'Send'}</button>
+              <button class="btn btn-primary send" aria-label={steer && session.status === 'active' ? 'Steer current turn' : 'Send message'} disabled={!prompt.trim()}>
+                <Icon name="send" size={16} />
+                <span>{steer && session.status === 'active' ? 'Steer' : 'Send'}</span>
+              </button>
             </div>
           {/if}
         </form>
@@ -1581,6 +1584,95 @@
     .feed {
       padding: 12px;
       font-size: 0.8rem;
+    }
+
+    .composer {
+      position: relative;
+      display: flex;
+      align-items: flex-end;
+      gap: 8px;
+      padding: 6px;
+      border-radius: 18px;
+      background: var(--surface);
+      box-shadow: var(--clay-soft);
+    }
+
+    .composer:focus-within {
+      outline: none;
+      border-color: var(--accent-line);
+      box-shadow: var(--clay-soft), 0 0 0 2px var(--accent-soft);
+    }
+
+    .prompt-row {
+      flex: 1;
+      min-width: 0;
+      min-height: 44px;
+      align-items: center;
+      gap: 0;
+      padding: 0;
+    }
+
+    .ps1 {
+      display: none;
+    }
+
+    .prompt-row textarea {
+      min-height: 44px;
+      max-height: 132px;
+      padding: 11px 12px;
+      font: 1rem/1.4 var(--font);
+    }
+
+    .composer-bar {
+      flex: none;
+      align-self: flex-end;
+      padding: 0;
+      gap: 0;
+    }
+
+    .composer-bar .hint {
+      display: none;
+    }
+
+    .composer-bar .toggle {
+      position: absolute;
+      left: 12px;
+      bottom: 56px;
+      min-height: 32px;
+      padding: 0 9px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      box-shadow: var(--clay-soft);
+      font-size: 0.76rem;
+    }
+
+    .composer-bar .track {
+      width: 30px;
+      height: 18px;
+    }
+
+    .composer-bar .track::after {
+      top: 3px;
+      left: 3px;
+      width: 12px;
+      height: 12px;
+    }
+
+    .composer-bar .toggle input:checked + .track::after {
+      translate: 12px 0;
+    }
+
+    .send {
+      width: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      padding: 0;
+      border-radius: 14px;
+    }
+
+    .send span {
+      display: none;
     }
 
     .line time {
