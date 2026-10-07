@@ -24,6 +24,7 @@
   const bare = $derived(companion.remote && !companion.paired);
   const waiting = $derived(Object.values(companion.asks).reduce((total, list) => total + list.length, 0));
   let aboutOpen = $state(false);
+  let insecureContext = $state(false);
 
   const connectionLabel = $derived(
     {
@@ -59,6 +60,7 @@
   });
 
   onMount(() => {
+    insecureContext = !window.isSecureContext;
     theme.init();
     void companion.boot();
 
@@ -156,6 +158,12 @@
         </div>
       </header>
 
+      {#if insecureContext}
+        <div class="banner danger" role="alert">
+          <Icon name="alert" />
+          <span>Install and offline features require HTTPS. Open Pi Companion through its secure remote URL instead of a LAN HTTP address.</span>
+        </div>
+      {/if}
       {#if companion.connection === 'disconnected'}
         <div class="banner" role="alert">
           <Icon name="unplug" />
