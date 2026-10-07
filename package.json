@@ -1,0 +1,23 @@
+{
+  "name": "@ygrip/pi-companion",
+  "version": "0.1.0",
+  "description": "Local-first remote control companion for Pi sessions",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "server:dev": "cargo run --manifest-path server/Cargo.toml",
+    "server:check": "cargo check --manifest-path server/Cargo.toml"
+  },
+  "pi": { "extensions": ["./src/index.ts"] },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "^1.0.13",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  }
+}
