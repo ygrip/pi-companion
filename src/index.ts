@@ -11,6 +11,20 @@ const DeleteTempFileParams = Type.Object({
   fileId: Type.String({ description: "Opaque Pi Companion temporary file id" })
 });
 
+function summarize(value: unknown, max = 400) {
+  if (value === undefined || value === null) return "";
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return text.length > max ? text.slice(0, max) + "…" : text;
+}
+
+function resultText(result: unknown) {
+  const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content;
+  if (Array.isArray(content)) {
+    return content.filter(part => part?.type === "text" && part.text).map(part => part.text).join("\n");
+  }
+  return summarize(result);
+}
+
 export default function companionExtension(pi: ExtensionAPI) {
   const bridge = new CompanionBridge(pi);
 
@@ -37,19 +51,26 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.on("agent_end", (event, ctx) => {
     bridge.setContext(ctx);
     bridge.updateStatus("idle");
-    bridge.emit("agent.end", event);
+    bridge.emit("agent.end", { messages: Array.isArray((event as { messages?: unknown[] }).messages) ? (event as { messages: unknown[] }).messages.length : 0 });
   });
-  pi.on("message_update", (event, ctx) => {
-    bridge.setContext(ctx);
-    bridge.emit("message.update", event);
+  // Forward compact deltas instead of the full partial message on every token.
+  pi.on("message_update", event => {
+    const update = event.assistantMessageEvent;
+    if (update.type === "text_delta") bridge.emit("assistant.delta", { kind: "text", delta: update.delta });
+    else if (update.type === "thinking_delta") bridge.emit("assistant.delta", { kind: "thinking", delta: update.delta });
   });
   pi.on("tool_execution_start", (event, ctx) => {
     bridge.setContext(ctx);
-    bridge.emit("tool.start", event);
+    bridge.emit("tool.start", { toolCallId: event.toolCallId, toolName: event.toolName, args: summarize(event.args) });
   });
   pi.on("tool_execution_end", (event, ctx) => {
     bridge.setContext(ctx);
-    bridge.emit("tool.end", event);
+    bridge.emit("tool.end", {
+      toolCallId: event.toolCallId,
+      toolName: event.toolName,
+      isError: event.isError,
+      result: summarize(resultText(event.result), 1200)
+    });
   });
   pi.on("session_shutdown", event => {
     bridge.updateStatus("stopped");
