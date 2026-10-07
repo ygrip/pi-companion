@@ -25,7 +25,7 @@
       (draft.publicUrl.trim() !== data!.settings.publicUrl ||
         Number(draft.pairingTtlMinutes) !== data!.settings.pairingTtlMinutes ||
         Number(draft.maxUploadMb) !== data!.settings.maxUploadMb ||
-        parseTypes(typesText).join(',') !== data!.settings.allowedUploadTypes.join(','))
+        parseTypes(typesText).join(',') !== (data!.settings.allowedUploadTypes ?? []).join(','))
   );
 
   const themes: { value: ThemePreference; label: string; hint: string; icon: IconName }[] = [
@@ -35,9 +35,17 @@
   ];
 
   function apply(response: SettingsResponse) {
-    data = response;
-    draft = { ...response.settings };
-    typesText = response.settings.allowedUploadTypes.join(', ');
+    const settings: Settings = {
+      publicUrl: response.settings?.publicUrl ?? '',
+      pairingTtlMinutes: Number(response.settings?.pairingTtlMinutes ?? 5),
+      maxUploadMb: Number(response.settings?.maxUploadMb ?? 25),
+      allowedUploadTypes: Array.isArray(response.settings?.allowedUploadTypes)
+        ? response.settings.allowedUploadTypes
+        : []
+    };
+    data = { ...response, settings };
+    draft = { ...settings };
+    typesText = settings.allowedUploadTypes.join(', ');
   }
 
   onMount(async () => {

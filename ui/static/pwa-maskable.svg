@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Pi Companion">
+  <rect width="512" height="512" fill="#0c0c0e"/>
+  <circle cx="256" cy="256" r="156" fill="#17171b" stroke="#e3a34b" stroke-width="14"/>
+  <path d="M170 202h172M214 202c0 88-15 130-54 150M298 202v112c0 32 14 48 41 48 10 0 20-2 31-7" fill="none" stroke="#f2b85f" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="359" cy="355" r="18" fill="#f2b85f"/>
+</svg>

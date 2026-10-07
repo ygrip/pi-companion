@@ -8,6 +8,7 @@
   import computerClay from '../assets/clay/computer.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
+  import SessionTable from '#lib/SessionTable.svelte';
   import { companion } from '#lib/companion.svelte.ts';
 
   // The dot field cycles through clear computer, phone and terminal shapes.
@@ -98,11 +99,14 @@
       </a>
     {/each}
   </section>
-  <a class="guide-tile tile" href="/help">
-    <img src={bulbClay} alt="" aria-hidden="true" />
-    <span><strong>New here?</strong><span class="subtle">Follow the setup guide to get connected.</span></span>
-    <span class="btn btn-ghost">Setup guide<Icon name="chevron" size={14} /></span>
-  </a>
+  <section class="guide-tile tile" aria-labelledby="guide-heading">
+    <span class="guide-art"><img src={bulbClay} alt="" aria-hidden="true" /></span>
+    <div class="guide-copy">
+      <h2 id="guide-heading">New here?</h2>
+      <p>Connect a workspace, enable a Pi session, and pair your phone with the setup guide.</p>
+    </div>
+    <a class="btn guide-action" href="/help">Setup guide<Icon name="chevron" size={16} /></a>
+  </section>
 
 
   {#if needsAnswer.length}
@@ -119,23 +123,25 @@
   <section class="recent" aria-labelledby="live-heading">
     <div class="section-head">
       <h2 id="live-heading">Live now</h2>
-      <a class="btn btn-ghost btn-sm" href="/sessions">View all {totalSessions}<Icon name="chevron" size={14} /></a>
+      <a class="btn view-all" href="/sessions">View all sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a>
     </div>
     {#if live.length}
       {#if liveNow.length}
-        <div class="session-grid">
-          {#each liveNow as session (session.id)}<SessionCard {session} />{/each}
-        </div>
+        <SessionTable sessions={liveNow} label="Live now" />
       {:else}
         <p class="muted">All live sessions are shown above because they need your answer.</p>
       {/if}
     {:else}
       <div class="tile empty">
         <span class="empty-icon"><img src={computerClay} alt="" aria-hidden="true" /></span>
-        <h2>No live sessions</h2>
-        {#if companion.isAdmin}
+        {#if companion.connection !== 'online'}
+          <h2>Waiting for workspace connection</h2>
+          <p>Live session information will refresh when the workspace is reachable again.</p>
+        {:else if companion.isAdmin}
+          <h2>No live sessions</h2>
           <p>Run <code>/companion</code> in a Pi session to bring it here. Install the extension first if you haven't already.</p>
         {:else}
+          <h2>No live sessions</h2>
           <p>Ask the administrator to share a session by enabling remote control with <code>/companion</code>.</p>
         {/if}
         <a class="btn" href="/help"><Icon name="help" />Setup guide</a>
@@ -277,33 +283,43 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 12px;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
   }
 
-  .session-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 12px;
-  }
+  .session-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 
   .guide-tile {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     align-items: center;
-    gap: 14px;
-    padding: 12px 18px;
-    text-decoration: none;
+    gap: 18px;
+    padding: 20px;
+    border-radius: 22px;
+    box-shadow: var(--clay-raised);
   }
-  .guide-tile > img, .section-head h2 img, .empty .empty-icon img { filter: sepia(0.55) saturate(1.65) hue-rotate(350deg); }
-  .guide-tile > img, .section-head h2 img { width: 56px; height: 56px; object-fit: contain; flex: none; }
-  .guide-tile .btn { margin-left: auto; }
+  .guide-art { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 20px; background: var(--accent-soft); box-shadow: var(--clay-pressed); }
+  .guide-art img, .section-head h2 img, .empty .empty-icon img { filter: sepia(0.55) saturate(1.65) hue-rotate(350deg); }
+  .guide-art img { width: 58px; height: 58px; object-fit: contain; }
+  .guide-copy { display: grid; gap: 6px; min-width: 0; }
+  .guide-copy h2 { font-size: 1.05rem; line-height: 1.35; }
+  .guide-copy p { max-width: 54ch; margin: 0; color: var(--text-2); font-size: 0.9rem; line-height: 1.6; }
+  .guide-action, .view-all { min-height: 44px; padding: 11px 16px; border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .guide-action:hover, .view-all:hover { border-color: var(--accent-line); background: var(--surface-3); }
+  .guide-action:active, .view-all:active { box-shadow: var(--clay-pressed); }
   .section-head h2 { display: flex; align-items: center; gap: 10px; }
+  .section-head h2 img { width: 48px; height: 48px; object-fit: contain; flex: none; }
   .empty .empty-icon img { width: 64px; height: 64px; object-fit: contain; }
   .empty .btn { justify-self: start; }
-  @media (max-width: 520px) {
-    .guide-tile { gap: 8px; padding: 10px; }
-    .guide-tile > img { width: 44px; height: 44px; }
-    .guide-tile .btn { font-size: 0.76rem; gap: 4px; padding: 8px; }
-    .guide-tile .btn :global(svg) { width: 16px; height: 16px; }
+  @media (max-width: 600px) {
+    .guide-tile { grid-template-columns: auto minmax(0, 1fr); gap: 14px; padding: 16px; }
+    .guide-art { width: 54px; height: 54px; border-radius: 16px; }
+    .guide-art img { width: 46px; height: 46px; }
+    .guide-action { grid-column: 1 / -1; width: 100%; justify-content: center; }
+    .guide-copy p { font-size: 0.85rem; }
+    .view-all { width: 100%; justify-content: center; }
+    .section-head { gap: 10px; }
   }
   @media (max-width: 900px) {
     .hero {

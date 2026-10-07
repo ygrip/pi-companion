@@ -1,31 +1,93 @@
-/** Split a unified Git patch without dropping metadata, binary changes, or a preamble. */
-export function splitDiff(text: string) {
-  const files: { header: string; path: string; lines: string[]; add: number; del: number }[] = [];
-  for (const line of text.split('\n')) {
-    if (line.startsWith('diff --git ')) {
-      // Git does not necessarily quote paths containing spaces.
-      const path = line.match(/^diff --git a\/.* b\/(.+)$/)?.[1]
-        ?? line.match(/^diff --git (?:"(?:[^"\\]|\\.)*"|\S+) (.+)$/)?.[1]?.replace(/^b\//, '')
-        ?? line;
-      files.push({ header: line, path, lines: [line], add: 0, del: 0 });
+export type ChangedFile = {
+  id: string;
+  path: string;
+  oldPath: string;
+  newPath: string;
+  lines: string[];
+  additions: number;
+  deletions: number;
+  binary: boolean;
+};
+
+/** Decode Git's quoted paths (including octal UTF-8 bytes) without evaluating strings. */
+export function decodeGitPath(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('"') || !trimmed.endsWith('"')) return trimmed;
+  const input = trimmed.slice(1, -1);
+  const bytes: number[] = [];
+  for (let i = 0; i < input.length; i++) {
+    if (input[i] !== '\\') {
+      const point = input.codePointAt(i)!;
+      bytes.push(...new TextEncoder().encode(String.fromCodePoint(point)));
+      if (point > 0xffff) i++;
       continue;
     }
-    if (!files.length) {
-      if (!line.trim()) continue;
-      files.push({ header: 'Changes', path: 'Changes', lines: [], add: 0, del: 0 });
-    }
-    const file = files[files.length - 1];
-    file.lines.push(line);
-    if (line.startsWith('+') && !line.startsWith('+++')) file.add++;
-    if (line.startsWith('-') && !line.startsWith('---')) file.del++;
+    const octal = input.slice(i + 1).match(/^[0-7]{1,3}/)?.[0];
+    if (octal) { bytes.push(parseInt(octal, 8)); i += octal.length; continue; }
+    const next = input[++i] ?? '\\';
+    const escape: Record<string, string> = { t: '\t', n: '\n', r: '\r', b: '\b', f: '\f', v: '\v', a: '\u0007' };
+    bytes.push(...new TextEncoder().encode(escape[next] ?? next));
   }
-  return files;
+  return new TextDecoder().decode(Uint8Array.from(bytes));
+}
+
+function withoutPrefix(path: string): string {
+  return path === '/dev/null' ? '' : path.replace(/^[ab]\//, '');
+}
+
+function headerPaths(line: string): [string, string] {
+  const body = line.slice('diff --git '.length);
+  if (body.startsWith('"')) {
+    const tokens = body.match(/"(?:\\.|[^"\\])*"|\S+/g) ?? [];
+    return [withoutPrefix(decodeGitPath(tokens[0] ?? '')), withoutPrefix(decodeGitPath(tokens[1] ?? ''))];
+  }
+  const split = body.lastIndexOf(' b/');
+  if (split >= 0) return [withoutPrefix(body.slice(0, split)), withoutPrefix(decodeGitPath(body.slice(split + 1)))];
+  const tokens = body.split(' ');
+  return [withoutPrefix(decodeGitPath(tokens[0] ?? '')), withoutPrefix(decodeGitPath(tokens[1] ?? ''))];
+}
+
+export function splitChangedFiles(text: string): ChangedFile[] {
+  if (!text.trim()) return [];
+  const groups: string[][] = [];
+  for (const line of text.split('\n')) {
+    if (/^diff --(?:git|cc|combined) /.test(line) || !groups.length) groups.push([]);
+    groups.at(-1)!.push(line);
+  }
+  return groups.filter((lines) => lines.some((line) => line.trim())).map((lines, index) => {
+    const combinedPath = lines[0].match(/^diff --(?:cc|combined) (.+)$/)?.[1];
+    let [oldPath, newPath] = lines[0].startsWith('diff --git ') ? headerPaths(lines[0]) : combinedPath ? [decodeGitPath(combinedPath), decodeGitPath(combinedPath)] : ['', ''];
+    let additions = 0, deletions = 0, inHunk = false, prefixColumns = 1;
+    for (const line of lines) {
+      const hunk = line.match(/^(@{2,}) /);
+      if (hunk) { inHunk = true; prefixColumns = hunk[1].length - 1; continue; }
+      if (inHunk) {
+        const prefix = line.slice(0, prefixColumns);
+        if (prefix.includes('+')) additions++;
+        if (prefix.includes('-')) deletions++;
+        continue;
+      }
+      if (line.startsWith('--- ')) oldPath = withoutPrefix(decodeGitPath(line.slice(4).split('\t')[0]));
+      else if (line.startsWith('+++ ')) newPath = withoutPrefix(decodeGitPath(line.slice(4).split('\t')[0]));
+      else if (line.startsWith('rename from ')) oldPath = decodeGitPath(line.slice(12));
+      else if (line.startsWith('rename to ')) newPath = decodeGitPath(line.slice(10));
+      else if (line.startsWith('+')) additions++;
+      else if (line.startsWith('-')) deletions++;
+    }
+    const path = newPath || oldPath || 'Changes';
+    return { id: `${index}:${path}`, path, oldPath, newPath, lines, additions, deletions, binary: lines.some((line) => line.startsWith('Binary files ') || line === 'GIT binary patch') };
+  });
 }
 
 export function diffLineClass(line: string) {
-  if (line.startsWith('diff --git ')) return 'file-header';
+  if (/^diff --(?:git|cc|combined) /.test(line)) return 'file-header';
   if (line.startsWith('@@')) return 'hunk';
   if (line.startsWith('+') && !line.startsWith('+++')) return 'add';
   if (line.startsWith('-') && !line.startsWith('---')) return 'del';
   return '';
+}
+
+export function filterChangedFiles(files: ChangedFile[], query: string): ChangedFile[] {
+  const needle = query.trim().toLowerCase();
+  return needle ? files.filter((file) => `${file.path}\n${file.oldPath}\n${file.newPath}`.toLowerCase().includes(needle)) : files;
 }

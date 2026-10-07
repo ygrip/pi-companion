@@ -15,6 +15,8 @@
   let error = $state('');
   let scannerAvailable = $state(false);
   let scanning = $state(false);
+  let cameraPrompt = $state(false);
+  let cameraDenied = $state(false);
   let cameraError = $state('');
   let video = $state<HTMLVideoElement>();
   let stream: MediaStream | undefined;
@@ -105,11 +107,22 @@
     }
   }
 
-  async function startCamera() {
+  function startCamera() {
     cameraError = '';
+    cameraDenied = false;
+    cameraPrompt = true;
+  }
+
+  async function allowCamera() {
+    cameraError = '';
+    cameraDenied = false;
     if (!scannerAvailable) return;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false
+      });
+      cameraPrompt = false;
       scanning = true;
       await tick();
       if (!video) return stopCamera();
@@ -118,7 +131,15 @@
       frame = requestAnimationFrame(inspectFrame);
     } catch (e) {
       stopCamera();
-      cameraError = errorMessage(e) || 'Could not start the camera. Check camera permission and try again.';
+      const name = e instanceof DOMException ? e.name : '';
+      if (name === 'NotAllowedError' || name === 'SecurityError') {
+        cameraDenied = true;
+        cameraError = 'Camera access was denied. Allow Camera for this site in your browser settings, then try again.';
+      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
+        cameraError = 'No usable camera was found on this device.';
+      } else {
+        cameraError = errorMessage(e) || 'Could not start the camera. Check camera permission and try again.';
+      }
     }
   }
 </script>
@@ -144,13 +165,30 @@
             {#if scanning}
               <video bind:this={video} playsinline muted aria-label="Camera view for scanning the pairing QR code"></video>
               <button class="btn btn-ghost" type="button" onclick={stopCamera}>Stop camera</button>
+            {:else if cameraPrompt}
+              <div class="camera-permission" role="group" aria-label="Camera permission">
+                <Icon name="devices" size={24} />
+                <div>
+                  <strong>Allow camera access?</strong>
+                  <p class="subtle">Pi Companion uses the camera only to scan the pairing QR code. Your browser will ask for permission next.</p>
+                </div>
+                <div class="camera-actions">
+                  <button class="btn btn-primary" type="button" onclick={allowCamera}>Allow camera</button>
+                  <button class="btn btn-ghost" type="button" onclick={() => (cameraPrompt = false)}>Not now</button>
+                </div>
+              </div>
             {:else}
               <button class="btn" type="button" onclick={startCamera}><Icon name="devices" />Scan QR code with camera</button>
             {/if}
           {:else}
             <p class="subtle">Live scanning requires a secure camera connection. Scan the QR code with your phone’s camera app to open its pairing link (<code>/pair?invite=…</code>), or enter the code below.</p>
           {/if}
-          {#if cameraError}<p class="error" role="alert">{cameraError}</p>{/if}
+          {#if cameraError}
+            <p class="error" role="alert">{cameraError}</p>
+            {#if cameraDenied}
+              <p class="subtle small">On iPhone/iPad Safari: open Website Settings for this site, set Camera to Allow, reload, then scan again.</p>
+            {/if}
+          {/if}
           <canvas bind:this={scanCanvas} class="scan-canvas" aria-hidden="true"></canvas>
         </section>
         <div class="divider"><span>or enter the code</span></div>
@@ -198,6 +236,10 @@
   .field label { font-weight: 600; }
   .pair-code { font: 700 1.2rem/1 var(--mono); letter-spacing: 0.16em; }
   .scanner { display: grid; justify-items: center; gap: 10px; padding: 16px; border: 1px solid var(--border); border-radius: var(--clay-radius); background: var(--surface-2); }
+  .camera-permission { width: 100%; display: grid; gap: 10px; justify-items: start; }
+  .camera-permission p { margin: 2px 0 0; }
+  .camera-actions { display: flex; gap: 8px; flex-wrap: wrap; width: 100%; }
+  .camera-actions .btn { min-height: 44px; }
   video { width: min(100%, 320px); max-height: 280px; border-radius: 14px; object-fit: cover; }
   .scan-canvas { display: none; }
   .divider { display: flex; align-items: center; gap: 12px; color: var(--text-3); font-size: 0.82rem; }

@@ -44,7 +44,7 @@
       <h1>Sessions</h1>
       <p>
         {#if companion.isAdmin}
-          Every Pi session running on this computer. Ended sessions stay listed until the daemon restarts.
+          Sessions opened with /companion on this computer. Archive ended sessions to remove them from this list, not from your local Pi history.
         {:else}
           Sessions your computer has shared with this device.
         {/if}
@@ -52,25 +52,29 @@
     </div>
   </header>
 
-  <div class="toolbar">
+  <div class="toolbar clay">
     <label class="search">
-      <Icon name="search" size={16} />
-      <span class="sr-only">Search sessions</span>
-      <input class="input" type="search" placeholder="Search by name, folder or model" bind:value={query} autocomplete="off" />
+      <span class="field-label">Search sessions</span>
+      <span class="search-field"><Icon name="search" size={16} /><input class="input" type="search" placeholder="Name, workspace or model" bind:value={query} autocomplete="off" /></span>
     </label>
-    <div class="segmented scroll-x" role="group" aria-label="Filter by status">
-      {#each filters as option (option.value)}
-        <button aria-pressed={filter === option.value} onclick={() => (filter = option.value)}>
-          {option.label}<span class="badge count quiet">{counts[option.value]}</span>
-        </button>
-      {/each}
+    <div class="filter-field">
+      <span class="field-label" id="session-status-label">Session status</span>
+      <div class="segmented scroll-x" role="group" aria-labelledby="session-status-label">
+        {#each filters as option (option.value)}
+          <button aria-pressed={filter === option.value} onclick={() => (filter = option.value)}>
+            {option.label}<span class="badge count quiet">{counts[option.value]}</span>
+          </button>
+        {/each}
+      </div>
     </div>
   </div>
 
+  {#if companion.sessions.length}<p class="list-summary" role="status">Showing {shown.length} of {companion.sessions.length} {companion.sessions.length === 1 ? 'session' : 'sessions'}</p>{/if}
+
   {#if shown.length}
-    <div class="grid">
-      {#each shown as session (session.id)}<SessionCard {session} />{/each}
-    </div>
+    <ul class="session-list" aria-label="Pi sessions">
+      {#each shown as session (session.id)}<li><SessionCard {session} /></li>{/each}
+    </ul>
   {:else if companion.sessions.length}
     <div class="card empty">
       <span class="empty-icon"><Icon name="search" /></span>
@@ -81,57 +85,35 @@
   {:else}
     <div class="card empty">
       <span class="empty-icon"><Icon name="sessions" /></span>
-      {#if companion.isAdmin}
+      {#if companion.connection !== 'online'}
+        <h2>Waiting for workspace connection</h2>
+        <p>Your session list will refresh when the workspace is reachable again.</p>
+      {:else if companion.isAdmin}
         <h2>No Pi sessions yet</h2>
-        <p>Start <code>pi</code> in any project folder. Sessions connect to Pi Companion automatically.</p>
+        <p>Start <code>pi</code> in any project folder, then run <code>/companion</code> to start the daemon and connect that session.</p>
       {:else}
         <h2>Nothing shared yet</h2>
-        <p>On your computer, type <code>/remote-control</code> inside a Pi session to share it here.</p>
+        <p>On your computer, type <code>/companion</code> inside a Pi session to share it here.</p>
       {/if}
     </div>
   {/if}
 </div>
 
 <style>
-  .toolbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-  }
-
-  .search {
-    position: relative;
-    flex: 1 1 280px;
-    color: var(--text-3);
-  }
-
-  .search :global(.icon) {
-    position: absolute;
-    left: 12px;
-    top: 50%;
-    translate: 0 -50%;
-    pointer-events: none;
-  }
-
-  .search .input {
-    padding-left: 36px;
-  }
-
-  .segmented {
-    max-width: 100%;
-  }
-
-
-  .grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
-    gap: 12px;
-  }
-
-  @media (max-width: 600px) {
-    .segmented {
-      width: 100%;
-    }
+  .toolbar { display: grid; grid-template-columns: minmax(220px, 1fr) auto; align-items: end; gap: 18px; padding: 18px; border-radius: 22px; box-shadow: var(--clay-raised); }
+  .search, .filter-field { display: grid; gap: 8px; min-width: 0; }
+  .field-label { color: var(--text-2); font-size: 0.76rem; font-weight: 650; }
+  .search-field { display: block; position: relative; min-width: 0; color: var(--text-3); }
+  .search-field :global(.icon) { position: absolute; left: 13px; top: 50%; translate: 0 -50%; pointer-events: none; }
+  .search .input { width: 100%; min-height: 48px; padding-left: 38px; border-radius: 15px; box-shadow: var(--clay-pressed); }
+  .segmented { max-width: 100%; min-width: 0; border-radius: 15px; padding: 4px; box-shadow: var(--clay-pressed); }
+  .segmented button { min-height: 44px; padding: 9px 12px; border-radius: 12px; }
+  .list-summary { margin: -4px 4px -4px; color: var(--text-2); font-size: 0.8rem; }
+  .session-list { display: grid; gap: 16px; padding: 0; margin: 0; list-style: none; min-width: 0; }
+  .session-list li { min-width: 0; }
+  @media (max-width: 1100px) {
+    .toolbar { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
+    .segmented { width: 100%; }
+    .segmented button { flex: 1 0 auto; }
   }
 </style>

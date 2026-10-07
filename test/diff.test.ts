@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { splitDiff, diffLineClass } from '../ui/src/lib/diff.ts';
+import { splitChangedFiles, diffLineClass } from '../ui/src/lib/diff.ts';
+
+const splitDiff = (text: string) => splitChangedFiles(text).map((file) => ({
+  path: file.path, lines: file.lines, add: file.additions, del: file.deletions
+}));
 
 test('splits patches by file and excludes headers from line counts', () => {
   const patch = 'diff --git a/one.ts b/one.ts\n--- a/one.ts\n+++ b/one.ts\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two.png b/two.png\nBinary files a/two.png and b/two.png differ';
@@ -20,7 +24,7 @@ test('preserves renames, deleted files, quoted names and preambles', () => {
   assert.equal(files.length, 4);
   assert.equal(files[1].path, 'new');
   assert.equal(files[2].path, 'gone');
-  assert.equal(files[3].path, '"b/a\\tfile"');
+  assert.equal(files[3].path, 'a\tfile');
   assert.equal(files.flatMap((file) => file.lines).join('\n'), patch);
 });
 
