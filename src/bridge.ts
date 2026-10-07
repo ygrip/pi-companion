@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { BridgeMessage, ServerMessage, SessionSnapshot } from "./protocol.js";
+import type { BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -13,12 +13,15 @@ export class CompanionBridge {
   private ctx?: ExtensionContext;
   private startedServer = false;
   private reconnect?: NodeJS.Timeout;
+  private tempFiles: TempFile[] = [];
   private pendingAsks = new Map<string, { resolve: (answer: string) => void; timer: NodeJS.Timeout }>();
+  private pendingDeletes = new Map<string, { resolve: (result: { ok: boolean; error?: string }) => void; timer: NodeJS.Timeout }>();
   private snapshot: SessionSnapshot = {
     id: this.sessionId,
     cwd: process.cwd(),
     pid: process.pid,
     idle: true,
+    remoteEnabled: false,
     connectedAt: new Date().toISOString()
   };
 
@@ -38,6 +41,19 @@ export class CompanionBridge {
   setName(name?: string) {
     this.snapshot.name = name;
     this.send({ type: "session.update", session: { name } });
+  }
+
+  setRemoteEnabled(remoteEnabled: boolean) {
+    this.snapshot.remoteEnabled = remoteEnabled;
+    this.send({ type: "session.update", session: { remoteEnabled } });
+  }
+
+  isRemoteEnabled() {
+    return this.snapshot.remoteEnabled;
+  }
+
+  getTempFiles() {
+    return [...this.tempFiles];
   }
 
   connect() {
@@ -85,6 +101,18 @@ export class CompanionBridge {
     });
   }
 
+  async deleteTempFile(fileId: string) {
+    const requestId = randomUUID();
+    this.send({ type: "file.delete", requestId, fileId });
+    return await new Promise<{ ok: boolean; error?: string }>(resolve => {
+      const timer = setTimeout(() => {
+        this.pendingDeletes.delete(requestId);
+        resolve({ ok: false, error: "Timed out waiting for the companion daemon." });
+      }, 10_000);
+      this.pendingDeletes.set(requestId, { resolve, timer });
+    });
+  }
+
   private send(message: BridgeMessage) {
     if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message));
   }
@@ -96,6 +124,19 @@ export class CompanionBridge {
 
   private async handle(message: ServerMessage) {
     if (message.type === "ping") return;
+    if (message.type === "temp.files") {
+      this.tempFiles = message.files;
+      return;
+    }
+    if (message.type === "file.delete.result") {
+      const pending = this.pendingDeletes.get(message.requestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      this.pendingDeletes.delete(message.requestId);
+      pending.resolve({ ok: message.ok, error: message.error });
+      return;
+    }
+
     const command = message.command;
     switch (command.type) {
       case "prompt":
