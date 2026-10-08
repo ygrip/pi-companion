@@ -7,7 +7,7 @@
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { errorMessage } from '#lib/toast.svelte.ts';
-  import { devicePermissions } from '#lib/device-permissions.svelte.ts';
+  import { cameraAvailability, cameraFailure, devicePermissions, openCameraStream } from '#lib/device-permissions.svelte.ts';
 
   const invite = $derived(page.url.searchParams.get('invite'));
   let name = $state(guessName());
@@ -19,6 +19,8 @@
   let cameraPrompt = $state(false);
   let cameraDenied = $state(false);
   let cameraError = $state('');
+  let cameraPending = $state(false);
+  let cameraAttempt = 0;
   let video = $state<HTMLVideoElement>();
   let stream: MediaStream | undefined;
   let frame = 0;
@@ -37,8 +39,9 @@
   }
 
   onMount(() => {
-    scannerAvailable = window.isSecureContext && Boolean(navigator.mediaDevices?.getUserMedia);
+    scannerAvailable = cameraAvailability() === 'prompt';
     devicePermissions.init();
+    if (devicePermissions.camera === 'policy') cameraError = cameraFailure(undefined).message;
   });
 
 
@@ -50,6 +53,8 @@
   });
 
   function stopCamera() {
+    cameraAttempt++;
+    cameraPending = false;
     if (frame && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(frame);
     frame = 0;
     stream?.getTracks().forEach((track) => track.stop());
@@ -119,34 +124,50 @@
   }
 
   async function allowCamera() {
+    if (cameraPending) return;
     cameraError = '';
     cameraDenied = false;
-    if (!scannerAvailable) return;
+    if (cameraAvailability() !== 'prompt') {
+      const failure = cameraFailure(undefined);
+      cameraError = failure.message;
+      devicePermissions.markCamera(failure.state);
+      return;
+    }
+    stopCamera();
+    const attempt = cameraAttempt;
+    cameraPending = true;
+    let acquired = false;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false
-      });
+      const nextStream = await openCameraStream();
+      // A dismissed scanner/unmounted page must not keep a late grant running.
+      if (attempt !== cameraAttempt) {
+        nextStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      stream = nextStream;
+      acquired = true;
       cameraPrompt = false;
       devicePermissions.markCamera('granted');
       scanning = true;
       await tick();
-      if (!video) return stopCamera();
+      if (attempt !== cameraAttempt || !video) return stopCamera();
       video.srcObject = stream;
       await video.play();
-      frame = requestAnimationFrame(inspectFrame);
+      if (attempt === cameraAttempt) frame = requestAnimationFrame(inspectFrame);
     } catch (e) {
+      if (attempt !== cameraAttempt) return;
       stopCamera();
-      const name = e instanceof DOMException ? e.name : '';
-      if (name === 'NotAllowedError' || name === 'SecurityError') {
-        cameraDenied = true;
-        devicePermissions.markCamera('denied');
-        cameraError = 'Camera access was denied. Allow Camera for this site in your browser settings, then try again.';
-      } else if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-        cameraError = 'No usable camera was found on this device.';
+      if (acquired) {
+        // Playback failure is not permission denial: the camera was acquired.
+        cameraError = 'Camera was allowed, but its preview could not start. Try again, or enter the pairing code.';
       } else {
-        cameraError = errorMessage(e) || 'Could not start the camera. Check camera permission and try again.';
+        const failure = cameraFailure(e);
+        cameraDenied = failure.state === 'denied';
+        devicePermissions.markCamera(failure.state);
+        cameraError = failure.message;
       }
+    } finally {
+      if (attempt === cameraAttempt) cameraPending = false;
     }
   }
 </script>
@@ -180,8 +201,8 @@
                   <p class="subtle">Pi Companion uses the camera only to scan the pairing QR code. Your browser will ask for permission next.</p>
                 </div>
                 <div class="camera-actions">
-                  <button class="btn btn-primary" type="button" onclick={allowCamera}>Allow camera</button>
-                  <button class="btn btn-ghost" type="button" onclick={() => (cameraPrompt = false)}>Not now</button>
+                  <button class="btn btn-primary" type="button" onclick={allowCamera} disabled={cameraPending}>{cameraPending ? 'Requesting camera…' : 'Allow camera'}</button>
+                  <button class="btn btn-ghost" type="button" onclick={() => { stopCamera(); cameraPrompt = false; }}>Not now</button>
                 </div>
               </div>
             {:else}

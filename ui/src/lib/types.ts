@@ -1,14 +1,32 @@
 export type SessionStatus = 'active' | 'idle' | 'stopped';
 
+export type UsageWindow = { usedPercent: number; resetsAt?: string };
+
+/** Provider account limits, reported by any compatible extension. */
+export type ProviderUsage = {
+  provider: string;
+  source?: string;
+  updatedAt: string;
+  weekly?: UsageWindow;
+  fiveHour?: UsageWindow;
+};
+
+export type SessionTelemetry = {
+  context?: { tokens?: number; window?: number; percent?: number; source?: string };
+  cost?: { amount: number; currency?: string; source?: string };
+  providers?: ProviderUsage[];
+};
+
 export type Session = {
   id: string;
-  name?: string;
+  name?: string | null;
   shortTitle: string;
   cwd: string;
   pid: number;
   status: SessionStatus;
-  mainModel?: string;
-  effort?: string;
+  mainModel?: string | null;
+  effort?: string | null;
+  telemetry?: SessionTelemetry;
   remoteEnabled: boolean;
   connectedAt: string;
   /** Questions waiting for an answer (mirrors src/protocol.ts AskRequest). */

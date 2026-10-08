@@ -6,6 +6,24 @@
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { Settings, SettingsResponse } from '#lib/types.ts';
+  import { providerSnapshots, reportedTime, snapshotStatus, usagePercent } from '#lib/usage.ts';
+
+  let tab = $state<'general' | 'usage'>('general');
+  let usageNow = $state(Date.now());
+  const usage = $derived(providerSnapshots(companion.sessions));
+
+  onMount(() => {
+    const timer = setInterval(() => { usageNow = Date.now(); }, 60_000);
+    return () => clearInterval(timer);
+  });
+
+  function tabKey(event: KeyboardEvent) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    tab = event.key === 'Home' ? 'general' : event.key === 'End' ? 'usage' : tab === 'general' ? 'usage' : 'general';
+    const button = event.currentTarget as HTMLButtonElement;
+    button.parentElement?.querySelector<HTMLButtonElement>(`#settings-${tab}-tab`)?.focus();
+  }
 
   let data = $state<SettingsResponse | null>(null);
   let draft = $state<Settings>({ publicUrl: '', pairingTtlMinutes: 5, maxUploadMb: 25, allowedUploadTypes: [] });
@@ -89,6 +107,12 @@
     </div>
   </header>
 
+  <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+    <button id="settings-general-tab" type="button" role="tab" aria-selected={tab === 'general'} aria-controls="settings-general-panel" tabindex={tab === 'general' ? 0 : -1} onclick={() => { tab = 'general'; }} onkeydown={tabKey}>General</button>
+    <button id="settings-usage-tab" type="button" role="tab" aria-selected={tab === 'usage'} aria-controls="settings-usage-panel" tabindex={tab === 'usage' ? 0 : -1} onclick={() => { tab = 'usage'; }} onkeydown={tabKey}>Usage</button>
+  </div>
+
+  <div class="settings-panel stack" id="settings-general-panel" role="tabpanel" aria-labelledby="settings-general-tab" tabindex="0" hidden={tab !== 'general'}>
   <section class="card tile section" aria-labelledby="appearance">
     <div class="section-copy">
       <h2 id="appearance">Appearance</h2>
@@ -181,6 +205,42 @@
       {/if}
     </form>
   {/if}
+  </div>
+
+  <div class="settings-panel" id="settings-usage-panel" role="tabpanel" aria-labelledby="settings-usage-tab" tabindex="0" hidden={tab !== 'usage'}>
+    <section class="card tile usage-section" aria-labelledby="provider-usage-heading">
+      <div class="section-copy">
+        <h2 id="provider-usage-heading">Provider usage</h2>
+        <p class="muted">Latest account-limit snapshots relayed by shared sessions and compatible extensions. These percentages are not added across sessions.</p>
+        <p class="subtle">Live reports update automatically. An em dash means the provider has not reported that window.</p>
+      </div>
+      {#if companion.connection !== 'online'}
+        <p class="usage-notice" role="status">Live updates are disconnected. Showing the last available snapshots.</p>
+      {/if}
+      {#if usage.length}
+        <!-- The scroll region is focusable so keyboard users can scroll every table column. -->
+        <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+        <div class="usage-scroll" role="region" aria-label="Provider usage table, scroll horizontally for all columns" tabindex="0">
+          <table class="usage-table">
+            <caption>Weekly and 5-hour usage by provider</caption>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly usage</th><th scope="col">5-hour usage</th><th scope="col">Snapshot</th></tr></thead>
+            <tbody>
+              {#each usage as snapshot (snapshot.provider.toLowerCase())}
+                <tr>
+                  <th scope="row"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></th>
+                  <td><strong>{usagePercent(snapshot.weekly)}</strong>{#if snapshot.weekly?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.weekly.resetsAt)}</span>{/if}</td>
+                  <td><strong>{usagePercent(snapshot.fiveHour)}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
+                  <td><span>{reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span></td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
+        </div>
+      {:else}
+        <div class="usage-empty"><Icon name="activity" /><h3>No provider usage reported yet</h3><p class="muted">Share a Pi session with <code>/companion</code> and use an extension that reports provider limits. Session token and cost estimates do not indicate weekly or 5-hour account usage.</p></div>
+      {/if}
+    </section>
+  </div>
 </div>
 
 <style>
@@ -192,6 +252,24 @@
     display: grid;
     gap: 24px;
   }
+
+  .settings-panel[hidden] { display: none; }
+  .settings-tabs { display: flex; gap: 8px; padding: 6px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--clay-soft); }
+  .settings-tabs button { min-height: 44px; padding: 10px 20px; border: 1px solid transparent; border-radius: 12px; background: transparent; color: var(--text-2); font: inherit; font-weight: 600; cursor: pointer; }
+  .settings-tabs button[aria-selected='true'] { border-color: var(--border-strong); background: var(--surface-2); color: var(--text); box-shadow: var(--clay-soft); }
+  .settings-tabs button:focus-visible, .usage-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .usage-section { display: grid; gap: 20px; padding: 24px; min-width: 0; }
+  .usage-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+  .usage-table { width: 100%; min-width: 640px; border-collapse: collapse; text-align: left; font-size: 0.88rem; }
+  .usage-table caption { padding: 12px 16px; text-align: left; color: var(--text-2); font-size: 0.82rem; }
+  .usage-table th, .usage-table td { padding: 14px 16px; border-top: 1px solid var(--border); vertical-align: top; }
+  .usage-table thead { color: var(--text-2); background: var(--surface-2); }
+  .usage-table tbody th { font-weight: 400; }
+  .usage-table .subtle { display: block; margin-top: 5px; font-size: 0.76rem; font-weight: 400; overflow-wrap: anywhere; }
+  .usage-table strong { font-variant-numeric: tabular-nums; }
+  .usage-notice { padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; color: var(--text-2); background: var(--surface-2); font-size: 0.88rem; }
+  .usage-empty { display: grid; gap: 8px; padding: 16px 0; justify-items: start; }
+  .usage-empty h3 { margin: 0; font-size: 1rem; }
 
   .section {
     display: grid;
@@ -350,6 +428,8 @@
   }
 
   @media (max-width: 760px) {
+    .usage-section { padding: 18px; }
+    .settings-tabs button { flex: 1; }
     .section {
       grid-template-columns: minmax(0, 1fr);
       gap: 16px;

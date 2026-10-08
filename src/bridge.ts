@@ -5,6 +5,7 @@ import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from "./ask.js";
 import { ensureDaemon } from "./daemon.js";
+import { TelemetryRelay } from "./telemetry.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -17,6 +18,10 @@ export class CompanionBridge implements AskChannel {
   private ctx?: ExtensionContext;
   private reconnect?: NodeJS.Timeout;
   private heartbeat?: NodeJS.Timeout;
+  private metadataTimer?: NodeJS.Timeout;
+  private telemetryRequestedAt = 0;
+  private restoreStatus?: () => void;
+  private telemetry = new TelemetryRelay();
   private closed = false;
   private activated = false;
   private restoreDialogs?: () => void;
@@ -44,22 +49,55 @@ export class CompanionBridge implements AskChannel {
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
     if (this.activated && this.snapshot.remoteEnabled && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs);
-    const name = this.pi.getSessionName() ?? this.snapshot.name;
-    this.snapshot = {
-      ...this.snapshot,
-      name,
-      cwd: ctx.cwd,
-      shortTitle: name?.trim() || ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
-      mainModel: ctx.model?.id,
-      effort: ctx.thinkingLevel,
-      status: ctx.isIdle() ? "idle" : "active"
-    };
+    this.refreshMetadata();
   }
 
   setName(name?: string) {
-    this.snapshot.name = name;
+    this.snapshot.name = name ?? null;
     this.snapshot.shortTitle = name?.trim() || this.snapshot.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
-    this.send({ type: "session.update", session: { name, shortTitle: this.snapshot.shortTitle } });
+    this.send({ type: "session.update", session: { name: name ?? null, shortTitle: this.snapshot.shortTitle } });
+  }
+
+  /** Context getters remain live while idle; send only changed metadata, including explicit clears. */
+  refreshMetadata() {
+    const ctx = this.ctx;
+    if (!ctx || this.closed) return;
+    const cwd = ctx.cwd || ctx.sessionManager?.getCwd?.() || process.cwd();
+    const name = this.pi.getSessionName() ?? null;
+    if ((this.snapshot.mainModel ?? null) !== (ctx.model?.id ?? null)) this.telemetry.invalidateContext();
+    const next = {
+      name, cwd,
+      shortTitle: name?.trim() || cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
+      mainModel: ctx.model?.id ?? null,
+      effort: ctx.thinkingLevel ?? this.pi.getThinkingLevel?.() ?? null,
+      telemetry: this.telemetry.snapshot(ctx)
+    };
+    const patch: Partial<SessionSnapshot> = {};
+    for (const key of Object.keys(next) as Array<keyof typeof next>) {
+      if (JSON.stringify(this.snapshot[key]) !== JSON.stringify(next[key])) Object.assign(patch, { [key]: next[key] });
+    }
+    Object.assign(this.snapshot, patch);
+    if (Object.keys(patch).length) this.send({ type: "session.update", session: patch });
+    if (this.activated && this.snapshot.remoteEnabled && Date.now() - this.telemetryRequestedAt >= 30_000) this.requestTelemetry();
+  }
+
+  invalidateContext() {
+    this.telemetry.invalidateContext();
+  }
+
+  ingestTelemetry(value: unknown, source: string) {
+    if (!this.isActivated() || !this.snapshot.remoteEnabled) return;
+    const id = value && typeof value === "object" ? (value as { sessionId?: unknown }).sessionId : undefined;
+    if (id !== undefined && id !== this.sessionId && id !== this.ctx?.sessionManager?.getSessionId?.()) return;
+    this.telemetry.ingest(value, source);
+    this.refreshMetadata();
+  }
+
+  private requestTelemetry() {
+    this.telemetryRequestedAt = Date.now();
+    try {
+      this.pi.events?.emit("companion:telemetry:request", { sessionId: this.ctx?.sessionManager?.getSessionId?.(), companionSessionId: this.sessionId });
+    } catch { /* A failing third-party responder must never interrupt sharing. */ }
   }
 
   setRemoteEnabled(remoteEnabled: boolean) {
@@ -73,6 +111,10 @@ export class CompanionBridge implements AskChannel {
     // End only Companion sharing: Pi itself and its local history keep running.
     this.restoreDialogs?.();
     this.restoreDialogs = undefined;
+    this.restoreStatus?.();
+    this.restoreStatus = undefined;
+    if (this.metadataTimer) clearInterval(this.metadataTimer);
+    this.metadataTimer = undefined;
     for (const entry of [...this.asks.values()]) entry.settle(null);
     for (const pending of this.pendingDeletes.values()) {
       clearTimeout(pending.timer);
@@ -99,6 +141,23 @@ export class CompanionBridge implements AskChannel {
   activate() {
     this.activated = true;
     if (this.snapshot.remoteEnabled && this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs);
+    if (!this.snapshot.remoteEnabled) return;
+    const ui = this.ctx?.ui;
+    if (ui && typeof ui.setStatus === "function" && !this.restoreStatus) {
+      const original = ui.setStatus;
+      const relay = this.telemetry;
+      const wrapped: typeof original = function(key, value) {
+        original.call(ui, key, value);
+        relay.status(key, value);
+      };
+      ui.setStatus = wrapped;
+      this.restoreStatus = () => { if (ui.setStatus === wrapped) ui.setStatus = original; };
+    }
+    if (!this.metadataTimer) {
+      this.metadataTimer = setInterval(() => this.refreshMetadata(), 1000);
+      this.metadataTimer.unref();
+    }
+    this.refreshMetadata();
   }
 
   isActivated() {
@@ -170,6 +229,10 @@ export class CompanionBridge implements AskChannel {
     this.closed = true;
     this.restoreDialogs?.();
     this.restoreDialogs = undefined;
+    this.restoreStatus?.();
+    this.restoreStatus = undefined;
+    if (this.metadataTimer) clearInterval(this.metadataTimer);
+    this.metadataTimer = undefined;
     for (const entry of [...this.asks.values()]) entry.settle(null);
     if (this.reconnect) clearTimeout(this.reconnect);
     if (this.heartbeat) clearTimeout(this.heartbeat);

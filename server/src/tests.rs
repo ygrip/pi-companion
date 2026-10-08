@@ -244,6 +244,23 @@ async fn protocol_relays_registration_updates_and_commands() {
     assert_eq!(snapshot["status"], "active", "patches merge into the stored snapshot");
     assert_eq!(snapshot["asks"][0]["requestId"], "r1", "late joiners see pending questions");
 
+    let metadata = json!({
+        "name": null, "shortTitle": "moved", "cwd": "/project/moved", "mainModel": "updated-model", "effort": "high",
+        "telemetry": {
+            "context": { "tokens": 1200, "window": 200000, "percent": 0.6, "source": "native" },
+            "cost": { "amount": 0.25, "currency": "USD", "source": "footer" },
+            "providers": [{ "provider": "codex", "weekly": { "usedPercent": 30 }, "updatedAt": "2026-10-07T10:00:00Z" }]
+        }
+    });
+    send_json(&mut pi, json!({ "type": "session.update", "session": metadata })).await;
+    let updated = next_matching(&mut browser, |v| v["type"] == "session.update").await;
+    assert_eq!(updated["patch"], metadata, "metadata and neutral usage relay without losing fields");
+    let stored = state.sessions.read().await.get("s1").unwrap().snapshot.clone();
+    assert!(stored["name"].is_null(), "cleared names persist for late joiners");
+    assert_eq!(stored["telemetry"], metadata["telemetry"]);
+    let initial = list_sessions(State(state.clone())).await.0;
+    assert_eq!(initial.sessions[0]["telemetry"], metadata["telemetry"], "new browsers receive the latest usage snapshot");
+
     send_json(&mut browser, json!({ "sessionId": "s1", "command": { "type": "ask_answer", "requestId": "r1", "answers": { "q1": ["Yes"] } } })).await;
     let command = next_matching(&mut pi, |v| v["type"] == "command").await;
     assert_eq!(command["command"]["type"], "ask_answer");

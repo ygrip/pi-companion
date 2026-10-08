@@ -10,7 +10,8 @@
     denied: 'Blocked',
     prompt: 'Not asked yet',
     unsupported: 'Not available',
-    insecure: 'Needs HTTPS'
+    insecure: 'Needs HTTPS',
+    policy: 'Disabled by policy'
   };
 
   async function enableNotifications() {
@@ -21,7 +22,7 @@
   async function enableCamera() {
     const result = await devicePermissions.requestCamera();
     if (result === 'granted') toasts.show('Camera allowed. You can scan pairing codes now.', 'success');
-    else if (result === 'denied') toasts.show('Camera is blocked. Allow it for this site in your browser settings.', 'error');
+    else if (devicePermissions.cameraError) toasts.show(devicePermissions.cameraError, 'error');
   }
 
   async function testNotification() {
@@ -30,7 +31,9 @@
   }
 
   function hint(kind: 'notifications' | 'camera', state: PermissionValue) {
-    if (state === 'insecure') return 'Open Pi Companion through its HTTPS link to use this.';
+    if (kind === 'camera' && devicePermissions.cameraError) return devicePermissions.cameraError;
+    if (state === 'policy') return 'The page or proxy blocks camera access. Update/restart Companion, reload, and check Permissions-Policy. Enter a pairing code instead if needed.';
+    if (state === 'insecure') return 'Open Pi Companion through its HTTPS link to use this. Camera access is unavailable on plain HTTP phone/LAN links.';
     if (state === 'denied') return 'Blocked by your browser. Open the site settings (the icon next to the address) and set it to Allow, then reload.';
     if (kind === 'notifications') {
       if (state === 'unsupported') return devicePermissions.needsInstall
@@ -38,7 +41,7 @@
         : 'This browser cannot show notifications.';
       return 'Get an alert when Pi asks a question, finishes a task or ends a session.';
     }
-    if (state === 'unsupported') return 'No camera was found on this device.';
+    if (state === 'unsupported') return 'Camera access is not available in this browser or device. Try another browser or enter a pairing code instead.';
     return 'Used only to scan pairing QR codes. Nothing is recorded or uploaded.';
   }
 
@@ -67,8 +70,8 @@
             </label>
             <button class="btn btn-ghost btn-sm" type="button" onclick={testNotification}>Send test</button>
           {/if}
-        {:else if row.state === 'prompt'}
-          <button class="btn btn-primary btn-sm" type="button" onclick={enableCamera}>Allow camera</button>
+        {:else if row.state === 'prompt' || row.state === 'denied' || row.state === 'unsupported'}
+          <button class="btn btn-primary btn-sm" type="button" onclick={enableCamera} disabled={devicePermissions.cameraPending}>{devicePermissions.cameraPending ? 'Requesting…' : row.state === 'prompt' ? 'Allow camera' : 'Retry camera'}</button>
         {/if}
       </div>
     </li>
@@ -84,7 +87,7 @@
   .permission-copy p { margin: 3px 0 0; }
   .permission-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
   .badge.granted { color: var(--ok); }
-  .badge.denied, .badge.insecure { color: var(--danger); }
+  .badge.denied, .badge.insecure, .badge.policy { color: var(--danger); }
   .toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 0.85rem; cursor: pointer; }
   @media (max-width: 560px) {
     .permissions li { grid-template-columns: auto minmax(0, 1fr); }

@@ -1,5 +1,7 @@
 // Cache only the public application shell. Tokens, API data and uploads stay online-only.
-const CACHE = 'pi-companion-shell-v5';
+// Refresh the cached HTML response as well as its bytes: older shells carried a
+// camera=() Permissions-Policy header that still blocks getUserMedia offline.
+const CACHE = 'pi-companion-shell-v6';
 const SHELL = ['/', '/manifest.webmanifest', '/favicon.png', '/apple-touch-icon.png', '/pwa-icon.svg', '/pwa-maskable.svg', '/pwa-192.png', '/pwa-512.png', '/pwa-maskable-512.png'];
 
 self.addEventListener('install', (event) => {

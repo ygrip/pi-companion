@@ -36,15 +36,30 @@ export type AskRequest = {
 /** Answers keyed by question id; each value lists chosen option labels and/or custom text. */
 export type AskAnswers = Record<string, string[]>;
 
+export type UsageWindow = { usedPercent: number; resetsAt?: string };
+export type ProviderUsage = {
+  provider: string;
+  source?: string;
+  updatedAt: string;
+  weekly?: UsageWindow;
+  fiveHour?: UsageWindow;
+};
+export type SessionTelemetry = {
+  context?: { tokens?: number; window?: number; percent?: number; source?: string };
+  cost?: { amount: number; currency?: string; source?: string };
+  providers?: ProviderUsage[];
+};
+
 export type SessionSnapshot = {
   id: string;
-  name?: string;
+  name?: string | null;
   cwd: string;
   pid: number;
   shortTitle: string;
   status: "active" | "idle" | "stopped";
-  mainModel?: string;
-  effort?: string;
+  mainModel?: string | null;
+  effort?: string | null;
+  telemetry?: SessionTelemetry;
   remoteEnabled: boolean;
   connectedAt: string;
   /** Questions waiting for an answer. Kept in the snapshot so late-joining browsers see them. */

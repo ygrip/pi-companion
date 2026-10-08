@@ -34,7 +34,8 @@ const ask = new URL('../src/ask.ts', import.meta.url).href;
 const bridge = dataModule(transpile('../src/bridge.ts')
   .replace('from "ws"', `from ${JSON.stringify(socket)}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
-  .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`));
+  .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
+  .replace('from "./telemetry.js"', `from ${JSON.stringify(new URL('../src/telemetry.ts', import.meta.url).href)}`));
 const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
@@ -50,17 +51,23 @@ test('real extension remains inert until /companion and resets activation on ses
   const tools: Record<string, any> = {};
   const notices: string[] = [];
   let prompts = 0;
+  let sessionName: string | undefined = 'Workspace polish';
+  const bus: Record<string, (data: any) => void> = {};
   const ctx = {
     cwd: '/project/demo', hasUI: true, isIdle: () => true,
+    model: { id: 'initial-model' } as { id: string } | undefined, thinkingLevel: 'medium' as string | undefined,
     ui: {
       notify: (message: string) => notices.push(message),
       select: async () => undefined, confirm: async () => false,
-      input: async () => undefined, custom: async () => undefined
+      input: async () => undefined, custom: async () => undefined,
+      setStatus: (_key: string, _value: string | undefined) => {}
     }
   };
   const originalSelect = ctx.ui.select;
+  const originalStatus = ctx.ui.setStatus;
   install({
-    getSessionName: () => 'Workspace polish',
+    getSessionName: () => sessionName,
+    events: { on: (channel: string, fn: any) => { bus[channel] = fn; }, emit: () => {} },
     sendUserMessage: async () => { prompts++; },
     on: (name: string, fn: any) => { events[name] = fn; },
     registerCommand: (name: string, command: any) => { commands[name] = command; },
@@ -88,6 +95,53 @@ test('real extension remains inert until /companion and resets activation on ses
   assert.equal(live.frames[0].session.shortTitle, 'Workspace polish', 'existing Pi names survive session startup');
   assert.equal(live.frames[0].session.name, 'Workspace polish');
   assert.notEqual(ctx.ui.select, originalSelect);
+  ctx.model = { id: 'new-model' };
+  ctx.thinkingLevel = 'high';
+  events.model_select({}, ctx);
+  assert.equal(live.frames.at(-1).session.mainModel, 'new-model');
+  assert.equal(live.frames.at(-1).session.effort, 'high');
+  ctx.cwd = '/project/moved';
+  events.thinking_level_select({}, ctx);
+  assert.equal(live.frames.at(-1).session.cwd, '/project/moved');
+  sessionName = undefined;
+  events.session_info_changed({}, ctx);
+  assert.equal(live.frames.at(-1).session.name, null, 'cleared titles do not stick in the browser');
+  assert.equal(live.frames.at(-1).session.shortTitle, 'moved');
+  bus['companion:telemetry']({ source: 'quota-extension', providers: [{ provider: 'codex', weekly: { usedPercent: 25 } }] });
+  assert.equal(live.frames.at(-1).session.telemetry.providers[0].weekly.usedPercent, 25);
+  bus['session:usage']({ source: 'other-footer', cost: { amount: 1.25 }, context: { percent: 40 } });
+  assert.equal(live.frames.at(-1).session.telemetry.cost.amount, 1.25);
+  assert.equal(live.frames.at(-1).session.telemetry.providers[0].provider, 'codex');
+  const beforeWrongSession = live.frames.length;
+  bus['companion:telemetry']({ sessionId: 'some-other-session', cost: 999 });
+  assert.equal(live.frames.length, beforeWrongSession);
+  ctx.ui.setStatus('another-footer', 'ctx 51% | cost $2.50');
+  sessionName = 'Auto refreshed while idle';
+  ctx.cwd = '/project/idle-move';
+  ctx.model = { id: 'idle-model' };
+  ctx.thinkingLevel = 'low';
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  const refreshed = live.frames.at(-1).session;
+  assert.equal(refreshed.name, sessionName);
+  assert.equal(refreshed.cwd, ctx.cwd);
+  assert.equal(refreshed.mainModel, 'idle-model');
+  assert.equal(refreshed.effort, 'low');
+  assert.equal(refreshed.telemetry.cost.amount, 2.5);
+  assert.equal(refreshed.telemetry.context, undefined, 'switching models invalidates old extension context estimates');
+  ctx.ui.setStatus('another-footer', 'ctx 51% | cost $2.50');
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(live.frames.at(-1).session.telemetry.context.percent, 51);
+  events.session_compact({}, ctx);
+  assert.equal(live.frames.at(-1).session.telemetry.context, undefined, 'compaction clears fallback context when native usage is unavailable');
+  assert.equal(live.frames.at(-1).session.telemetry.cost.amount, 2.5);
+  ctx.model = undefined;
+  ctx.thinkingLevel = undefined;
+  events.model_select({}, ctx);
+  assert.equal(live.frames.at(-1).session.mainModel, null, 'missing models explicitly clear browser metadata');
+  assert.equal(live.frames.at(-1).session.effort, null, 'missing effort explicitly clears browser metadata');
+  const unchanged = live.frames.length;
+  await new Promise(resolve => setTimeout(resolve, 1100));
+  assert.equal(live.frames.length, unchanged, 'unchanged idle metadata does not flood the transport');
   await commands.companion.handler('', ctx);
   assert.equal(state.sockets.length, 1, 'repeated activation does not duplicate sockets');
 
@@ -96,6 +150,7 @@ test('real extension remains inert until /companion and resets activation on ses
   assert.deepEqual(live.frames.at(-1).session, { remoteEnabled: false, status: 'stopped' });
   assert.equal(live.readyState, 3, 'remote off closes the daemon channel so local UI ends the session too');
   assert.equal(ctx.ui.select, originalSelect, 'remote off restores local dialogs');
+  assert.equal(ctx.ui.setStatus, originalStatus, 'remote off restores extension status producers');
   live.emit('message', JSON.stringify({ type: 'command', command: { type: 'prompt', text: 'stale control' } }));
   await new Promise(resolve => setTimeout(resolve, 1100));
   assert.equal(prompts, 0, 'retired transport cannot execute queued controls');

@@ -153,7 +153,7 @@ Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`
 
 Settings → **Notifications and camera** (on every device, not just the console) asks the browser for both permissions from a tap, as browsers require, and shows whether each is allowed, blocked or unavailable. Overview also offers a one-time "Turn on notifications" banner.
 
-With notifications on, the device gets a system notification (through the service worker, so it works for installed apps and Android) when Pi asks a question, finishes a turn or a session ends. Tapping it opens that session. Nothing is sent while you are already looking at that session. iPhone and iPad only allow web notifications from an app added to the Home Screen. The camera is used only for the pairing QR scanner.
+With notifications on, the device gets a system notification (through the service worker, so it works for installed apps and Android) when Pi asks a question, finishes a turn or a session ends. Tapping it opens that session. Nothing is sent while you are already looking at that session. iPhone and iPad only allow web notifications from an app added to the Home Screen. The camera is used only for the pairing QR scanner. Camera access requires HTTPS or localhost; plain HTTP LAN/phone links cannot prompt. After upgrading, restart the daemon and reload the app to refresh cached camera policies. Settings distinguishes browser denial, page/proxy policy blocks and transient camera errors, with retry or manual-code pairing guidance.
 
 Activity no longer lives only in the open tab. The daemon keeps a bounded, in-memory log of each session's recent feed (streamed text is merged, up to 800 entries) at `GET /api/sessions/{id}/activity` on both surfaces (paired devices: shared sessions only). The UI rebuilds the feed from it when a session opens and after every reconnect or resync, so a phone that slept, dropped its connection or was closed catches up without sending a new message. Prompts, steers and answers from any device are added to that log too. The log is cleared when the daemon restarts or the session is archived.
 
@@ -178,11 +178,37 @@ Paired devices (name, browser user agent, pairing and last-seen times, credentia
 
 A phone pairs once with the daemon. Individual Pi sessions still opt in using /companion.
 
-Network loss and daemon restarts reconnect automatically with bounded backoff. Heartbeats detect silent connections, and returning to the foreground or restoring network access retries immediately. Pairing credentials and unsent drafts survive outages; session snapshots, pending questions, and previously loaded upload lists refresh on reconnect. Missed activity is not replayed, and prompts/answers are never automatically resent. A deliberate **Disconnect** waits for the device’s explicit retry; **Revoke** removes access and requires pairing again.
+Network loss and daemon restarts reconnect automatically with bounded backoff. Heartbeats detect silent connections, and returning to the foreground or restoring network access retries immediately. Pairing credentials and unsent drafts survive outages; session snapshots, pending questions, and previously loaded upload lists refresh on reconnect. Recent activity is replayed from the daemon’s bounded log, but prompts/answers are never automatically resent. A deliberate **Disconnect** waits for the device’s explicit retry; **Revoke** removes access and requires pairing again.
+
+## Session metadata and usage
+
+Shared session title, model, effort and working directory refresh on Pi events and once per second while sharing, including while idle. Session detail shows context-window usage and estimated session cost. Native Pi context and recorded usage costs take precedence; independent extension reports fill unavailable fields. Missing usage is shown as unavailable, not zero.
+
+**Settings → Usage** is available on the console and paired devices. It displays the latest snapshot per provider: weekly usage, 5-hour usage when reported, reset times, source and snapshot age. Quota snapshots are not added across sessions or accounts. These are extension-reported limits, not billing totals or locally inferred quotas; providers without a quota report remain unavailable.
+
+Extensions can publish a provider-neutral event without importing Companion:
+
+```ts
+pi.events.emit("companion:telemetry", {
+  source: "my-usage-extension", // distinguish independent producers
+  // sessionId: ctx.sessionManager.getSessionId(), // optional session guard
+  context: { tokens: 24000, window: 200000, percent: 12 },
+  cost: { amount: 0.25, currency: "USD" },
+  providers: [{
+    provider: "openai-codex", updatedAt: new Date().toISOString(),
+    weekly: { usedPercent: 35, resetsAt: "2026-10-12T00:00:00Z" },
+    fiveHour: { usedPercent: 20 } // omit windows the provider doesn't supply
+  }]
+});
+```
+
+Publish complete snapshots per provider; session context and cost may be supplied independently by different extensions. Companion also accepts `usage:update`, `session:usage` and `provider:usage` with this shape. On opt-in and every 30 seconds it emits `companion:telemetry:request` with the Pi `sessionId` and `companionSessionId`, allowing adapters to respond with their cached snapshots. It never reads provider credentials or calls quota APIs itself. Extensions with private, non-exported quota data need an adapter to publish this contract.
+
+As a legacy fallback, `ctx.ui.setStatus` reports with explicit `ctx 12%` / `context 12%` and `cost: $0.25` (or cost/usage/footer keys containing `$0.25`) are recognized. Quota status lines must identify `provider=…` and label `7d`/`weekly` and `5h`/`5-hour` percentages (`used`, `left`, or `remaining`). Unlabelled percentages mean used. Status rendering is preserved. Invalid reports are ignored; extension context/cost expires after five minutes without a fresh reading. Context estimates are also invalidated on model changes, compaction and tree navigation; quota snapshots retain their original timestamps and visibly age.
 
 ## Settings
 
-The **Settings** page (local console only) covers:
+The **Settings → General** page provides appearance and device permissions on every device; daemon configuration is local-console-only:
 
 | Setting | Default | Notes |
 |---|---|---|
@@ -326,7 +352,7 @@ Clone the repository, then:
 
 `npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.2.5
+      Pi Companion v0.2.6
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722

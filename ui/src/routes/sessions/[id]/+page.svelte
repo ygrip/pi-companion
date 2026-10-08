@@ -6,6 +6,7 @@
   import ArchiveSession from '#lib/ArchiveSession.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
+  import { contextUsage, estimatedCost } from '#lib/usage.ts';
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
@@ -430,6 +431,12 @@
       <span class="chip mono" title={session.cwd}><Icon name="folder" size={13} /><span>{prettyPath(session.cwd)}</span></span>
       {#if session.mainModel}<span class="chip"><Icon name="sparkle" size={13} /><span>{session.mainModel}</span></span>{/if}
       {#if session.effort}<span class="chip"><Icon name="brain" size={13} /><span>{session.effort}</span></span>{/if}
+      <span class="chip" title={session.telemetry?.context?.source ? `Reported by ${session.telemetry.context.source}${ended ? ' · last session snapshot' : ''}` : 'Context usage is unavailable until Pi or an extension reports it.'}>
+        <Icon name="activity" size={13} /><span>Context{ended ? ' (last report)' : ''}: {contextUsage(session.telemetry?.context)}</span>
+      </span>
+      <span class="chip" title={session.telemetry?.cost?.source ? `Reported by ${session.telemetry.cost.source}. Estimated, not a billing total.` : 'Estimated session cost, not a billing total. Unavailable until Pi or an extension reports it.'}>
+        <span>Estimated cost: {estimatedCost(session.telemetry?.cost)}</span>
+      </span>
       {#if companion.isAdmin}
         <span class="chip" class:on={session.remoteEnabled}>
           <Icon name="link" size={13} /><span>{session.remoteEnabled ? 'Shared with devices' : 'Not shared · run /companion'}</span>

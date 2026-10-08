@@ -26,7 +26,7 @@ const IMMUTABLE_PREFIX: &str = "_app/immutable/";
 /// Same-origin only. Inline scripts are needed for SvelteKit's bootstrap and the
 /// pre-paint theme script; inline styles for Svelte transitions and the QR SVG.
 const CSP: &str = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; \
-img-src 'self' data: blob:; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; \
+img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' ws: wss:; font-src 'self'; object-src 'none'; \
 base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 fn looks_like_file(path: &str) -> bool {
@@ -54,7 +54,10 @@ pub async fn serve(uri: Uri, request_headers: HeaderMap) -> Response {
     };
 
     let hash = asset.metadata.sha256_hash();
-    let etag = format!("\"{}\"", hash.iter().take(16).map(|b| format!("{b:02x}")).collect::<String>());
+    // HTML validators cover its security policy too: identical shell bytes must not
+    // preserve an older camera=() policy after a daemon upgrade.
+    let policy_revision = if name.ends_with(".html") { "-camera-v2" } else { "" };
+    let etag = format!("\"{}{policy_revision}\"", hash.iter().take(16).map(|b| format!("{b:02x}")).collect::<String>());
     let cache = if name.starts_with(IMMUTABLE_PREFIX) {
         "public, max-age=31536000, immutable"
     } else {
@@ -68,6 +71,13 @@ pub async fn serve(uri: Uri, request_headers: HeaderMap) -> Response {
     }
     headers.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     headers.insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+    // A 304 updates the cached response headers, so include policy headers before
+    // conditional handling rather than leaving stale camera restrictions in cache.
+    if name.ends_with(".html") {
+        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
+        headers.insert(header::HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(self)"));
+        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
+    }
 
     let not_modified = request_headers
         .get(header::IF_NONE_MATCH)
@@ -86,12 +96,6 @@ pub async fn serve(uri: Uri, request_headers: HeaderMap) -> Response {
     if let Ok(value) = HeaderValue::from_str(&content_type) {
         headers.insert(header::CONTENT_TYPE, value);
     }
-    if name.ends_with(".html") {
-        headers.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static(CSP));
-        headers.insert(header::HeaderName::from_static("permissions-policy"), HeaderValue::from_static("camera=(self)"));
-        headers.insert(header::X_FRAME_OPTIONS, HeaderValue::from_static("DENY"));
-    }
-
     (headers, asset.data.into_owned()).into_response()
 }
 
@@ -117,6 +121,22 @@ mod tests {
             let bytes = response.into_body().collect().await.unwrap().to_bytes();
             assert!(!bytes.is_empty());
         }
+    }
+
+    #[tokio::test]
+    async fn html_revalidation_refreshes_camera_security_headers() {
+        let response = serve("/pair".parse().unwrap(), HeaderMap::new()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["permissions-policy"], "camera=(self)");
+        assert!(response.headers()[header::ETAG].to_str().unwrap().contains("-camera-v2"));
+        assert!(response.headers()[header::CONTENT_SECURITY_POLICY].to_str().unwrap().contains("media-src 'self' blob:"));
+        let mut headers = HeaderMap::new();
+        headers.insert(header::IF_NONE_MATCH, response.headers()[header::ETAG].clone());
+        let revalidated = serve("/pair".parse().unwrap(), headers).await;
+        assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(revalidated.headers()["permissions-policy"], "camera=(self)");
+        assert_eq!(revalidated.headers()[header::CONTENT_SECURITY_POLICY], response.headers()[header::CONTENT_SECURITY_POLICY]);
+        assert_eq!(revalidated.headers()[header::X_FRAME_OPTIONS], "DENY");
     }
 
     #[tokio::test]

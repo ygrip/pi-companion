@@ -71,6 +71,11 @@ export default function companionExtension(pi: ExtensionAPI) {
   let bridge = new CompanionBridge(pi);
   let sharingGeneration = 0;
 
+  // Any extension can publish the neutral contract. No dependency on a particular footer/provider.
+  for (const channel of ["companion:telemetry", "usage:update", "session:usage", "provider:usage"]) {
+    pi.events?.on(channel, value => bridge.ingestTelemetry(value, channel));
+  }
+
   pi.on("session_start", (_event, ctx) => {
     // Switching or starting a Pi session must not inherit the previous opt-in.
     sharingGeneration += 1;
@@ -84,6 +89,7 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.setName(event.name);
   });
   pi.on("model_select", (_event, ctx) => {
+    bridge.invalidateContext();
     bridge.setContext(ctx);
   });
   pi.on("thinking_level_select", (_event, ctx) => {
@@ -98,6 +104,15 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.setContext(ctx);
     bridge.updateStatus("idle");
     bridge.emit("agent.end", { messages: Array.isArray((event as { messages?: unknown[] }).messages) ? (event as { messages: unknown[] }).messages.length : 0 });
+  });
+  pi.on("message_end", (_event, ctx) => bridge.setContext(ctx));
+  pi.on("session_compact", (_event, ctx) => {
+    bridge.invalidateContext();
+    bridge.setContext(ctx);
+  });
+  pi.on("session_tree", (_event, ctx) => {
+    bridge.invalidateContext();
+    bridge.setContext(ctx);
   });
   // Forward compact deltas instead of the full partial message on every token.
   pi.on("message_update", event => {
