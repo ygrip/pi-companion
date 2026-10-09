@@ -1,12 +1,14 @@
 [package]
 name = "pi-companion-server"
-version = "0.2.6"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 
 [dependencies]
 axum = { version = "0.8", features = ["ws", "multipart"] }
 futures-util = "0.3"
+chrono = "0.4"
+libc = "0.2"
 qrcode = "0.14"
 rust-embed = "8.7"
 mime_guess = "2"

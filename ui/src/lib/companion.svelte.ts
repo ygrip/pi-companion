@@ -387,6 +387,8 @@ class Companion {
   }
 
   send(sessionId: string, command: Record<string, unknown>) {
+    const session = this.session(sessionId);
+    if ((session?.readOnly || session?.automationId) && command.type !== 'ask_answer' && command.type !== 'ask_cancel') return false;
     if (this.connection !== 'online') return false;
     return this.live.send(JSON.stringify({ sessionId, command }));
   }
@@ -416,6 +418,8 @@ class Companion {
   }
 
   async upload(sessionId: string, file: File) {
+    const session = this.session(sessionId);
+    if (session?.readOnly || session?.automationId) throw new Error('Automation sessions do not accept uploads.');
     const data = new FormData();
     data.append('file', file);
     const uploaded = await this.request<TempFile>('/api/sessions/' + encodeURIComponent(sessionId) + '/files', { method: 'POST', body: data }, 60_000);

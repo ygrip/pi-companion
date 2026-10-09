@@ -18,10 +18,12 @@
   const nav: NavItem[] = [
     { href: '/', label: 'Overview', icon: 'home' },
     { href: '/sessions', label: 'Sessions', icon: 'sessions' },
+    { href: '/automations', label: 'Automations', icon: 'sparkle' },
     { href: '/devices', label: 'Devices', icon: 'devices', admin: true },
     { href: '/settings', label: 'Settings', icon: 'settings' }
   ];
   const visibleNav = $derived(nav.filter((item) => !item.admin || companion.isAdmin));
+  const mobileNav = $derived(visibleNav.filter((item) => item.href !== '/settings'));
   const path = $derived(page.url.pathname);
   const bare = $derived(companion.remote && !companion.paired);
   const waiting = $derived(Object.values(companion.asks).reduce((total, list) => total + list.length, 0));
@@ -184,10 +186,7 @@
             <span class="dot {companion.connection}" aria-hidden="true"></span>
             <span>{connectionLabel}</span>
           </button>
-          <button
-            class="btn btn-ghost btn-icon"
-            aria-label={theme.resolved === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
-            onclick={() => theme.toggle()}><Icon name={theme.resolved === 'dark' ? 'sun' : 'moon'} /></button>
+          <a class="btn btn-ghost btn-icon" href="/settings" aria-label="Settings" aria-current={active('/settings') ? 'page' : undefined}><Icon name="settings" /></a>
         </div>
       </header>
 
@@ -233,7 +232,7 @@
       </main>
 
       <nav class="tabbar" aria-label="Primary">
-        {#each visibleNav as item (item.href)}
+        {#each mobileNav as item (item.href)}
           <a href={item.href} class:active={active(item.href)} aria-current={active(item.href) ? 'page' : undefined}>
             <span class="tab-icon">
               <Icon name={item.icon} size={20} />

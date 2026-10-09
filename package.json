@@ -1,6 +1,6 @@
 {
   "name": "@yunazgr/pi-companion",
-  "version": "0.2.6",
+  "version": "0.3.0",
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",
@@ -28,6 +28,8 @@
   "main": "src/index.ts",
   "files": [
     "src",
+    "skills",
+    "docs/automations.md",
     "README.md",
     "SECURITY.md",
     "LICENSE"
@@ -37,6 +39,7 @@
   },
   "scripts": {
     "serve": "npm run --silent ui:build -- --logLevel warn && cargo run -q --manifest-path server/Cargo.toml",
+    "automation:mcp": "node --experimental-strip-types --no-warnings src/automation-mcp.ts",
     "server:dev": "npm run serve",
     "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml",
     "ui:dev": "cd ui && vite dev",
@@ -44,12 +47,16 @@
     "check": "tsc --noEmit && npm run ui:check",
     "ui:check": "cd ui && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "test": "npm run test:extension && npm run test:server",
-    "test:extension": "node --test --experimental-transform-types --no-warnings test/*.test.ts",
-    "test:server": "cargo test --manifest-path server/Cargo.toml"
+    "test:extension": "node --test --experimental-transform-types --no-warnings test/*.test.ts ui/automation.test.ts",
+    "test:server": "cargo test --manifest-path server/Cargo.toml",
+    "test:smoke": "npm run ui:build && cargo build --manifest-path server/Cargo.toml --locked && node tools/smoke-automations.mjs"
   },
   "pi": {
     "extensions": [
       "./src/index.ts"
+    ],
+    "skills": [
+      "./skills"
     ],
     "image": "https://raw.githubusercontent.com/ygrip/pi-companion/main/docs/dashboard.png"
   },

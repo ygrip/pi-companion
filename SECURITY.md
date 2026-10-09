@@ -24,13 +24,21 @@ Strict Origin checks: WebSocket upgrades and POST/DELETE requests must carry an 
 
 Pairing invitations are single-use and expire (5 minutes by default). The short typed code is rate limited: ten wrong codes within ten minutes withdraw every open invitation and further code claims get HTTP 429 until the window passes.
 
-Paired devices can see only sessions that explicitly enabled remote control.
+Paired devices can see only sessions that explicitly enabled remote control, including daemon-owned automation sessions created by an authorized automation run. Paired devices may read automation definitions/history and start/stop existing automations, but cannot create, edit, delete, or enable/disable them.
 
 Revoking a device deletes its credential hash and closes its open connections immediately (WebSocket close 4003). Disconnecting closes them without deleting the credential (close 4001).
 
 ### Stored state
 
 Paired devices (name, browser user agent, pairing and last-seen times, and the SHA-256 hash of the credential; never the credential) and settings are written atomically to `~/.pi/agent/pi-companion/state.json`. On Unix the directory is 0700 and the file is created 0600 before any byte is written; a looser mode found at startup is tightened.
+
+Automation definitions, prompts, and bounded run output are stored separately in `automations.json`, using atomic replacement and private Unix permissions. Output can contain sensitive command/agent data; it is readable by paired devices. Failed or stopped runs are retained; interrupted runs are marked failed on daemon restart.
+
+### Automations
+
+Only the local admin surface can author automation scripts. Native extension and standalone MCP tools use that surface and do not start the daemon implicitly. Commands use argv without an implicit shell, but both commands and spawned Pi agents run with the OS user's permissions; this is not a sandbox. A paired device can start a previously authorized script with side effects. Disabling a definition prevents scheduling, not explicit manual runs.
+
+Automation sessions accept only question answers/cancellation from browsers. Prompts, steering, abort/plan/diff commands, uploads, and file deletion are denied server-side. Stop a run through its automation endpoint instead. Five-field UTC schedules run only while the daemon is alive, without overlapping runs or catch-up. Automatic session archiving after seven disconnected days removes registry/feed records only, never local Pi/project files.
 
 ### Web UI hardening
 
@@ -54,7 +62,7 @@ Agent deletion uses the opaque id rather than a path. Before unlinking, the daem
 
 Pi Companion does not provide:
 
-- remote shell access
+- arbitrary remote shell access (paired devices can start admin-authored automation commands)
 - arbitrary filesystem browsing
 - arbitrary tool invocation
 - direct git push/commit endpoints

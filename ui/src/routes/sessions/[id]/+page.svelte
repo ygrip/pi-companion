@@ -10,6 +10,7 @@
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
+  import { isShellTool, shellLabel, shellPreview } from '#lib/shell-activity.ts';
   import type { TempFile } from '#lib/types.ts';
   import { attachmentPrompt, canPreviewAttachment, validateAttachment } from '#lib/attachments.ts';
   import { filterChangedFiles, splitChangedFiles, diffLineClass as lineClass } from '#lib/diff.ts';
@@ -61,7 +62,7 @@
     const input = inputFor(entry, args);
     const tool = entry.title.toLowerCase();
     const first = (...keys: string[]) => keys.map((key) => input[key]).find((value) => value != null);
-    if (/^(bash|shell|run|execute|terminal)$/.test(tool)) {
+    if (isShellTool(tool)) {
       return { kind: 'command', command: textValue(first('command', 'cmd') ?? fallbackCommand(args)).trim() };
     }
     if (/^(read|write|edit)$/.test(tool)) {
@@ -110,6 +111,7 @@
   const id = $derived(page.params.id ?? '');
   const session = $derived(companion.session(id));
   const ended = $derived(session?.status === 'stopped');
+  const readOnly = $derived(Boolean(session?.readOnly || session?.automationId));
   const feed = $derived(companion.activity[id] ?? []);
   /** Uploads use HTTP, not the live socket; only a deliberate disconnect/revocation blocks them. */
   const uploadBlocked = $derived(companion.connection === 'disconnected' || companion.connection === 'revoked');
@@ -181,7 +183,7 @@
     infoOpen = false;
     follow = true;
     unseen = 0;
-    if (session && !ended) void companion.refreshFiles(id).catch(() => {});
+    if (session && !ended && !readOnly) void companion.refreshFiles(id).catch(() => {});
     void companion.loadActivity(id).catch(() => {});
   });
 
@@ -244,6 +246,7 @@
   }
 
   function selectTab(next: Tab) {
+    if (readOnly && next !== 'activity') return;
     if (menuEl) menuEl.open = false;
     tab = next;
     if (next === 'files') void companion.refreshFiles(id).catch(() => {});
@@ -279,7 +282,7 @@
   function submit() {
     const uploaded = attachments.flatMap((attachment) => attachment.status === 'ready' && attachment.uploaded ? [attachment.uploaded] : []);
     const text = attachmentPrompt(prompt, uploaded);
-    if (ended || uploading || invalidAttachments || (mode === 'auto' && !text)) return;
+    if (readOnly || ended || uploading || invalidAttachments || (mode === 'auto' && !text)) return;
     const sent = mode === 'plan'
       ? companion.send(id, { type: 'plan', text })
       : companion.prompt(id, text, steer && session?.status === 'active');
@@ -313,13 +316,13 @@
   }
 
   function loadDiff(nextStaged = staged) {
-    if (ended) return;
+    if (readOnly || ended) return;
     staged = nextStaged;
     if (!companion.send(id, { type: 'git_diff', staged: nextStaged })) toasts.show('Not connected.', 'error');
   }
 
   async function uploadFiles(list: FileList | File[] | null | undefined) {
-    if (!list || ended) return;
+    if (!list || readOnly || ended) return;
     const targetSession = id;
     const generation = draftGeneration;
     const picker = fileInput;
@@ -418,8 +421,10 @@
       <details class="session-menu" bind:this={menuEl}>
         <summary class="btn btn-ghost btn-icon" aria-label="Session options" title="Session options"><Icon name="more" /></summary>
         <div class="menu-actions">
-          <button type="button" class="btn btn-ghost" onclick={() => selectTab('files')}><Icon name="folder" size={16} />Shared files{#if files.length}<span class="badge count quiet">{files.length}</span>{/if}</button>
-          <button type="button" class="btn btn-ghost" onclick={() => selectTab('changes')}><Icon name="diff" size={16} />Changes{#if diffStats.files}<span class="badge count quiet">{diffStats.files}</span>{/if}</button>
+          {#if !readOnly}
+            <button type="button" class="btn btn-ghost" onclick={() => selectTab('files')}><Icon name="folder" size={16} />Shared files{#if files.length}<span class="badge count quiet">{files.length}</span>{/if}</button>
+            <button type="button" class="btn btn-ghost" onclick={() => selectTab('changes')}><Icon name="diff" size={16} />Changes{#if diffStats.files}<span class="badge count quiet">{diffStats.files}</span>{/if}</button>
+          {/if}
           <ArchiveSession {session} redirect />
           {#if !ended}<p>Only ended sessions can be archived.</p>{/if}
         </div>
@@ -445,6 +450,7 @@
       <span class="chip"><span>Started {relativeTime(session.connectedAt)}</span></span>
     </div>
 
+    {#if readOnly}<p class="composer-notice" role="status">Automation session · read-only. You can answer questions, but steering, planning, uploads, and changes are unavailable.{#if session.automationId} <a href={'/automations/' + encodeURIComponent(session.automationId)}>View automation</a>{/if}</p>{/if}
     <section class="panel">
       {#if tab !== 'activity'}
         <header class="accessory-head">
@@ -473,13 +479,26 @@
                           {@const parts = toolParts(entry)}
                           {@const summary = toolSummary(entry, parts.args)}
                           <div class="cmd">
-                            <b>{entry.title}</b>
+                            <b>{summary.kind === 'command' ? shellLabel(inputFor(entry, parts.args), entry.status) : entry.title}</b>
                             {#if entry.status === 'running'}<span class="state run">running</span>
                             {:else if entry.status === 'ok'}<span class="state ok">ok</span>
                             {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
                           </div>
-                          {#if summary.kind === 'command' && summary.command}
-                            <pre class="command"><span aria-hidden="true">$ </span>{summary.command}</pre>
+                          {#if summary.kind === 'command'}
+                            {@const preview = shellPreview(parts.result)}
+                            {#if preview.text}
+                              <pre class="shell-preview" class:error-output={entry.status === 'error'} aria-label="Shell output preview">{preview.truncated ? '…\n' : ''}{preview.text}</pre>
+                              {#if preview.truncated}
+                                <details class="out"><summary>Full output · {preview.lines} {preview.lines === 1 ? 'line' : 'lines'}</summary><pre class:error-output={entry.status === 'error'}>{parts.result}</pre></details>
+                              {/if}
+                            {:else}
+                              <p class="shell-quiet">{entry.status === 'running' ? 'Waiting for output…' : 'No output returned.'}</p>
+                            {/if}
+                            <details class="shell-script">
+                              <summary>{summary.command.includes('\n') ? 'Script details' : 'Command details'}</summary>
+                              {#if summary.command}<pre class="command"><span aria-hidden="true">$ </span>{summary.command}</pre>{/if}
+                              {#if parts.args}<details class="out"><summary>All parameters</summary><pre>{parts.args}</pre></details>{/if}
+                            </details>
                           {:else if summary.kind === 'file'}
                             <div class="tool-summary">
                               <code class="path-chip">{summary.path}</code>
@@ -510,7 +529,7 @@
                               {/each}
                             </dl>
                           {/if}
-                          {#if parts.result}
+                          {#if parts.result && summary.kind !== 'command'}
                             {@const lines = lineCount(parts.result)}
                             <details class="out" open={entry.status === 'error' || lines <= 6}>
                               <summary>output · {lines} {lines === 1 ? 'line' : 'lines'}</summary>
@@ -529,8 +548,10 @@
                         {:else if entry.kind === 'assistant'}
                           {@const final = entry !== feed.at(-1) || session.status !== 'active'}
                           <div class="md" use:prettify={{ text: entry.body, final }}>{@html renderMarkdown(entry.body)}</div>
+                        {:else if entry.kind === 'user'}
+                          <div class="speaker">You <span>{entry.title === 'You' ? 'Message' : entry.title.replace('You · ', '')}</span></div>
+                          <pre class="user-message">{entry.body}</pre>
                         {:else}
-                          {#if entry.kind === 'user' && entry.title !== 'You'}<span class="tag">{entry.title.replace('You · ', '')}</span>{/if}
                           <pre>{entry.body}</pre>
                         {/if}
                       </div>
@@ -637,7 +658,9 @@
 
       {#if tab === 'activity'}
         <form class="composer" onsubmit={(event) => { event.preventDefault(); submit(); }}>
-          {#if ended}
+          {#if readOnly}
+            <p class="ended"><span class="glyph">~</span>Automation controls are on the automation detail page.</p>
+          {:else if ended}
             <p class="ended"><span class="glyph">!</span>Session ended. History is read-only.</p>
           {:else}
             {#if attachments.length}
@@ -691,6 +714,10 @@
 {/if}
 
 <style>
+  .shell-preview { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .shell-quiet { margin: 6px 0; color: var(--text-2); font-size: .8rem; }
+  .shell-script { margin-top: 8px; font-size: .8rem; color: var(--text-2); }
+  .shell-script > summary { cursor: pointer; padding: 8px 0; }
   /* Fills the content area; only regions inside the panel scroll. */
   .detail {
     height: 100%;
@@ -904,11 +931,20 @@
     color: var(--term-accent);
   }
 
-  .user .glyph,
-  .user pre {
-    color: var(--term-accent);
-    font-weight: 600;
+  .line.user {
+    margin: 14px 0 14px clamp(0px, 4vw, 36px);
+    padding: 14px 16px;
+    border: 1px solid color-mix(in srgb, var(--term-accent) 40%, transparent);
+    border-left: 4px solid var(--term-accent);
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--term-accent) 9%, var(--term-bg));
+    box-shadow: 0 2px 8px rgb(0 0 0 / 5%);
   }
+  .user .glyph { color: var(--term-accent); font-weight: 700; }
+  .speaker { display: flex; align-items: baseline; gap: 10px; margin-bottom: 6px; color: var(--term-accent); font-family: var(--sans, sans-serif); font-size: .8rem; font-weight: 700; }
+  .speaker span { color: var(--term-dim); font-size: .7rem; font-weight: 400; }
+  .user .user-message { color: var(--term-text); font-family: var(--sans, sans-serif); font-size: .9rem; font-weight: 400; line-height: 1.65; }
+  @media(max-width: 550px) { .line.user { margin-left: 8px; padding: 12px 10px; } }
 
   .thinking pre,
   .thinking .glyph {

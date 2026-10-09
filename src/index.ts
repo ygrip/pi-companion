@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { formatAnswers, toQuestions } from "./ask.js";
 import { CompanionBridge } from "./bridge.js";
 import { adminHttpUrl, ensureDaemon } from "./daemon.js";
+import { automationTool, executeAutomation, type AutomationParams } from "./automation.ts";
 
 const AskOptionParam = Type.Union([
   Type.String(),
@@ -144,13 +145,68 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
 
   pi.registerTool({
+    name: automationTool.name,
+    label: "Companion automation",
+    description: automationTool.description,
+    parameters: Type.Unsafe<AutomationParams>(automationTool.inputSchema),
+    executionMode: "sequential",
+    async execute(_toolCallId, params, signal) {
+      try {
+        const result = await executeAutomation(params, signal);
+        return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }], details: { result, error: null as string | null } };
+      } catch (error) {
+        return { isError: true, content: [{ type: "text", text: String(error instanceof Error ? error.message : error) }], details: { result: null, error: String(error) } };
+      }
+    }
+  });
+
+  pi.registerTool({
     name: "companion_ask_user",
     label: "Ask via Companion",
     description:
       "Ask the user one to four questions through the Pi Companion web/phone UI. Each question can offer options (single or multi-select) and an optional free-text answer.",
     parameters: AskParams,
     executionMode: "sequential",
-    async execute(_toolCallId, params, signal) {
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      // Daemon-owned RPC runs relay supported extension UI dialogs, not a second bridge.
+      // Normal sessions still require explicit /companion activation.
+      if (ctx?.mode === "rpc" && process.env.PI_COMPANION_AUTOMATION_RUN_ID) {
+        const items = params.questions?.length ? params.questions : params.question ? [{ question: params.question, options: params.options }] : [];
+        if (!items.length) return { content: [{ type: "text", text: "Provide `question` or `questions`." }], details: { questions: [], answers: null } };
+        const questions = toQuestions(items);
+        const answers: Record<string, string[]> = {};
+        for (const question of questions) {
+          if (signal?.aborted) break;
+          const choices = question.options.map(option => option.label);
+          const title = question.question + (question.options.some(option => option.description) ? "\n" + question.options.map(option => option.label + (option.description ? ": " + option.description : "")).join("\n") : "");
+          if (choices.length && !question.multiSelect) {
+            const custom = "Other (enter a response)";
+            const selected = await ctx.ui.select(title, question.allowCustom ? [...choices, custom] : choices, { signal, timeout: ASK_TIMEOUT_MS });
+            if (selected === undefined) break;
+            if (question.allowCustom && selected === custom) {
+              const value = await ctx.ui.input(question.question, "Your response", { signal, timeout: ASK_TIMEOUT_MS });
+              if (value === undefined) break;
+              answers[question.id] = [value];
+            } else answers[question.id] = [selected];
+          } else if (question.multiSelect && choices.length) {
+            answers[question.id] = [];
+            for (const choice of choices) {
+              if (signal?.aborted) break;
+              if (await ctx.ui.confirm(question.question, "Select: " + choice, { signal, timeout: ASK_TIMEOUT_MS })) answers[question.id].push(choice);
+            }
+            if (question.allowCustom) {
+              const value = await ctx.ui.input(question.question, "Optional additional response", { signal, timeout: ASK_TIMEOUT_MS });
+              if (value?.trim()) answers[question.id].push(value);
+            }
+          } else {
+            const value = await ctx.ui.input(title, question.placeholder, { signal, timeout: ASK_TIMEOUT_MS });
+            if (value === undefined) break;
+            answers[question.id] = [value];
+          }
+        }
+        const complete = !signal?.aborted && questions.every(question => question.id in answers);
+        return { content: [{ type: "text", text: complete ? formatAnswers(questions, answers) : "The user dismissed the question in Pi Companion." }], details: { questions, answers: complete ? answers : null } };
+      }
       if (!bridge.isActivated()) {
         return {
           content: [{ type: "text", text: "Pi Companion is not enabled for this session. Run /companion before asking through the dashboard." }],

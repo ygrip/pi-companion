@@ -19,6 +19,8 @@ use super::*;
 
 #[path = "archive_tests.rs"]
 mod archive_tests;
+#[path = "automation_tests.rs"]
+mod automation_tests;
 
 const CONSOLE_ORIGIN: &str = "http://127.0.0.1:43721";
 const DEVICE_ORIGIN: &str = "http://127.0.0.1:43722";

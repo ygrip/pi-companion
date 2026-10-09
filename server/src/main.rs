@@ -1,4 +1,5 @@
 mod activity;
+mod automation;
 mod assets;
 mod config;
 #[cfg(test)]
@@ -70,6 +71,7 @@ struct Kick {
 
 #[derive(Clone)]
 struct AppState {
+    automations: Arc<Mutex<automation::Store>>,
     sessions: Arc<RwLock<HashMap<String, Session>>>,
     files: Arc<RwLock<HashMap<String, Vec<TempFile>>>>,
     /// Recent feed per session so reconnecting browsers can catch up.
@@ -99,6 +101,7 @@ impl AppState {
         let (kick_tx, _) = broadcast::channel(64);
         let (shutdown_tx, _) = broadcast::channel(2);
         Self {
+            automations: Arc::new(Mutex::new(automation::Store::default())),
             sessions: Arc::new(RwLock::new(HashMap::new())),
             files: Arc::new(RwLock::new(HashMap::new())),
             activity: Arc::new(RwLock::new(activity::ActivityStore::default())),
@@ -266,6 +269,18 @@ async fn main() {
         Err(error) => panic!("bind remote surface {}: {error}", remote_addr()),
     };
 
+    // A duplicate process must not rewrite the live daemon's run history either.
+    automation::initialize(&state).await.expect("load automation definitions");
+    // Do not execute scheduled jobs until both ports are owned by this daemon.
+    let maintenance = state.clone();
+    let mut maintenance_shutdown = state.shutdown_tx.subscribe();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(30));
+        loop { tokio::select! {
+            _ = maintenance_shutdown.recv() => { automation::cancel_all(&maintenance).await; break; },
+            _ = interval.tick() => { automation::tick(&maintenance).await; auto_archive(&maintenance).await; }
+        } }
+    });
     print_banner(&state).await;
 
     // Small, latency-sensitive frames (questions, answers, deltas): disable Nagle.
@@ -275,12 +290,14 @@ async fn main() {
         axum::serve(remote_listener.tap_io(|tcp| { let _ = tcp.set_nodelay(true); }), remote)
             .with_graceful_shutdown(async move { let _ = remote_shutdown.recv().await; })
     );
+    automation::cancel_all(&state).await;
     local_result.expect("local server failed");
     remote_result.expect("remote server failed");
 }
 
 fn local_router(state: AppState) -> Router {
     Router::new()
+        .merge(automation::router(false))
         .route("/api/context", get(local_context))
         .route("/api/sessions", get(list_sessions))
         .route("/api/sessions/{session_id}", delete(delete_session_local))
@@ -304,6 +321,7 @@ fn local_router(state: AppState) -> Router {
 
 fn remote_router(state: AppState) -> Router {
     Router::new()
+        .merge(automation::router(true).layer(middleware::from_fn_with_state(state.clone(), automation::authenticate)))
         .route("/api/context", get(remote_context))
         .route("/api/pairing/claim", post(claim_pairing))
         .route("/api/sessions", get(list_sessions_remote))
@@ -535,6 +553,27 @@ async fn delete_session(state: &AppState, session_id: &str, remote: bool) -> Api
     // by a stale removal event. No filesystem operation is performed by archiving.
     broadcast(state, serde_json::json!({ "type": "session.removed", "sessionId": session_id, "remoteEnabled": remote_enabled }));
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn require_interactive_session(state: &AppState, id: &str) -> ApiResult<()> {
+    if state.sessions.read().await.get(id).is_some_and(|s| s.snapshot.get("readOnly").and_then(Value::as_bool) == Some(true)) {
+        return Err((StatusCode::FORBIDDEN, "Automation sessions are read-only; only question answers are supported.".into()));
+    }
+    Ok(())
+}
+
+async fn auto_archive(state: &AppState) {
+    let cutoff = now_secs().saturating_sub(7 * 24 * 60 * 60);
+    let mut sessions = state.sessions.write().await;
+    let ids: Vec<String> = sessions.iter().filter(|(_,s)| s.command_tx.is_none()
+        && matches!(s.snapshot.get("status").and_then(Value::as_str), Some("stopped" | "disconnected"))
+        && s.snapshot.get("disconnectedAt").and_then(Value::as_u64).is_some_and(|at| at < cutoff))
+        .map(|(id,_)| id.clone()).collect();
+    for id in ids {
+        let session = sessions.remove(&id).unwrap();
+        state.activity.write().await.remove(&id);
+        broadcast(state, serde_json::json!({"type":"session.removed","sessionId":id,"remoteEnabled":session.snapshot.get("remoteEnabled").and_then(Value::as_bool)==Some(true)}));
+    }
 }
 
 async fn list_devices(State(state): State<AppState>) -> Json<DevicesResponse> {
@@ -781,6 +820,7 @@ fn upload_mime(settings: &Settings, name: &str, declared: Option<&str>) -> ApiRe
 }
 
 async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipart) -> ApiResult<TempFile> {
+    require_interactive_session(state, session_id).await?;
     check_session_id(session_id)?;
     if !state.sessions.read().await.contains_key(session_id) {
         return Err((StatusCode::NOT_FOUND, "Session not found.".into()));
@@ -871,6 +911,7 @@ async fn delete_file_remote(
 
 async fn delete_temp_file(state: &AppState, session_id: &str, file_id: &str) -> ApiResult<()> {
     check_session_id(session_id)?;
+    require_interactive_session(state, session_id).await?;
     let file = {
         let mut files = state.files.write().await;
         let session_files = files.get_mut(session_id)
@@ -1067,6 +1108,8 @@ async fn forward_browser_command(state: &AppState, text: &str, remote: bool) {
     if remote && session.snapshot.get("remoteEnabled").and_then(Value::as_bool) != Some(true) {
         return;
     }
+    if session.snapshot.get("readOnly").and_then(Value::as_bool) == Some(true)
+        && !matches!(envelope.command.get("type").and_then(Value::as_str), Some("ask_answer" | "ask_cancel")) { return; }
     let Some(command_tx) = &session.command_tx else { return };
     if command_tx.send(serde_json::json!({ "type": "command", "command": envelope.command.clone() })).is_err() { return; }
     // Show what was sent on every open companion (and after a reload), not just the sender's tab.
@@ -1191,6 +1234,7 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
             && session.command_tx.as_ref().is_some_and(|tx| tx.same_channel(&command_tx)) {
             if let Some(snapshot) = session.snapshot.as_object_mut() {
                 snapshot.insert("status".into(), Value::String("stopped".into()));
+                snapshot.insert("disconnectedAt".into(), Value::from(now_secs()));
             }
             session.command_tx = None;
             broadcast(&state, serde_json::json!({

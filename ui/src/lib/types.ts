@@ -1,5 +1,28 @@
 export type SessionStatus = 'active' | 'idle' | 'stopped';
 
+export type AutomationAction =
+  | { type: 'command'; command: string; args: string[]; cwd?: string; timeoutSeconds?: number }
+  | { type: 'pi'; prompt: string; cwd: string; timeoutSeconds?: number };
+
+export type AutomationDraft = {
+  name: string;
+  enabled: boolean;
+  preconditions: AutomationAction[];
+  actions: AutomationAction[];
+  postActions: AutomationAction[];
+  schedule: string | null;
+};
+export type Automation = AutomationDraft & { id: string; createdAt: number; updatedAt: number };
+export type AutomationRun = {
+  id: string;
+  automationId: string;
+  startedAt: number;
+  finishedAt: number | null;
+  status: 'running' | 'succeeded' | 'failed' | 'stopped' | 'skipped';
+  result: string;
+  sessionId?: string;
+};
+
 export type UsageWindow = { usedPercent: number; resetsAt?: string };
 
 /** Provider account limits, reported by any compatible extension. */
@@ -28,6 +51,9 @@ export type Session = {
   effort?: string | null;
   telemetry?: SessionTelemetry;
   remoteEnabled: boolean;
+  readOnly?: boolean;
+  automationId?: string;
+  automationRunId?: string;
   connectedAt: string;
   /** Questions waiting for an answer (mirrors src/protocol.ts AskRequest). */
   asks?: AskRequest[];

@@ -2,6 +2,8 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
+**New in 0.3.0:** [automations](docs/automations.md) with manual/UTC-cron runs, read-only agent sessions, run history, native agent tools and a standalone MCP surface. Disconnected sessions auto-archive after seven days; mobile Settings is now in the header.
+
 Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, browser fan-out, and the embedded web UI.
 
 The UI is a static SvelteKit application. There is no Node runtime in production and no Tauri shell. Rust embeds the generated frontend into the daemon binary.
@@ -352,7 +354,7 @@ Clone the repository, then:
 
 `npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.2.6
+      Pi Companion v0.3.0
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722

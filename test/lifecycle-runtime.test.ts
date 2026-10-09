@@ -40,9 +40,40 @@ const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
   .replace('from "./bridge.js"', `from ${JSON.stringify(bridge)}`)
-  .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`));
+  .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
+  .replace('from "./automation.ts"', `from ${JSON.stringify(new URL('../src/automation.ts', import.meta.url).href)}`));
 
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+test('daemon-owned RPC automation can ask without activating a companion bridge', async () => {
+  const { default: install } = await import(extension);
+  const tools: Record<string, any> = {};
+  install({ events: { on: () => {} }, on: () => {}, registerCommand: () => {}, registerTool: (tool: any) => { tools[tool.name] = tool; } });
+  const original = process.env.PI_COMPANION_AUTOMATION_RUN_ID;
+  const sockets = state.sockets.length, probes = state.probes;
+  const dialogs: string[] = [];
+  const ctx = { mode: 'rpc', ui: {
+    select: async (title: string) => { dialogs.push(title); return 'Ship'; },
+    confirm: async (_title: string, message: string) => message.includes('One'),
+    input: async (title: string) => { dialogs.push(title); return 'Custom'; }
+  } };
+  try {
+    process.env.PI_COMPANION_AUTOMATION_RUN_ID = 'run-123';
+    const result = await tools.companion_ask_user.execute('tool', { questions: [
+      { question: 'Release?', options: ['Ship', 'Wait'] },
+      { question: 'Targets?', options: ['One', 'Two'], multiSelect: true, allowCustom: false },
+      { question: 'Notes?' }
+    ] }, undefined, undefined, ctx);
+    assert.equal(Object.values(result.details.answers).flat().join(','), 'Ship,One,Custom');
+    assert.equal(state.sockets.length, sockets);
+    assert.equal(state.probes, probes);
+    delete process.env.PI_COMPANION_AUTOMATION_RUN_ID;
+    const inactive = await tools.companion_ask_user.execute('tool', { question: 'Release?' }, undefined, undefined, ctx);
+    assert.match(inactive.content[0].text, /not enabled/);
+  } finally {
+    if (original === undefined) delete process.env.PI_COMPANION_AUTOMATION_RUN_ID; else process.env.PI_COMPANION_AUTOMATION_RUN_ID = original;
+  }
+});
 
 test('real extension remains inert until /companion and resets activation on session switch', async () => {
   const { default: install } = await import(extension);
