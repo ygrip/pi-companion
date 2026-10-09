@@ -5,7 +5,8 @@ import { automationTool, executeAutomation, type AutomationDefinition } from '..
 
 const definition: AutomationDefinition = {
   name: 'Verify repo', enabled: true, schedule: null, preconditions: [],
-  actions: [{ type: 'command', command: 'git', args: ['status', '--short'] }], postActions: []
+  actions: [{ type: 'command', command: 'git', args: ['status', '--short'] }], postActions: [],
+  maxRetries: 2, retryIntervalSeconds: 30
 };
 
 test('automation tool maps every action to the admin API and preserves argv', async () => {

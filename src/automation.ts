@@ -10,6 +10,9 @@ export type AutomationDefinition = {
   preconditions: AutomationAction[];
   actions: AutomationAction[];
   postActions: AutomationAction[];
+  historyLimit?: number;
+  maxRetries?: number;
+  retryIntervalSeconds?: number;
 };
 export type AutomationParams = {
   action: "list" | "get" | "create" | "update" | "delete" | "enable" | "disable" | "start" | "stop" | "runs" | "run";
@@ -48,7 +51,10 @@ export const automationTool = {
           schedule: { type: ["string", "null"], description: "Five-field UTC cron; null for manual only." },
           preconditions: { type: "array", items: actionSchema },
           actions: { type: "array", minItems: 1, items: actionSchema },
-          postActions: { type: "array", items: actionSchema }
+          postActions: { type: "array", items: actionSchema },
+          historyLimit: { type: "integer", minimum: 1, maximum: 1000, description: "Retain latest N finished runs; default 30." },
+          maxRetries: { type: "integer", minimum: 0, maximum: 5, description: "Optional retries of the failed main action only; default 0. May repeat side effects." },
+          retryIntervalSeconds: { type: "integer", minimum: 1, maximum: 86400, description: "Optional delay between retries; default 10 seconds; total retry delay must fit before the next scheduled trigger." }
         }
       }
     }
@@ -92,8 +98,8 @@ export async function executeAutomation(params: AutomationParams, signal?: Abort
     case "enable": case "disable": {
       const current = await request(path) as AutomationDefinition;
       // PUT only definition fields, never server-generated metadata.
-      const { name, schedule, preconditions, actions, postActions } = current;
-      return request(path, "PUT", { name, schedule, preconditions, actions, postActions, enabled: params.action === "enable" });
+      const { name, schedule, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit } = current;
+      return request(path, "PUT", { name, schedule, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit, enabled: params.action === "enable" });
     }
     case "start": case "stop": return request(path + "/" + params.action, "POST");
     case "runs": return request(path + "/runs");

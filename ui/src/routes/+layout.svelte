@@ -18,7 +18,7 @@
   const nav: NavItem[] = [
     { href: '/', label: 'Overview', icon: 'home' },
     { href: '/sessions', label: 'Sessions', icon: 'sessions' },
-    { href: '/automations', label: 'Automations', icon: 'sparkle' },
+    { href: '/automations', label: 'Automations', icon: 'lightning' },
     { href: '/devices', label: 'Devices', icon: 'devices', admin: true },
     { href: '/settings', label: 'Settings', icon: 'settings' }
   ];

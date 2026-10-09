@@ -1,8 +1,13 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
+  import '#lib/automation.css';
+  import clayIcon from '../../assets/automation-clay.svg';
   import Icon from '#lib/Icon.svelte';
   import AutomationEditor from '#lib/AutomationEditor.svelte';
+  import AutomationBadge from '#lib/AutomationBadge.svelte';
+  import AutomationPagination from '#lib/AutomationPagination.svelte';
+  import { automationSchedule, pageItems } from '#lib/automations.ts';
   import { companion } from '#lib/companion.svelte.ts';
   import { errorMessage } from '#lib/toast.svelte.ts';
   import type { Automation, AutomationDraft } from '#lib/types.ts';
@@ -13,7 +18,13 @@
   let creating = $state(false);
   let saving = $state(false);
   let desktop = $state(false);
+  let query = $state('');
+  let status = $state('all');
+  let currentPage = $state(1);
   const canEdit = $derived(companion.isAdmin && desktop);
+  const enabled = $derived(automations.filter(a => a.enabled).length);
+  const filtered = $derived(automations.filter(a => a.name.toLowerCase().includes(query.toLowerCase()) && (status === 'all' || a.enabled === (status === 'enabled'))));
+  const pagination = $derived(pageItems(filtered, currentPage));
   onMount(() => {
     const media = window.matchMedia('(min-width: 901px)');
     const update = () => { desktop = media.matches; };
@@ -23,7 +34,7 @@
   });
   async function load() {
     loading = true; error = '';
-    try { automations = (await companion.request<{ automations: Automation[] }>('/api/automations')).automations; }
+    try { automations = (await companion.request<{ automations: Automation[] }>('/api/automations')).automations.sort((a, b) => b.updatedAt - a.updatedAt); }
     catch (cause) { error = errorMessage(cause); }
     finally { loading = false; }
   }
@@ -36,16 +47,21 @@
   }
 </script>
 <svelte:head><title>Automations · Pi Companion</title></svelte:head>
-<div class="page automation-page">
-  <header class="heading"><div><span class="eyebrow">AUTOPILOT</span><h1>Automations</h1><p class="subtle">Repeatable work, on your schedule.</p></div>{#if canEdit}<button class="btn btn-primary" onclick={() => creating = !creating}><Icon name="plus" />Create automation</button>{/if}</header>
+<div class="page automation-workspace">
+  <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">YOUR WORK, ON AUTOPILOT</span><h1>Automations</h1><p class="subtle">Small routines. More room for the work that matters.</p></div></div>{#if canEdit}<button class="btn-bento primary" aria-expanded={creating} onclick={() => creating = !creating}><Icon name="plus" />{creating ? 'Close editor' : 'Create automation'}</button>{/if}</header>
   {#if creating && canEdit}<AutomationEditor busy={saving} onsave={create} oncancel={() => creating = false} />{/if}
-  {#if error}<div class="panel state" role="alert"><p>{error}</p><button class="btn" onclick={load}>Retry</button></div>
-  {:else if loading}<div class="panel state" role="status">Loading automations…</div>
-  {:else if !automations.length}<div class="panel state"><Icon name="sparkle" size={30} /><h2>No automations yet</h2><p class="subtle">Create a script from the computer dashboard or ask an activated Pi agent to create one.</p></div>
-  {:else}<div class="automation-list">{#each automations as automation (automation.id)}<a class="panel automation-row" href={'/automations/' + encodeURIComponent(automation.id)}><span class="automation-icon"><Icon name="sparkle" size={23} /></span><span class="row-text"><strong>{automation.name}</strong><small>{automation.schedule ? `UTC · ${automation.schedule}` : 'Manual trigger'} · {automation.actions.length} {automation.actions.length === 1 ? 'action' : 'actions'}</small></span><span class="chip">{automation.enabled ? 'Enabled' : 'Disabled'}</span><Icon name="chevron" /></a>{/each}</div>{/if}
-  {#if !canEdit}<p class="subtle mobile-hint">You can view, start, and stop automations here. Editing is available on the computer’s desktop dashboard.</p>{/if}
+  {#if error}<div class="bento-card automation-empty" role="alert"><Icon name="alert" /><p>{error}</p><button class="btn" onclick={load}>Try again</button></div>
+  {:else if loading}<div class="bento-card automation-empty" role="status">Loading your automations…</div>
+  {:else}
+    <section class="bento-stats" aria-label="Automation overview"><div class="bento-card stat"><strong>{automations.length}</strong><span>Total routines</span></div><div class="bento-card stat"><strong>{enabled}</strong><span>Enabled</span></div><div class="bento-card stat"><strong>{automations.filter(a => a.schedule && a.enabled).length}</strong><span>On a schedule</span></div></section>
+    <section class="bento-card collection" aria-label="Automation list">
+      <div class="collection-toolbar"><div><h2>Your routines</h2><p class="subtle">Find a routine, inspect its steps, or start a run.</p></div><div class="filters"><label class="filter-field">Search automations<input class="search-input" type="search" placeholder="Search by name…" bind:value={query} oninput={() => currentPage = 1} /></label><label class="filter-field">Status<select bind:value={status} onchange={() => currentPage = 1}><option value="all">All statuses</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label><button class="btn btn-icon" aria-label="Refresh automations" onclick={load}><Icon name="refresh" /></button></div></div>
+      <div class="collection-scroll" role="region" aria-label="Scrollable automation cards">
+        {#if !filtered.length}<div class="automation-empty"><Icon name={automations.length ? 'search' : 'sparkle'} size={30} /><h2>{automations.length ? 'No matching routines' : 'Your autopilot starts here'}</h2><p>{automations.length ? 'Try another name or status filter.' : 'Create an automation from the desktop dashboard, or ask Pi to set one up.'}</p>{#if automations.length}<button class="btn" onclick={() => { query = ''; status = 'all'; currentPage = 1; }}>Clear filters</button>{/if}</div>
+        {:else}<div class="automation-grid">{#each pagination.items as automation (automation.id)}<a class="automation-card" href={'/automations/' + encodeURIComponent(automation.id)}><div class="card-top"><span class="card-badges"><AutomationBadge status={automation.enabled ? 'enabled' : 'disabled'} /><AutomationBadge status={automation.schedule ? 'scheduled' : 'manual'} /></span><Icon name="chevron" size={18} /></div><h3>{automation.name}</h3><p class="schedule-copy">{automationSchedule(automation.schedule)}</p><div class="card-footer"><span><Icon name="plan" size={14} />{automation.actions.length} {automation.actions.length === 1 ? 'action' : 'actions'}</span><span>{automation.preconditions.length} checks · {automation.postActions.length} finalizers</span></div></a>{/each}</div>{/if}
+      </div>
+      <AutomationPagination page={pagination.page} pages={pagination.pages} total={pagination.total} onchange={value => currentPage = value} />
+    </section>
+  {/if}
+  <p class="automation-note">Schedules use UTC and require the daemon to stay running. {#if !canEdit}You can start and stop routines here. Editing is available on the computer’s desktop dashboard.{/if}</p>
 </div>
-<style>
-  .automation-page { display: grid; gap: 24px; } .heading { display: flex; justify-content: space-between; align-items: center; gap: 18px; flex-wrap: wrap; } h1 { margin: 6px 0; } .heading p { margin: 0; } .eyebrow { font-size: .68rem; letter-spacing: .16em; color: var(--text-2); }
-  .automation-list { display: grid; gap: 12px; } .automation-row { display: flex; align-items: center; gap: 16px; padding: 20px; color: inherit; text-decoration: none; min-width: 0; } .automation-row:hover { border-color: var(--accent); } .automation-icon { flex-shrink: 0; color: var(--accent); } .row-text { display: grid; gap: 6px; flex: 1; min-width: 0; } strong { overflow-wrap: anywhere; } small { color: var(--text-2); overflow-wrap: anywhere; } .state { display: grid; justify-items: center; text-align: center; gap: 12px; padding: 40px 24px; } .state h2, .state p { margin: 0; } .mobile-hint { font-size: .8rem; line-height: 1.6; } @media(max-width: 550px) { .automation-row { padding: 16px; gap: 10px; } .automation-icon { display: none; } .chip { font-size: .65rem; } }
-</style>

@@ -31,7 +31,7 @@ async function receive(line: string) {
     case "initialize": {
       const versions = ["2025-06-18", "2025-03-26", "2024-11-05"];
       const requested = message.params?.protocolVersion;
-      reply({ protocolVersion: versions.includes(String(requested)) ? requested : versions[0], capabilities: { tools: {} }, serverInfo: { name: "pi-companion-automations", version: "0.3.0" } });
+      reply({ protocolVersion: versions.includes(String(requested)) ? requested : versions[0], capabilities: { tools: {} }, serverInfo: { name: "pi-companion-automations", version: "0.3.1" } });
       return;
     }
     case "ping": reply({}); return;

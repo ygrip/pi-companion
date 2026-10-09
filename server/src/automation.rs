@@ -1,6 +1,6 @@
 //! Local, persisted automation definitions and bounded run history.
 use super::*;
-use chrono::{Datelike, Timelike};
+use chrono::{DateTime, Datelike, Timelike, Utc};
 use std::process::Stdio;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -9,7 +9,7 @@ use tokio::{
 };
 
 const OUTPUT_LIMIT: usize = 128 * 1024;
-const HISTORY_LIMIT: usize = 100;
+const DEFAULT_HISTORY_LIMIT: usize = 30;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
 pub enum Action {
@@ -43,6 +43,12 @@ pub struct Definition {
     pub post_actions: Vec<Action>,
     #[serde(default)]
     pub schedule: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_retries: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_interval_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history_limit: Option<usize>,
     #[serde(default)]
     pub created_at: u64,
     #[serde(default)]
@@ -157,6 +163,27 @@ fn validate(d: &Definition) -> ApiResult<()> {
     if let Some(s) = &d.schedule {
         schedule(s)?;
     }
+    if d.max_retries.is_some_and(|n| n > 5) {
+        return Err(bad("Max retries must be 0–5."));
+    }
+    if d.retry_interval_seconds
+        .is_some_and(|n| n == 0 || n > 86400)
+    {
+        return Err(bad("Retry interval must be 1–86400 seconds."));
+    }
+    if d.history_limit.is_some_and(|n| n == 0 || n > 1000) {
+        return Err(bad("History limit must be 1–1000 runs."));
+    }
+    if let Some(expression) = &d.schedule {
+        let retries = d.max_retries.unwrap_or(0) as u64;
+        if retries > 0
+            && retries * d.retry_interval_seconds.unwrap_or(10) >= minimum_trigger_gap(expression)?
+        {
+            return Err(bad(
+                "Total retry delay must be shorter than the shortest scheduled trigger gap.",
+            ));
+        }
+    }
     for a in d
         .preconditions
         .iter()
@@ -193,6 +220,39 @@ fn validate(d: &Definition) -> ApiResult<()> {
     }
     Ok(())
 }
+/// Conservative daily lower bound; omitted dates can only increase trigger spacing.
+fn minimum_trigger_gap(expression: &str) -> ApiResult<u64> {
+    let cron = schedule(expression)?;
+    let mut slots: Vec<u64> = cron.fields[1]
+        .iter()
+        .flat_map(|h| {
+            cron.fields[0]
+                .iter()
+                .map(move |m| *h as u64 * 60 + *m as u64)
+        })
+        .collect();
+    slots.sort_unstable();
+    let mut gap = slots[0] + 1440 - slots.last().unwrap();
+    for pair in slots.windows(2) {
+        gap = gap.min(pair[1] - pair[0]);
+    }
+    Ok(gap * 60)
+}
+
+fn prune_history(data: &mut Persisted, id: &str, limit: usize) {
+    let mut count = 0;
+    data.runs.reverse();
+    data.runs.retain(|run| {
+        if run.automation_id == id && run.status != "running" {
+            count += 1;
+            count <= limit
+        } else {
+            true
+        }
+    });
+    data.runs.reverse();
+}
+
 async fn persist(state: &AppState, store: &Store) -> ApiResult<()> {
     fs::create_dir_all(&state.data_dir)
         .await
@@ -239,6 +299,20 @@ pub async fn initialize(state: &AppState) -> ApiResult<()> {
                     r.finished_at = Some(now_secs());
                     r.result.push_str("\nDaemon restarted before completion.");
                 }
+            }
+            let limits: Vec<_> = store
+                .data
+                .definitions
+                .iter()
+                .map(|d| {
+                    (
+                        d.id.clone(),
+                        d.history_limit.unwrap_or(DEFAULT_HISTORY_LIMIT),
+                    )
+                })
+                .collect();
+            for (id, limit) in limits {
+                prune_history(&mut store.data, &id, limit);
             }
             persist(state, &store).await?;
         }
@@ -329,9 +403,16 @@ async fn update(
     d.id = id;
     d.created_at = old.created_at;
     d.updated_at = now_secs();
+    let old_runs = store.data.runs.clone();
     store.data.definitions[i] = d.clone();
+    prune_history(
+        &mut store.data,
+        &d.id,
+        d.history_limit.unwrap_or(DEFAULT_HISTORY_LIMIT),
+    );
     if let Err(e) = persist(&state, &store).await {
         store.data.definitions[i] = old;
+        store.data.runs = old_runs;
         return Err(e);
     }
     Ok(Json(d))
@@ -488,7 +569,7 @@ async fn execute(
                 break;
             }
             append(&mut result, &format!("\n[{phase}]\n"));
-            match execute_action(&state, &d.id, &run_id, action, &mut cancel).await {
+            match execute_with_retry(&state, &d, &run_id, action, phase, &mut cancel).await {
                 Ok(text) => append(&mut result, &text),
                 Err((kind, text)) => {
                     append(&mut result, &text);
@@ -515,21 +596,89 @@ async fn execute(
         run.finished_at = Some(now_secs());
     }
     store.active.remove(&d.id);
-    let mut count = 0;
-    store.data.runs.reverse();
-    store.data.runs.retain(|r| {
-        if r.automation_id == d.id {
-            count += 1;
-            count <= HISTORY_LIMIT
-        } else {
-            true
-        }
-    });
-    store.data.runs.reverse();
+    let limit = store
+        .data
+        .definitions
+        .iter()
+        .find(|item| item.id == d.id)
+        .and_then(|item| item.history_limit)
+        .unwrap_or(DEFAULT_HISTORY_LIMIT);
+    prune_history(&mut store.data, &d.id, limit);
     if let Err((_, e)) = persist(&state, &store).await {
         tracing::error!("Cannot persist automation completion: {e}");
     }
 }
+/// Only main actions are retried. A skip is a gate decision, not a transient failure.
+/// Completed steps never repeat. The user explicitly opts into repeated side effects.
+async fn execute_with_retry(
+    state: &AppState,
+    definition: &Definition,
+    run_id: &str,
+    action: &Action,
+    phase: &str,
+    cancel: &mut watch::Receiver<bool>,
+) -> Result<String, (&'static str, String)> {
+    let retries = if phase == "action" {
+        definition.max_retries.unwrap_or(0)
+    } else {
+        0
+    };
+    let interval = definition.retry_interval_seconds.unwrap_or(10);
+    let mut output = String::new();
+    for attempt in 0..=retries {
+        if *cancel.borrow() {
+            return Err(("stopped", output));
+        }
+        match execute_action(state, &definition.id, run_id, action, cancel).await {
+            Ok(text) => {
+                append(&mut output, &text);
+                return Ok(output);
+            }
+            Err((kind, text)) => {
+                append(&mut output, &text);
+                if kind == "stopped" || attempt == retries {
+                    return Err((kind, output));
+                }
+                if let Some(expression) = &definition.schedule {
+                    let cron = schedule(expression).expect("validated schedule");
+                    let now = Utc::now();
+                    let minute = now.timestamp().div_euclid(60) * 60;
+                    let mut remaining = None;
+                    for offset in 1..=1440 {
+                        let next =
+                            DateTime::<Utc>::from_timestamp(minute + offset * 60, 0).unwrap();
+                        if cron.matches(next) {
+                            remaining = Some(next.timestamp() - now.timestamp());
+                            break;
+                        }
+                    }
+                    if remaining.is_some_and(|seconds| seconds <= interval as i64) {
+                        append(
+                            &mut output,
+                            "\nRetry skipped: next scheduled run is too close.\n",
+                        );
+                        return Err((kind, output));
+                    }
+                }
+                append(
+                    &mut output,
+                    &format!(
+                        "\nRetry {}/{} in {} seconds (failed action only).\n",
+                        attempt + 1,
+                        retries,
+                        interval
+                    ),
+                );
+                tokio::select! {
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(interval)) => {},
+                    _ = cancel.changed() => { return Err(("stopped", output)); }
+                }
+            }
+        }
+    }
+    unreachable!()
+}
+
 async fn execute_action(
     state: &AppState,
     id: &str,
@@ -941,6 +1090,123 @@ mod tests {
             vec![],
         )
     }
+    fn retry_definition() -> Definition {
+        serde_json::from_value(serde_json::json!({"name":"Retry", "actions":[{"type":"command","command":"false","args":[]}], "maxRetries":2,"retryIntervalSeconds":1})).unwrap()
+    }
+    #[test]
+    fn retention_keeps_latest_finished_runs_and_other_automations() {
+        let mut data = Persisted::default();
+        for i in 0..40 {
+            data.runs.push(Run {
+                id: i.to_string(),
+                automation_id: "a".into(),
+                started_at: i,
+                finished_at: Some(i),
+                status: "succeeded".into(),
+                result: String::new(),
+                session_id: None,
+            });
+        }
+        let mut other = data.runs[0].clone();
+        other.automation_id = "b".into();
+        data.runs.push(other);
+        prune_history(&mut data, "a", DEFAULT_HISTORY_LIMIT);
+        assert_eq!(
+            data.runs.iter().filter(|r| r.automation_id == "a").count(),
+            30
+        );
+        assert_eq!(data.runs[0].id, "10");
+        prune_history(&mut data, "a", 3);
+        assert_eq!(
+            data.runs
+                .iter()
+                .filter(|r| r.automation_id == "a")
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            ["37", "38", "39"]
+        );
+        assert_eq!(
+            data.runs.iter().filter(|r| r.automation_id == "b").count(),
+            1
+        );
+    }
+    #[test]
+    fn retry_delay_must_fit_schedule() {
+        assert_eq!(minimum_trigger_gap("30 3,6,9 * * 1-5").unwrap(), 10800);
+        let mut d = retry_definition();
+        d.schedule = Some("* * * * *".into());
+        d.max_retries = Some(5);
+        d.retry_interval_seconds = None;
+        assert!(validate(&d).is_ok()); // default 10 seconds × 5 < 60 seconds
+        d.retry_interval_seconds = Some(12);
+        assert!(validate(&d).is_err());
+        d.history_limit = Some(0);
+        assert!(validate(&d).is_err());
+    }
+    #[test]
+    fn retry_policy_is_optional_and_bounded() {
+        let mut d = retry_definition();
+        assert!(validate(&d).is_ok());
+        d.max_retries = Some(6);
+        assert!(validate(&d).is_err());
+        d.max_retries = None;
+        d.retry_interval_seconds = Some(0);
+        assert!(validate(&d).is_err());
+        d.retry_interval_seconds = None;
+        assert!(validate(&d).is_ok());
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn retry_repeats_failed_action_only_and_cancel_interrupts_delay() {
+        let state = isolated_state();
+        let d = retry_definition();
+        let (_tx, mut rx) = watch::channel(false);
+        let result = execute_with_retry(&state, &d, "r", &d.actions[0], "action", &mut rx)
+            .await
+            .unwrap_err();
+        assert_eq!(result.0, "failed");
+        assert_eq!(result.1.matches("Retry ").count(), 2);
+        for phase in ["precondition", "post-action"] {
+            let result = execute_with_retry(&state, &d, "r", &d.actions[0], phase, &mut rx)
+                .await
+                .unwrap_err();
+            assert!(!result.1.contains("Retry "));
+        }
+        let mut d = d;
+        d.retry_interval_seconds = Some(60);
+        let (tx, mut rx) = watch::channel(false);
+        let start = tokio::time::Instant::now();
+        let task = tokio::spawn(async move {
+            execute_with_retry(&state, &d, "r", &d.actions[0], "action", &mut rx).await
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        tx.send(true).unwrap();
+        assert_eq!(task.await.unwrap().unwrap_err().0, "stopped");
+        assert!(start.elapsed() < Duration::from_secs(3));
+    }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn failed_action_can_succeed_on_retry() {
+        let state = isolated_state();
+        fs::create_dir_all(&state.data_dir).await.unwrap();
+        let mut d = retry_definition();
+        d.actions[0] = Action::Command {
+            command: "sh".into(),
+            args: vec![
+                "-c".into(),
+                "if test -f tried; then echo recovered; else touch tried; exit 1; fi".into(),
+            ],
+            cwd: Some(state.data_dir.to_string_lossy().into()),
+            timeout_seconds: Some(2),
+        };
+        let (_tx, mut rx) = watch::channel(false);
+        let output = execute_with_retry(&state, &d, "r", &d.actions[0], "action", &mut rx)
+            .await
+            .unwrap();
+        assert!(output.contains("recovered"));
+        assert_eq!(output.matches("Retry ").count(), 1);
+        fs::remove_dir_all(&state.data_dir).await.unwrap();
+    }
     #[cfg(unix)]
     #[tokio::test]
     async fn command_stdin_is_closed_and_timeout_is_total() {
@@ -952,11 +1218,9 @@ mod tests {
             cwd: None,
             timeout_seconds: Some(1),
         };
-        assert!(
-            execute_action(&state, "a", "r", &action, &mut rx)
-                .await
-                .is_ok()
-        );
+        assert!(execute_action(&state, "a", "r", &action, &mut rx)
+            .await
+            .is_ok());
         let action = Action::Command {
             command: "sh".into(),
             args: vec!["-c".into(), "exec 1>&-; sleep 30".into()],

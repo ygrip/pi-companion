@@ -2,6 +2,8 @@
   import { onDestroy, tick } from 'svelte';
   import { page } from '$app/state';
   import AskSheet from '#lib/AskSheet.svelte';
+  import { matchingSlashCommands } from '#lib/slash-commands.ts';
+  import AutomatedSessionBadge from '#lib/AutomatedSessionBadge.svelte';
   import Icon from '#lib/Icon.svelte';
   import ArchiveSession from '#lib/ArchiveSession.svelte';
   import { companion } from '#lib/companion.svelte.ts';
@@ -121,6 +123,15 @@
 
   let tab = $state<Tab>('activity');
   let prompt = $state('');
+  let slashIndex = $state(0);
+  let slashDismissed = $state(false);
+  const slashMatches = $derived.by(() => !readOnly && !ended && mode === 'auto' && !slashDismissed ? matchingSlashCommands(prompt, session?.commands ?? []) : []);
+  const activeSlashIndex = $derived(Math.min(slashIndex, Math.max(0, slashMatches.length - 1)));
+  function chooseSlash(name: string) {
+    prompt = '/' + name + ' ';
+    slashDismissed = false;
+    void tick().then(() => { promptEl?.focus(); autosize(); });
+  }
   let steer = $state(false);
   let mode = $state<'auto' | 'plan'>('auto');
   let menuEl = $state<HTMLDetailsElement | null>(null);
@@ -301,6 +312,18 @@
   }
 
   function onComposerKey(event: KeyboardEvent) {
+    if (slashMatches.length && !event.isComposing) {
+      if (event.key === 'Escape') { event.preventDefault(); slashDismissed = true; return; }
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        slashIndex = (activeSlashIndex + (event.key === 'ArrowDown' ? 1 : -1) + slashMatches.length) % slashMatches.length;
+        document.getElementById('slash-option-' + slashIndex)?.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+        event.preventDefault(); chooseSlash(slashMatches[activeSlashIndex].name); return;
+      }
+    }
     // Desktop: Enter sends, Shift+Enter adds a line. Touch keyboards keep Enter as newline.
     const touch = matchMedia('(pointer: coarse)').matches;
     if (event.key === 'Enter' && !event.isComposing && ((!touch && !event.shiftKey) || event.metaKey || event.ctrlKey)) {
@@ -450,7 +473,7 @@
       <span class="chip"><span>Started {relativeTime(session.connectedAt)}</span></span>
     </div>
 
-    {#if readOnly}<p class="composer-notice" role="status">Automation session · read-only. You can answer questions, but steering, planning, uploads, and changes are unavailable.{#if session.automationId} <a href={'/automations/' + encodeURIComponent(session.automationId)}>View automation</a>{/if}</p>{/if}
+    {#if readOnly}<div class="composer-notice" role="status"><AutomatedSessionBadge /><p>Pi is following this automation’s instructions. You can answer its questions here; steering, plans, and file uploads are turned off.</p>{#if session.automationId}<a href={'/automations/' + encodeURIComponent(session.automationId)}>Open automation workspace →</a>{/if}</div>{/if}
     <section class="panel">
       {#if tab !== 'activity'}
         <header class="accessory-head">
@@ -675,13 +698,16 @@
               </ul>
             {/if}
             <div class="prompt-row">
+              {#if slashMatches.length}<div class="slash-picker" id="slash-suggestions" role="listbox" aria-label="Available slash commands">{#each slashMatches as command, index (command.name)}<div id={'slash-option-' + index} role="option" aria-selected={index === activeSlashIndex}><button type="button" tabindex="-1" onpointerdown={event => event.preventDefault()} onclick={() => chooseSlash(command.name)}><span class="slash-command"><Icon name={command.source === 'skill' ? 'brain' : command.source === 'prompt' ? 'file' : 'lightning'} size={16} /><strong>/{command.name}</strong><span class="slash-kind">{command.source === 'prompt' ? 'Template' : command.source === 'skill' ? 'Skill' : 'Command'}</span></span>{#if command.description}<small>{command.description}</small>{/if}</button></div>{/each}</div>{/if}
               <label class="sr-only" for="prompt">{mode === 'plan' ? 'Plan request for Pi' : 'Message Pi'}</label>
               <textarea
                 id="prompt"
                 rows="1"
                 bind:this={promptEl}
                 bind:value={prompt}
-                oninput={autosize}
+                oninput={() => { slashIndex = 0; slashDismissed = false; autosize(); }}
+                aria-controls={slashMatches.length ? 'slash-suggestions' : undefined}
+                aria-activedescendant={slashMatches.length ? 'slash-option-' + activeSlashIndex : undefined}
                 onkeydown={onComposerKey}
                 title="Enter sends on desktop; Shift+Enter adds a line. On touch keyboards, Enter adds a line."
                 placeholder={mode === 'plan' ? 'Plan current conversation…' : steer && session.status === 'active' ? 'Steer the current turn…' : 'Message Pi…'}></textarea>
@@ -1524,7 +1550,13 @@
     text-align: left;
   }
   .ask-pill span:first-of-type { flex: 1; }
-  .prompt-row { display: flex; min-width: 0; }
+  .prompt-row { display: flex; min-width: 0; position: relative; }
+  .slash-picker { position: absolute; bottom: calc(100% + 12px); left: 0; right: 0; max-height: min(330px, 40dvh); overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 18px; box-shadow: var(--clay-raised); z-index: 10; padding: 7px; }
+  .slash-picker button { display: grid; gap: 5px; width: 100%; padding: 12px; min-height: 44px; text-align: left; background: transparent; border: 0; border-radius: 12px; color: var(--text); }
+  .slash-picker [aria-selected='true'] button, .slash-picker button:hover { background: var(--accent-soft); }
+  .slash-command { display: flex; align-items: center; gap: 8px; font-size: .8rem; } .slash-command :global(svg) { color: var(--accent-text); }
+  .slash-kind { margin-left: auto; font-size: .64rem; color: var(--text-2); background: var(--surface-2); padding: 3px 7px; border-radius: 7px; }
+  .slash-picker small { color: var(--text-2); font-size: .73rem; line-height: 1.5; overflow-wrap: anywhere; }
   .prompt-row textarea {
     flex: 1;
     min-width: 0;

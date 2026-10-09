@@ -61,6 +61,7 @@ export type SessionSnapshot = {
   effort?: string | null;
   telemetry?: SessionTelemetry;
   remoteEnabled: boolean;
+  commands?: { name: string; description?: string; source: 'extension' | 'prompt' | 'skill' }[];
   connectedAt: string;
   /** Questions waiting for an answer. Kept in the snapshot so late-joining browsers see them. */
   asks: AskRequest[];

@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import AutomatedSessionBadge from './AutomatedSessionBadge.svelte';
   import ArchiveSession from './ArchiveSession.svelte';
   import { companion } from './companion.svelte.ts';
   import { prettyPath, relativeTime, sessionTitle, statusLabel } from './format.ts';
@@ -16,6 +17,7 @@
       <div class="title-copy">
         <!-- The title link stretches over the whole card, so any tap on the row opens it. -->
         <h2><a class="title-link" href="/sessions/{encodeURIComponent(session.id)}">{title}</a></h2>
+        {#if session.readOnly || session.automationId}<AutomatedSessionBadge />{/if}
         {#if session.shortTitle.trim() && session.shortTitle.trim() !== title}<p class="short-title">{session.shortTitle}</p>{/if}
       </div>
       <span class="badge status" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}>

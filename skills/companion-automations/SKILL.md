@@ -32,6 +32,8 @@ Read the current definition with `get` before `update`, `enable`, or `disable`. 
 - `schedule` is a five-field **UTC** cron expression; `null` means manual only. The daemon must be running for scheduling. There is no catch-up while it is stopped.
 - Commands use executable plus argument array, **no implicit shell**. Shell syntax must never be passed as an executable. Avoid explicit shells unless the user requested and authorized them.
 - Preconditions gate execution. Actions run sequentially. Post-actions are the cleanup/finalization stage; inspect the run result to determine failures.
+- Optional `maxRetries` (integer 0–5, default 0) and `retryIntervalSeconds` (integer 1–86400, default 10) retry only the failed main action, never completed steps, preconditions, or finalizers. Stop cancels a retry delay. Retries may duplicate side effects or model usage: obtain authorization, and keep them off for non-idempotent remote submissions.
+- Optional `historyLimit` (integer 1–1000, default 30) keeps the latest N finished runs per automation. Lowering it immediately removes older history on save. Retry delays must fit before the next scheduled trigger.
 - A Pi action starts a daemon-owned, read-only Companion session: users can answer asks, but cannot steer, prompt, upload, request changes, or edit its plan. The agent itself still has ordinary Pi tool permissions.
 - Pi must be installed on PATH and configured with model credentials. Its final assistant output is saved in run history.
 

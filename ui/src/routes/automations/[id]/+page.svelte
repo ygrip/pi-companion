@@ -5,7 +5,12 @@
   import Icon from '#lib/Icon.svelte';
   import AutomationEditor from '#lib/AutomationEditor.svelte';
   import { companion } from '#lib/companion.svelte.ts';
-  import { automationDraft, automationTime } from '#lib/automations.ts';
+  import '#lib/automation.css';
+  import clayIcon from '../../../assets/automation-clay.svg';
+  import AutomationBadge from '#lib/AutomationBadge.svelte';
+  import AutomationDate from '#lib/AutomationDate.svelte';
+  import AutomationPagination from '#lib/AutomationPagination.svelte';
+  import { automationDraft, automationTime, automationSchedule, automationDuration, pageItems, runLabels } from '#lib/automations.ts';
   import { errorMessage } from '#lib/toast.svelte.ts';
   import type { Automation, AutomationDraft, AutomationRun } from '#lib/types.ts';
   const id = $derived(page.params.id ?? '');
@@ -19,6 +24,18 @@
   let editing = $state(false);
   let confirmingDelete = $state(false);
   let desktop = $state(false);
+  let tab = $state<'summary' | 'history'>('summary');
+  let historyStatus = $state('all');
+  let currentPage = $state(1);
+  const history = $derived(pageItems([...runs].sort((a, b) => b.startedAt - a.startedAt).filter(r => historyStatus === 'all' || r.status === historyStatus), currentPage));
+  const latest = $derived([...runs].sort((a, b) => b.startedAt - a.startedAt)[0]);
+  function tabKeys(event: KeyboardEvent) {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      tab = event.key === 'Home' ? 'summary' : event.key === 'End' ? 'history' : tab === 'summary' ? 'history' : 'summary';
+      document.getElementById('tab-' + tab)?.focus();
+    }
+  }
   const canEdit = $derived(companion.isAdmin && desktop);
   const running = $derived(runs.some((run) => run.status === 'running'));
   let mounted = $state(false);
@@ -68,20 +85,29 @@
   }
 </script>
 <svelte:head><title>{automation?.name ?? 'Automation'} · Pi Companion</title></svelte:head>
-<div class="page detail">
-  <a class="back subtle" href="/automations"><Icon name="back" size={16} />Automations</a>
+<div class="page automation-workspace">
+  <a class="automation-back subtle" href="/automations"><Icon name="back" size={16} />All automations</a>
   {#if loading}<div class="panel state" role="status">Loading automation…</div>
   {:else if !automation}<div class="panel state" role="alert">{error || 'Automation not found.'}</div>
   {:else}
-    <header class="heading"><div><span class="eyebrow">AUTOMATION</span><h1>{automation.name}</h1><p class="subtle">{automation.schedule ? `Scheduled · ${automation.schedule} · UTC` : 'Manually triggered'} <span class="chip">{automation.enabled ? 'Enabled' : 'Disabled'}</span></p></div><div class="actions">{#if running}<button class="btn" disabled={busy} onclick={() => act('stop')}><Icon name="stop" />Stop run</button>{:else}<button class="btn btn-primary" disabled={busy} onclick={() => act('start')}><Icon name="sparkle" />{busy ? 'Please wait…' : 'Start run'}</button>{/if}</div></header>
+    <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">AUTOMATION WORKSPACE</span><h1>{automation.name}</h1><div class="card-badges" style="margin-top: 12px"><AutomationBadge status={automation.enabled ? 'enabled' : 'disabled'} /><AutomationBadge status={automation.schedule ? 'scheduled' : 'manual'} />{#if running}<AutomationBadge status="running" />{/if}</div></div></div><div class="automation-actions">{#if running}<button class="btn-bento" disabled={busy} onclick={() => act('stop')}><Icon name="stop" />Stop run</button>{:else}<button class="btn-bento primary" disabled={busy} onclick={() => act('start')}><Icon name="send" />{busy ? 'Please wait…' : 'Run now'}</button>{/if}</div></header>
     {#if actionError}<p class="error" role="alert">{actionError}</p>{/if}
     {#if error}<p class="error" role="alert">Live refresh failed: {error}</p>{/if}
-    {#if canEdit}<div class="actions"><button class="btn btn-sm" disabled={busy} onclick={() => editing = !editing}>Edit script</button><button class="btn btn-sm" disabled={busy} onclick={() => act('toggle')}>{automation.enabled ? 'Disable' : 'Enable'}</button><button class="btn btn-sm" disabled={busy || running} onclick={() => confirmingDelete = true}><Icon name="trash" size={14} />Delete</button></div>{/if}
+    {#if canEdit}<div class="automation-actions"><button class="btn" aria-expanded={editing} disabled={busy} onclick={() => { tab = 'summary'; editing = !editing; }}><Icon name="file" size={15} />Edit script</button><button class="btn" aria-pressed={automation.enabled} disabled={busy} onclick={() => act('toggle')}><Icon name={automation.enabled ? 'ban' : 'check'} size={15} />{automation.enabled ? 'Disable scheduling' : 'Enable automation'}</button><button class="btn btn-danger" disabled={busy || running} onclick={() => confirmingDelete = true}><Icon name="trash" size={15} />Delete</button></div>{/if}
+    <div class="tab-bar" role="tablist" aria-label="Automation sections"><button id="tab-summary" role="tab" aria-selected={tab === 'summary'} aria-controls="panel-summary" tabindex={tab === 'summary' ? 0 : -1} onclick={() => tab = 'summary'} onkeydown={tabKeys}><Icon name="plan" size={16} />Summary</button><button id="tab-history" role="tab" aria-selected={tab === 'history'} aria-controls="panel-history" tabindex={tab === 'history' ? 0 : -1} onclick={() => tab = 'history'} onkeydown={tabKeys}><Icon name="activity" size={16} />Run history · {runs.length}</button></div>
     {#if confirmingDelete && canEdit}<section class="panel confirm" aria-label="Confirm deletion"><p>Delete this automation and its run history? This cannot be undone.</p><div class="actions"><button class="btn" disabled={busy} onclick={() => act('delete')}>Delete automation</button><button class="btn" onclick={() => confirmingDelete = false}>Cancel</button></div></section>{/if}
-    {#if editing && canEdit}<AutomationEditor {automation} {busy} onsave={save} oncancel={() => editing = false} />{:else}<details class="panel script"><summary>Script · {automation.actions.length} {automation.actions.length === 1 ? 'action' : 'actions'}</summary><pre>{JSON.stringify(automationDraft(automation), null, 2)}</pre></details>{/if}
-    <section class="history"><h2>Run history <span class="subtle">{runs.length}</span></h2>{#if !runs.length}<div class="panel state"><Icon name="activity" size={28} /><p>No runs yet. Start this automation to see its results here.</p></div>{:else}<div class="run-list">{#each runs as run (run.id)}<a class="panel run-row" href={'/automations/' + encodeURIComponent(id) + '/runs/' + encodeURIComponent(run.id)}><span><strong>{automationTime(run.startedAt)}</strong><small>{run.finishedAt ? `Finished ${automationTime(run.finishedAt)}` : 'In progress'}</small></span><span class="chip" class:failed={run.status === 'failed'}>{run.status}</span><Icon name="chevron" size={18} /></a>{/each}</div>{/if}</section>
+    {#if tab === 'summary'}
+      <div id="panel-summary" role="tabpanel" aria-labelledby="tab-summary" tabindex="0" class="summary-grid">
+        <section class="bento-card"><span class="eyebrow">WHEN IT RUNS</span><h2>{automationSchedule(automation.schedule)}</h2><p class="automation-note" style="margin-top: 10px">{automation.enabled ? 'Ready to run. The daemon must remain online for scheduled triggers.' : 'Scheduled execution is disabled. Manual runs remain available.'}</p><dl class="info-pairs"><div><dt>Cron expression · UTC</dt><dd><code>{automation.schedule ?? 'Manual only'}</code></dd></div><div><dt>Last updated</dt><dd>{automationTime(automation.updatedAt)}</dd></div><div><dt>Retry policy</dt><dd>{automation.maxRetries ? `${automation.maxRetries} retries · ${automation.retryIntervalSeconds ?? 10}s interval` : 'No retries'}</dd></div></dl></section>
+        <section class="bento-card"><span class="eyebrow">LATEST ACTIVITY</span>{#if latest}<AutomationBadge status={latest.status} /><dl class="info-pairs"><div><dt>Started</dt><dd>{automationTime(latest.startedAt)}</dd></div><div><dt>Duration</dt><dd>{automationDuration(latest.startedAt, latest.finishedAt)}</dd></div></dl><a class="btn" style="margin-top: 18px" href={'/automations/' + encodeURIComponent(id) + '/runs/' + encodeURIComponent(latest.id)}>View latest result<Icon name="chevron" size={16} /></a>{:else}<h2>Ready for its first run</h2><p class="automation-note" style="margin-top: 10px">Run this routine to capture output, a summary, and its execution status.</p>{/if}</section>
+        <section class="bento-card span-all"><span class="eyebrow">EXECUTION FLOW</span><h2>Three steps to a finished routine</h2><div class="pipeline">{#each [{ label: 'Check eligibility', note: 'A failed precondition skips the main actions.', steps: automation.preconditions }, { label: 'Do the work', note: 'Actions execute in sequence.', steps: automation.actions }, { label: 'Wrap up & summarize', note: 'Finalizers run after success, failure, or a skip; cancellation stops all steps.', steps: automation.postActions }] as phase, index}<div class="pipeline-step"><span class="step-dot">{index + 1}</span><div><strong>{phase.label} · {phase.steps.length} {phase.steps.length === 1 ? 'step' : 'steps'}</strong><p>{phase.note}</p>{#each phase.steps as step}<code class="step-preview">{step.type === 'command' ? [step.command, ...step.args].join(' ') : step.prompt}</code>{/each}</div></div>{/each}</div><details class="script-view"><summary>View full JSON definition</summary><pre>{JSON.stringify(automationDraft(automation), null, 2)}</pre></details></section>
+        {#if editing && canEdit}<div class="span-all"><AutomationEditor {automation} {busy} onsave={save} oncancel={() => editing = false} /></div>{/if}
+      </div>
+    {:else}
+      <div id="panel-history" role="tabpanel" aria-labelledby="tab-history" tabindex="0" class="bento-card collection"><div class="collection-toolbar"><div><h2>Run history</h2><p class="subtle">Newest first · keeps the latest {automation.historyLimit ?? 30} finished runs.</p></div><label class="filter-field">Run status<select bind:value={historyStatus} onchange={() => currentPage = 1}><option value="all">All statuses</option>{#each Object.entries(runLabels) as [value, label]}<option {value}>{label}</option>{/each}</select></label></div><div class="collection-scroll" role="region" aria-label="Scrollable run history">{#if !history.total}<div class="automation-empty"><Icon name="activity" size={28} /><h2>{runs.length ? 'No runs with this status' : 'A fresh start'}</h2><p>{runs.length ? 'Select another status to find a run.' : 'Run the automation to see its results here.'}</p></div>{:else}<div class="run-list">{#each history.items as run (run.id)}<a class="automation-card run-card" href={'/automations/' + encodeURIComponent(id) + '/runs/' + encodeURIComponent(run.id)}><AutomationDate value={run.startedAt} /><span><strong>{automationTime(run.startedAt)}</strong><small><Icon name="clock" size={13} /> {automationDuration(run.startedAt, run.finishedAt)}</small><span style="display: block; margin-top: 8px"><AutomationBadge status={run.status} /></span></span><Icon name="chevron" size={18} /></a>{/each}</div>{/if}</div><AutomationPagination page={history.page} pages={history.pages} total={history.total} onchange={value => currentPage = value} /></div>
+    {/if}
   {/if}
 </div>
 <style>
-  .detail { display: grid; gap: 22px; } .back { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; } .heading { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; } h1 { margin: 7px 0; overflow-wrap: anywhere; } .heading p { margin: 0; line-height: 1.8; } .eyebrow { font-size: .68rem; letter-spacing: .16em; color: var(--text-2); } .actions { display: flex; gap: 10px; flex-wrap: wrap; } .error { color: var(--danger); margin: 0; } .script { padding: 20px; } summary { cursor: pointer; font-weight: 600; } pre { margin: 20px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .8rem; line-height: 1.6; } .history h2 { font-size: 1.1rem; } .history h2 span { margin-left: 8px; font-size: .8rem; } .run-list { display: grid; gap: 10px; } .run-row { display: flex; align-items: center; gap: 14px; padding: 20px; color: inherit; text-decoration: none; } .run-row > span:first-child { display: grid; gap: 6px; flex: 1; min-width: 0; } .run-row small { color: var(--text-2); } .run-row strong { font-size: .88rem; overflow-wrap: anywhere; } .failed { color: var(--danger); } .state { padding: 32px; text-align: center; display: grid; justify-items: center; gap: 12px; } .state p { margin: 0; } .confirm { padding: 20px; } @media(max-width: 550px) { .run-row { padding: 16px; gap: 10px; } }
+  .state { padding: 32px; text-align: center; } .confirm { padding: 20px; } .actions { display: flex; gap: 10px; margin-top: 12px; }
 </style>

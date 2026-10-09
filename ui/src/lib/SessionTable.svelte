@@ -1,5 +1,6 @@
 <script lang="ts">
   import Icon from './Icon.svelte';
+  import AutomatedSessionBadge from './AutomatedSessionBadge.svelte';
   import { companion } from './companion.svelte.ts';
   import { prettyPath, sessionTitle, statusLabel } from './format.ts';
   import type { Session } from './types.ts';
@@ -19,6 +20,7 @@
         <tr>
           <td class="session-cell" data-label="Session">
             <a class="session-title" href="/sessions/{encodeURIComponent(session.id)}">{sessionTitle(session)}</a>
+            {#if session.readOnly || session.automationId}<AutomatedSessionBadge />{/if}
             {#if session.shortTitle.trim() && session.shortTitle.trim() !== sessionTitle(session)}<span class="short-title">{session.shortTitle}</span>{/if}
             {#if waiting}<span class="question-count"><Icon name="question" size={14} />{waiting} {waiting === 1 ? 'question waiting' : 'questions waiting'}</span>{/if}
           </td>

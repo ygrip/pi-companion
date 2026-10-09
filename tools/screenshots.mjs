@@ -19,10 +19,25 @@ const docs = join(root, 'docs');
 const ADMIN = '127.0.0.1:43731';
 const DEVICE = '127.0.0.1:43732';
 const BASE = `http://${ADMIN}`;
-const binary = join(root, 'server/target/release/pi-companion-server');
+const binary = process.env.COMPANION_BINARY ?? join(root, 'server/target/release/pi-companion-server');
 const { chromium } = await import(process.env.PLAYWRIGHT ? pathToFileURL(process.env.PLAYWRIGHT).href : 'playwright');
 
 const home = mkdtempSync(join(tmpdir(), 'pi-companion-shots-'));
+const now = Math.floor(Date.now() / 1000);
+const demoAutomations = [
+  { id: 'demo-review', name: 'Review requested pull requests', enabled: true, schedule: '0 2,5,8 * * 1-5', historyLimit: 30,
+    preconditions: [{ type: 'command', command: 'python3', args: ['review.py', 'check'], cwd: '/Users/demo/code/shop-api' }],
+    actions: [{ type: 'pi', prompt: 'Review new commits in requested PRs. Approve only when everything looks good.', cwd: '/Users/demo/code/shop-api' }],
+    postActions: [{ type: 'command', command: 'python3', args: ['review.py', 'summary'], cwd: '/Users/demo/code/shop-api' }], createdAt: now - 86400, updatedAt: now },
+  { id: 'demo-health', name: 'Morning repository health check', enabled: true, schedule: '0 9 * * 1-5', maxRetries: 2, retryIntervalSeconds: 10, historyLimit: 30,
+    preconditions: [], actions: [{ type: 'command', command: 'git', args: ['status', '--short'] }], postActions: [], createdAt: now - 86400, updatedAt: now - 60 },
+  { id: 'demo-release', name: 'Prepare release notes', enabled: false, schedule: null, preconditions: [],
+    actions: [{ type: 'pi', prompt: 'Summarize recent commits into release notes.', cwd: '/Users/demo/code/handbook' }], postActions: [], createdAt: now - 86400, updatedAt: now - 120 }
+];
+const demoResult = '[precondition]\\nFound 3 pull requests with new commits. Work profile usage is available.\\n[action]\\nReviewed all new commits and checked CI.\\n[post-action]\\n## Pull request review summary\\n\\n| Pull request | Result | Summary |\\n| --- | --- | --- |\\n| [PR shop-api:#42 — (reviewed 3x)](https://github.com/example/shop-api/pull/42) | Approved | Input validation and tests look good. |\\n| [PR checkout:#18 — (reviewed 2x)](https://github.com/example/checkout/pull/18) | Needs changes | Handle a missing payment token before retrying. |\\n| [PR handbook:#7 — (reviewed 1x)](https://github.com/example/handbook/pull/7) | Skipped | Another person already reviewed this commit. |\\n\\n> 1 approved · 1 needs changes · 1 skipped. No branches were merged.';
+const demoRuns = Array.from({ length: 24 }, (_, i) => ({ id: 'demo-run-' + i, automationId: 'demo-review', startedAt: now - (24 - i) * 5400,
+  finishedAt: now - (24 - i) * 5400 + 95, status: i === 23 ? 'succeeded' : ['succeeded', 'skipped', 'failed', 'stopped'][i % 4], result: i === 23 ? demoResult.replaceAll('\\n', '\n') : '[precondition]\nNo new commits to review.', sessionId: i === 23 ? 'demo-automated' : undefined }));
+writeFileSync(join(home, 'automations.json'), JSON.stringify({ definitions: demoAutomations, runs: demoRuns }));
 const daemon = spawn(binary, [], {
   env: { ...process.env, PI_COMPANION_HOME: home, PI_COMPANION_ADMIN_ADDR: ADMIN, PI_COMPANION_DEVICE_ADDR: DEVICE, RUST_LOG: 'warn' },
   stdio: 'ignore'
@@ -85,7 +100,7 @@ const tool = (id, toolName, args, result, input) => [
   ['tool.end', { toolCallId: id, toolName, result }]
 ];
 
-const base = { pid: 4242, remoteEnabled: true, asks: [] };
+const base = { pid: 4242, remoteEnabled: true, asks: [], commands: [{ name: 'review', description: 'Review changes and look for regressions', source: 'extension' }, { name: 'skill:qa', description: 'Report bugs and check behavior', source: 'skill' }, { name: 'summarize', description: 'Summarize the current work', source: 'prompt' }] };
 const sessions = {
   billing: {
     ...base, id: 'demo-billing', name: 'Coupon discounts', shortTitle: 'Add coupon support to invoices', cwd: '/Users/demo/code/shop-api',
@@ -94,6 +109,7 @@ const sessions = {
   docs: {
     ...base, id: 'demo-docs', name: 'Docs refresh', shortTitle: 'Rewrite the onboarding guide', cwd: '/Users/demo/code/handbook',
     status: 'idle', mainModel: 'gpt-5', effort: 'low', connectedAt: minutesAgo(64),
+    commands: [{ name: 'review', description: 'Review changes and look for regressions', source: 'extension' }, { name: 'skill:qa', description: 'Report bugs and check behavior', source: 'skill' }, { name: 'summarize', description: 'Summarize the current work', source: 'prompt' }],
     asks: [{
       requestId: 'ask-1', source: 'companion', title: 'Which tone should the guide use?', createdAt: minutesAgo(2),
       questions: [{ id: 'tone', question: 'Which tone should the onboarding guide use?', header: 'Tone', options: [
@@ -151,6 +167,7 @@ async function open(browser, { width, height, theme, mobile = false }) {
     localStorage.setItem('pi-companion-notification-prompt', 'dismissed');
   }, theme);
   const page = await context.newPage();
+  page.on('pageerror', error => console.error('Browser error:', error.message));
   return { context, page };
 }
 
@@ -162,6 +179,7 @@ async function settle(page, ms = 1200) {
 try {
   await waitForDaemon();
   await bridge(sessions.billing, billingEvents);
+  await bridge({ ...sessions.billing, id: 'demo-automated', name: 'Pull request review', shortTitle: 'Reviewing new commits', readOnly: true, automationId: 'demo-review', automationRunId: 'demo-run-23' }, [['agent.start', {}], ['assistant.delta', { kind: 'text', delta: 'I’m reviewing the new commits. I’ll share the results when the checks are finished.' }]]);
   await bridge(sessions.docs, [['agent.start', {}], ['assistant.delta', { kind: 'text', delta: 'Draft is ready. Before I polish it, one question about tone.' }], ['agent.end', {}]]);
   await bridge(sessions.mobile, mobileEvents);
   await bridge(sessions.infra, [['agent.end', {}]]);
@@ -185,10 +203,42 @@ try {
     await page.waitForSelector('.dot-field canvas');
     await sleep(2800);
     await shot(page, 'dashboard', { png: true });
+    await page.locator('#home-automation-heading').scrollIntoViewIfNeeded();
+    await shot(page, 'overview-automations');
     await page.goto(BASE + '/sessions');
     await page.setViewportSize({ width: 1440, height: 1100 });
     await settle(page);
     await shot(page, 'session-list-desktop');
+    await page.goto(BASE + '/automations'); await settle(page);
+    await shot(page, 'automations');
+    await page.getByRole('searchbox').fill('Morning');
+    if (await page.locator('.automation-card').count() !== 1) throw new Error('Automation search failed');
+    await page.getByRole('searchbox').fill('');
+    await page.goto(BASE + '/automations/demo-review'); await settle(page);
+    await shot(page, 'automation-detail');
+    await page.getByRole('tab', { name: /Run history/ }).click();
+    if (await page.locator('.run-card').count() !== 10) throw new Error('History page size is not 10');
+    await page.getByRole('button', { name: 'Next page', exact: true }).click();
+    if (!(await page.locator('.automation-pagination').textContent()).includes('Page 2')) throw new Error('Pagination failed');
+    await page.getByRole('button', { name: 'Previous page', exact: true }).click();
+    await shot(page, 'automation-history');
+    await page.getByLabel('Run status').selectOption('failed');
+    if (await page.locator('.run-card').count() !== 6) throw new Error('History filter failed');
+    await page.getByRole('tab', { name: 'Summary', exact: true }).click();
+    await page.getByRole('button', { name: 'Edit script', exact: true }).click();
+    await page.locator('.editor').scrollIntoViewIfNeeded();
+    await shot(page, 'automation-editor');
+    await page.getByLabel('Automation name', { exact: true }).fill('');
+    await page.getByRole('button', { name: 'Save automation', exact: true }).click();
+    if (await page.getByLabel('Automation name', { exact: true }).evaluate(el => el.validity.valid)) throw new Error('Empty name accepted');
+    await page.goto(BASE + '/automations/demo-review/runs/demo-run-23'); await settle(page);
+    await shot(page, 'automation-result');
+    await page.locator('.rich-output table').waitFor();
+    if (await page.locator('.rich-output table tbody tr').count() !== 3) throw new Error('Markdown table not rendered');
+    await shot(page, 'automation-result');
+    await page.goto(BASE + '/sessions/demo-automated'); await settle(page);
+    if (await page.locator('.composer textarea').count()) throw new Error('Automated session exposes composer');
+    await shot(page, 'automation-session');
     await context.close();
   }
 
@@ -198,6 +248,14 @@ try {
     await page.goto(BASE + '/sessions/demo-billing');
     await settle(page);
     await shot(page, 'session-light');
+    await page.locator('#prompt').fill('/');
+    await page.getByRole('listbox', { name: 'Available slash commands' }).waitFor();
+    await shot(page, 'slash-commands');
+    await page.locator('#prompt').fill('/rev');
+    if (await page.getByRole('option').count() !== 1) throw new Error('Slash filtering failed');
+    await page.locator('#prompt').press('Tab');
+    if (await page.locator('#prompt').inputValue() !== '/review ') throw new Error('Slash selection failed');
+    await page.locator('#prompt').fill('');
     await context.close();
   }
 
@@ -232,6 +290,14 @@ try {
     await settle(page, 1800);
     await shot(page, 'thinking');
 
+    await page.goto(BASE + '/automations'); await settle(page);
+    await shot(page, 'automations-mobile');
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('Mobile automation list overflows');
+    await page.goto(BASE + '/automations/demo-review'); await settle(page);
+    await page.getByRole('tab', { name: /Run history/ }).click();
+    await shot(page, 'automation-history-mobile');
+    if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('Mobile automation history overflows');
+    await page.goto(BASE + '/sessions/demo-mobile'); await settle(page);
     // Connection recovery: stop the daemon underneath the open page.
     daemon.kill();
     await sleep(2500);

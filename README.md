@@ -2,7 +2,7 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.0:** [automations](docs/automations.md) with manual/UTC-cron runs, read-only agent sessions, run history, native agent tools and a standalone MCP surface. Disconnected sessions auto-archive after seven days; mobile Settings is now in the header.
+**New in 0.3.1:** claymorphic automation workspaces with searchable, status-filtered, paginated lists; Summary/History tabs and calendar-style run cards; sanitized Markdown/ADF/JSON results; a staged job editor with strict validation and optional failed-action retries (up to 5, default 10-second interval). Per-automation history keeps the latest 30 runs by default, with 10 per page. Automated sessions are clearly marked as answers-only. Type `/` in a normal session to discover available commands, skills, and prompt templates. See [automations](docs/automations.md).
 
 Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, browser fan-out, and the embedded web UI.
 
@@ -15,7 +15,7 @@ The UI is a static SvelteKit application. There is no Node runtime in production
   <img src="docs/mobile.webp" alt="Session detail on a phone" width="28%" />
 </p>
 
-Screenshots use demo sessions, not private conversation data, and are regenerated with `node tools/screenshots.mjs` (see [Running locally from source](#running-locally-from-source)). See the [session menu](docs/session-menu.webp), [desktop session rows](docs/session-list-desktop.webp) and [mobile session list](docs/session-list.webp), plus [attachment previews](docs/attachments.webp), [file-grouped changes](docs/changes.webp) and [connection recovery](docs/connection-error.webp).
+Screenshots use demo sessions, not private conversation data, and are regenerated with `node tools/screenshots.mjs` (see [Running locally from source](#running-locally-from-source)). See the [session menu](docs/session-menu.webp), [desktop session rows](docs/session-list-desktop.webp) and [mobile session list](docs/session-list.webp), plus [attachment previews](docs/attachments.webp), [file-grouped changes](docs/changes.webp) and [connection recovery](docs/connection-error.webp). Explore the new [automation list](docs/automations.webp), [summary](docs/automation-detail.webp), [run history](docs/automation-history.webp), [job editor](docs/automation-editor.webp), and [rich results](docs/automation-result.webp).
 
 ## Install
 
@@ -354,7 +354,7 @@ Clone the repository, then:
 
 `npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.3.0
+      Pi Companion v0.3.1
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722
@@ -391,6 +391,8 @@ To regenerate the README screenshots from demo sessions (your running daemon is 
 
     npm run ui:build && cargo build --release --manifest-path server/Cargo.toml
     node tools/screenshots.mjs
+
+The generator also refreshes automation list/detail/history/editor/results, automated session, and [slash-command suggestions](docs/slash-commands.webp) screenshots. Type `/` in a shared session to search its available extension commands, skills, and prompt templates; use ↑/↓ and Tab/Enter to choose, then send when ready. Built-in terminal-only commands and ordinary tool names are not included. Automated answers-only sessions never expose this picker.
 
 It needs Playwright and `cwebp`. Set `PLAYWRIGHT=/path/to/node_modules/playwright/index.mjs` if Playwright isn't installed in this repo, and `CHROME=/path/to/chrome` to use an existing browser.
 

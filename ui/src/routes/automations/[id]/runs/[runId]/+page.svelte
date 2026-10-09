@@ -3,7 +3,12 @@
   import { page } from '$app/state';
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
-  import { automationTime } from '#lib/automations.ts';
+  import '#lib/automation.css';
+  import clayIcon from '../../../../../assets/automation-clay.svg';
+  import AutomationBadge from '#lib/AutomationBadge.svelte';
+  import AutomationDate from '#lib/AutomationDate.svelte';
+  import AutomationResult from '#lib/AutomationResult.svelte';
+  import { automationTime, automationDuration } from '#lib/automations.ts';
   import { errorMessage } from '#lib/toast.svelte.ts';
   import type { AutomationRun } from '#lib/types.ts';
   const id = $derived(page.params.id ?? '');
@@ -27,15 +32,15 @@
   });
 </script>
 <svelte:head><title>Run result · Pi Companion</title></svelte:head>
-<div class="page run-detail">
-  <a class="back subtle" href={'/automations/' + encodeURIComponent(id)}><Icon name="back" size={16} />Automation</a>
-  <header><span class="eyebrow">RUN RESULT</span><h1>Automation run</h1>{#if run}<p class="subtle">{automationTime(run.startedAt)} <span class="chip">{run.status}</span></p>{/if}</header>
+<div class="page automation-workspace">
+  <a class="automation-back subtle" href={'/automations/' + encodeURIComponent(id)}><Icon name="back" size={16} />Automation workspace</a>
+  <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">EXECUTION REPORT</span><h1>Automation run</h1><p class="subtle">A clear record of what happened, from first check to final summary.</p></div></div>{#if run}<AutomationBadge status={run.status} />{/if}</header>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if run}
-    <div class="panel metadata"><div><span class="subtle">Started</span><strong>{automationTime(run.startedAt)}</strong></div><div><span class="subtle">Finished</span><strong>{automationTime(run.finishedAt)}</strong></div>{#if run.sessionId}<a class="btn" href={'/sessions/' + encodeURIComponent(run.sessionId)}><Icon name="sessions" />View read-only Pi session</a>{/if}</div>
-    <section class="panel result"><h2>Output &amp; summary</h2><pre>{run.result || (run.status === 'running' ? 'Waiting for output…' : 'No output was recorded.')}</pre></section>
+    <section class="bento-card"><div class="run-metadata"><AutomationDate value={run.startedAt} /><dl class="info-pairs"><div><dt><Icon name="calendar" size={13} /> Started</dt><dd>{automationTime(run.startedAt)}</dd></div><div><dt><Icon name="check" size={13} /> Finished</dt><dd>{automationTime(run.finishedAt)}</dd></div><div><dt><Icon name="clock" size={13} /> Duration</dt><dd>{automationDuration(run.startedAt, run.finishedAt)}</dd></div></dl></div>{#if run.sessionId}<a class="btn" style="margin-top: 18px" href={'/sessions/' + encodeURIComponent(run.sessionId)}><Icon name="sessions" />View read-only Pi session</a>{/if}</section>
+    <div class="bento-card"><AutomationResult text={run.result} running={run.status === 'running'} /></div>
   {:else if !error}<div class="panel state" role="status">Loading run result…</div>{/if}
 </div>
 <style>
-  .run-detail { display: grid; gap: 24px; } .back { display: inline-flex; align-items: center; gap: 8px; text-decoration: none; } .eyebrow { font-size: .68rem; letter-spacing: .16em; color: var(--text-2); } h1 { margin: 7px 0; } header p { margin: 0; line-height: 1.8; } .metadata { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; padding: 24px; } .metadata > div { display: grid; gap: 6px; } .metadata strong { font-size: .85rem; } .metadata .subtle { font-size: .75rem; } .result { padding: 24px; min-width: 0; } h2 { margin: 0 0 20px; font-size: 1rem; } pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .82rem; line-height: 1.7; } .error { color: var(--danger); } .state { padding: 32px; text-align: center; }
+  .run-metadata { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; } .run-metadata dl { flex: 1; margin: 0; grid-template-columns: repeat(3, minmax(0, 1fr)); } .state { padding: 32px; text-align: center; } @media(max-width: 550px) { .run-metadata { gap: 16px; } .run-metadata dl { grid-template-columns: 1fr; gap: 12px; } }
 </style>

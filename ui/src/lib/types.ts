@@ -11,6 +11,9 @@ export type AutomationDraft = {
   actions: AutomationAction[];
   postActions: AutomationAction[];
   schedule: string | null;
+  historyLimit?: number;
+  maxRetries?: number;
+  retryIntervalSeconds?: number;
 };
 export type Automation = AutomationDraft & { id: string; createdAt: number; updatedAt: number };
 export type AutomationRun = {
@@ -51,6 +54,7 @@ export type Session = {
   effort?: string | null;
   telemetry?: SessionTelemetry;
   remoteEnabled: boolean;
+  commands?: { name: string; description?: string; source: 'extension' | 'prompt' | 'skill' }[];
   readOnly?: boolean;
   automationId?: string;
   automationRunId?: string;

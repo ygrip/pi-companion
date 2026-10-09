@@ -70,7 +70,11 @@ export class CompanionBridge implements AskChannel {
       shortTitle: name?.trim() || cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
       mainModel: ctx.model?.id ?? null,
       effort: ctx.thinkingLevel ?? this.pi.getThinkingLevel?.() ?? null,
-      telemetry: this.telemetry.snapshot(ctx)
+      telemetry: this.telemetry.snapshot(ctx),
+      // Expose only executable slash commands, not local source paths or credentials.
+      commands: (this.pi.getCommands?.() ?? []).slice(0, 500).map(command => ({
+        name: command.name, description: command.description?.slice(0, 500), source: command.source
+      }))
     };
     const patch: Partial<SessionSnapshot> = {};
     for (const key of Object.keys(next) as Array<keyof typeof next>) {

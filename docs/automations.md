@@ -1,6 +1,40 @@
-# Automations (0.3.0)
+# Automations (0.3.1)
 
 Automations are persisted, named JSON scripts run by the Companion daemon. Open **Automations** in the navigation to view definitions, start/stop runs, and inspect timestamped run history. Click a run to view its captured output and Pi summary. Desktop console users can create, edit, delete, and enable/disable definitions; mobile and paired-device users can only inspect and start/stop them.
+
+## Workspace & editor
+
+The claymorphic automation collection supports name search, Enabled/Disabled filters, ten-item pagination, and its own scrollable card region. The detail workspace has **Summary** and **Run history** tabs; history is newest-first with calendar tiles, duration, status filters, and ten-item pagination over each automation’s retained history (latest 30 finished runs by default, configurable 1–1000).
+
+The job editor separates name, enablement, UTC cron, optional retry policy, preconditions, actions, and post-actions. Each step is a reorderable JSON DSL object with Command/Pi templates. Saving validates the definition, cron ranges, action types, arguments, absolute directories, timeouts, step count, and retry bounds; the daemon validates again before persistence. Only computer desktop administrators can author definitions.
+
+Run results have a formatted and raw view. Formatted results split daemon execution phases, render sanitized Markdown (including tables, links, code, and diagrams), recognise whole/fenced JSON, and render Atlassian Document Format (`type: "doc"`) or `{ "adf": ... }` documents. ADF supports headings, lists, marks, tables, panels, and safe links; unsupported nodes preserve their text, and attachments are placeholders. HTML/scripts and executable link protocols are not trusted. Raw output remains available for inspection and copying.
+
+## Screenshots
+
+Screenshots use only demo data. The same generator refreshes the existing overview, session, and mobile screenshots too.
+
+![Automations on the overview below live sessions](overview-automations.webp)
+![Searchable automation cards](automations.webp)
+![Automation cards on a phone](automations-mobile.webp)
+![Run history on a phone](automation-history-mobile.webp)
+![Automation summary and execution steps](automation-detail.webp)
+![Filtered, paginated run history](automation-history.webp)
+![Friendly staged job editor](automation-editor.webp)
+![Rich review summary with linked PR table](automation-result.webp)
+![Answers-only automated session](automation-session.webp)
+
+## History retention
+
+`historyLimit` is an optional integer **1–1000**, default **30**. Each automation retains its latest N finished runs, replacing older history as newer runs finish. Lowering the limit prunes older runs immediately on save; active runs are retained until finished. The same policy is applied on daemon startup. Deleted run results cannot be recovered from the dashboard. Run history pages show **10 items** at a time.
+
+Automations also appear below running sessions on the overview. Automated sessions are labelled **Automated · answers only** in session cards, tables, and the session workspace. Their browser controls allow question answers but not steering, planning, uploads, or code changes; backend restrictions remain authoritative.
+
+## Optional retries
+
+`maxRetries` is an optional integer **0–5** (default **0**, no retries). `retryIntervalSeconds` is an optional integer **1–86400** (default **10 seconds**). Only a failed main action is retried; completed steps do not repeat, and precondition skips and finalizers are never retried. Stop cancels an active process or retry delay. Save-time validation requires the total retry-delay budget to be shorter than the shortest daily UTC trigger gap (a conservative bound for schedules limited to selected dates). Before each wait, the daemon also skips a retry that would reach the next scheduled trigger. It cannot guarantee action duration; overlapping runs remain prohibited. Attempt diagnostics are included in run output, and finalizers execute after the final outcome unless stopped.
+
+**Retries can duplicate side effects**, including model calls and remote submissions after ambiguous failures. Enable them only for retry-safe work; the PR-review automation should keep retries off. Existing definitions without either field retain their original behavior.
 
 ## JSON DSL
 
@@ -9,6 +43,9 @@ Automations are persisted, named JSON scripts run by the Companion daemon. Open 
   "name": "Daily repository check",
   "enabled": true,
   "schedule": "0 9 * * 1-5",
+  "maxRetries": 0,
+  "retryIntervalSeconds": 10,
+  "historyLimit": 30,
   "preconditions": [
     { "type": "command", "command": "git", "args": ["rev-parse", "--is-inside-work-tree"], "cwd": "/absolute/project" }
   ],

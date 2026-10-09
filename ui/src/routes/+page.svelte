@@ -8,6 +8,12 @@
   import chatBubbleClay from '../assets/clay/chat-bubble.webp';
   import computerClay from '../assets/clay/computer.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
+  import '#lib/automation.css';
+  import automationArt from '../assets/automation-clay.svg';
+  import AutomationBadge from '#lib/AutomationBadge.svelte';
+  import { automationSchedule } from '#lib/automations.ts';
+  import { errorMessage } from '#lib/toast.svelte.ts';
+  import type { Automation } from '#lib/types.ts';
   import SessionCard from '#lib/SessionCard.svelte';
   import SessionTable from '#lib/SessionTable.svelte';
   import { companion } from '#lib/companion.svelte.ts';
@@ -29,6 +35,26 @@
   const waiting = $derived(Object.values(companion.asks).reduce((n, list) => n + list.length, 0));
   const connected = $derived(companion.devices.filter((d) => d.connected).length);
   const totalSessions = $derived(companion.sessions.length);
+  let automations = $state<Automation[]>([]);
+  let automationError = $state('');
+  let automationLoading = $state(true);
+  const recentAutomations = $derived([...automations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4));
+  let overviewMounted = $state(false);
+  onMount(() => { overviewMounted = true; return () => { overviewMounted = false; }; });
+  $effect(() => {
+    if (!overviewMounted || !companion.booted || !companion.paired) return;
+    let alive = true;
+    const refresh = async () => {
+      try {
+        const result = await companion.request<{ automations: Automation[] }>('/api/automations');
+        if (alive) { automations = result.automations; automationError = ''; }
+      } catch (cause) { if (alive) automationError = errorMessage(cause); }
+      finally { if (alive) automationLoading = false; }
+    };
+    void refresh();
+    const timer = setInterval(() => { if (document.visibilityState === 'visible') void refresh(); }, 30000);
+    return () => { alive = false; clearInterval(timer); };
+  });
 
   type Stat = { label: string; value: number | string; hint: string; icon: IconName; href: string };
   const stats = $derived<Stat[]>([
@@ -148,6 +174,14 @@
         <a class="btn" href="/help"><Icon name="help" />Show me how</a>
       </div>
     {/if}
+  </section>
+  <section class="recent automation-workspace" aria-labelledby="home-automation-heading">
+    <div class="section-head"><h2 id="home-automation-heading"><img src={automationArt} alt="" width="38" height="38" />Your automations</h2><a class="btn view-all" href="/automations">All automations<span class="badge count quiet">{automations.length}</span><Icon name="chevron" size={16} /></a></div>
+    <p class="automation-note">Let Pi take care of the repeatable tasks. Open a routine to run it or check its latest results.</p>
+    {#if automationError}<div class="bento-card" role="alert">Automations are unavailable right now: {automationError}</div>
+    {:else if automationLoading}<div class="bento-card" role="status">Loading your automations…</div>
+    {:else if !automations.length}<div class="bento-card automation-empty"><Icon name="lightning" size={28} /><h2>A little less busywork</h2><p>Set up your first automation on the desktop dashboard, or ask Pi to create one for you.</p><a class="btn" href="/automations">Explore automations<Icon name="chevron" size={16} /></a></div>
+    {:else}<div class="automation-grid">{#each recentAutomations as automation (automation.id)}<a class="automation-card" href={'/automations/' + encodeURIComponent(automation.id)}><div class="card-top"><AutomationBadge status={automation.enabled ? 'enabled' : 'disabled'} /><Icon name="chevron" size={16} /></div><h3>{automation.name}</h3><p class="schedule-copy">{automationSchedule(automation.schedule)}</p><div class="card-footer"><span><Icon name="plan" size={14} />{automation.actions.length} steps</span><span>{automation.schedule ? 'Scheduled routine' : 'Run when you need it'}</span></div></a>{/each}</div>{/if}
   </section>
 </div>
 
