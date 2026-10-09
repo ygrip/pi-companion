@@ -1,4 +1,6 @@
 <script lang="ts">
+  import PageHero from '#lib/PageHero.svelte';
+  import clayIcon from '../../assets/clay/computer.webp';
   import { onDestroy } from 'svelte';
   import Icon from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
@@ -104,16 +106,10 @@
 
 <svelte:head><title>Devices · Pi Companion</title></svelte:head>
 
-<div class="page">
-  <header class="page-head">
-    <div>
-      <h1>Devices</h1>
-      <p>Phones and browsers that can follow your shared sessions. Pair once; a device stays trusted until you revoke it.</p>
-    </div>
-    {#if !pairing}
-      <button class="btn btn-primary" onclick={startPairing} disabled={starting}><Icon name="plus" />Pair a device</button>
-    {/if}
-  </header>
+<div class="page automation-workspace">
+  <PageHero icon={clayIcon} eyebrow="YOUR WORK, WHEREVER YOU ARE" title="Devices" subtitle="One workspace. Your favorite screens. Pair once, check in anywhere.">
+    {#if !pairing}<button class="btn-bento primary" onclick={startPairing} disabled={starting}><Icon name="plus" />Pair a device</button>{/if}
+  </PageHero>
 
   {#if pairing}
     <section class="pair card" aria-labelledby="pair-heading">

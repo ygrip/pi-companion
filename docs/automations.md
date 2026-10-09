@@ -1,10 +1,16 @@
-# Automations (0.3.1)
+# Automations (0.3.2)
 
 Automations are persisted, named JSON scripts run by the Companion daemon. Open **Automations** in the navigation to view definitions, start/stop runs, and inspect timestamped run history. Click a run to view its captured output and Pi summary. Desktop console users can create, edit, delete, and enable/disable definitions; mobile and paired-device users can only inspect and start/stop them.
 
 ## Workspace & editor
 
-The claymorphic automation collection supports name search, Enabled/Disabled filters, ten-item pagination, and its own scrollable card region. The detail workspace has **Summary** and **Run history** tabs; history is newest-first with calendar tiles, duration, status filters, and ten-item pagination over each automation’s retained history (latest 30 finished runs by default, configurable 1–1000).
+The claymorphic automation collection uses the same responsive tabular style as overview sessions, with rounded status chips, name search, segmented Enabled/Disabled filters, ten-item pagination, and a scrollable row region. Redundant statistic tiles are removed. On phones, rows stack their labelled fields without horizontal scrolling.
+
+The detail workspace is a single-column bento layout with a clay back button and full-width run control below its title. **Summary** and **Run history** tabs fill the container. History is a newest-first responsive table with start time, duration, status filters, and ten-item pagination over each automation’s retained history (latest 30 finished runs by default, configurable 1–1000).
+
+Choose **Edit automation** to reveal the editor at the top of Summary, automatically scroll it into view, and focus its name field. This keeps the routine context nearby without navigating to another page. Nothing changes until you save. Desktop console editing remains required.
+
+Overview, Sessions, Automations, and Settings support pull-to-refresh from the top of the page and an accessible **Refresh** button. Pull down on non-interactive page content, then release when prompted. Nested scroll regions and form controls keep their own gestures. Settings refresh never discards unsaved edits.
 
 The job editor separates name, enablement, UTC cron, optional retry policy, preconditions, actions, and post-actions. Each step is a reorderable JSON DSL object with Command/Pi templates. Saving validates the definition, cron ranges, action types, arguments, absolute directories, timeouts, step count, and retry bounds; the daemon validates again before persistence. Only computer desktop administrators can author definitions.
 
@@ -15,10 +21,11 @@ Run results have a formatted and raw view. Formatted results split daemon execut
 Screenshots use only demo data. The same generator refreshes the existing overview, session, and mobile screenshots too.
 
 ![Automations on the overview below live sessions](overview-automations.webp)
-![Searchable automation cards](automations.webp)
-![Automation cards on a phone](automations-mobile.webp)
+![Searchable automation rows](automations.webp)
+![Automation rows on a phone](automations-mobile.webp)
 ![Run history on a phone](automation-history-mobile.webp)
 ![Automation summary and execution steps](automation-detail.webp)
+![Single-column automation detail on a phone](automation-detail-mobile.webp)
 ![Filtered, paginated run history](automation-history.webp)
 ![Friendly staged job editor](automation-editor.webp)
 ![Rich review summary with linked PR table](automation-result.webp)

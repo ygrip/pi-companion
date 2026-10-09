@@ -40,7 +40,7 @@ try {
     })(),
     exited.then(code => { throw new Error(`Daemon exited before readiness (${code}): ${log}`); })
   ]);
-  assert.equal((await (await request('/api/context')).json()).version, '0.3.1');
+  assert.equal((await (await request('/api/context')).json()).version, '0.3.2');
   for (const path of ['/automations', '/automations/example', '/automations/example/runs/run']) {
     const response = await request(path);
     assert.equal(response.status, 200); assert.match(await response.text(), /<!doctype html>/i);

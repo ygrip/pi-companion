@@ -1,6 +1,6 @@
 {
   "name": "@yunazgr/pi-companion",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",

@@ -1,6 +1,9 @@
 <script lang="ts">
   import Icon from '#lib/Icon.svelte';
   import SessionCard from '#lib/SessionCard.svelte';
+  import PageHero from '#lib/PageHero.svelte';
+  import PullToRefresh from '#lib/PullToRefresh.svelte';
+  import clayIcon from '../../assets/clay/chat-bubble.webp';
   import { companion } from '#lib/companion.svelte.ts';
   import { prettyPath, sessionTitle } from '#lib/format.ts';
   import type { SessionStatus } from '#lib/types.ts';
@@ -38,19 +41,9 @@
 
 <svelte:head><title>Sessions · Pi Companion</title></svelte:head>
 
-<div class="page">
-  <header class="page-head">
-    <div>
-      <h1>Sessions</h1>
-      <p>
-        {#if companion.isAdmin}
-          Sessions opened with /companion on this computer. Archive ended sessions to remove them from this list, not from your local Pi history.
-        {:else}
-          Sessions your computer has shared with this device.
-        {/if}
-      </p>
-    </div>
-  </header>
+<div class="page automation-workspace">
+  <PullToRefresh onrefresh={() => companion.refresh()} />
+  <PageHero icon={clayIcon} eyebrow="A LITTLE SPACE TO THINK" title="Sessions" subtitle="Big ideas, small check-ins. Follow what Pi’s working on from anywhere." />
 
   <div class="toolbar clay">
     <label class="search">
@@ -108,9 +101,9 @@
   .search .input { width: 100%; min-height: 48px; padding-left: 38px; border-radius: 15px; box-shadow: var(--clay-pressed); }
   .segmented { max-width: 100%; min-width: 0; border-radius: 15px; padding: 4px; box-shadow: var(--clay-pressed); }
   .segmented button { min-height: 44px; padding: 9px 12px; border-radius: 12px; }
-  .list-summary { margin: -4px 4px -4px; color: var(--text-2); font-size: 0.8rem; }
   .session-list { display: grid; gap: 16px; padding: 0; margin: 0; list-style: none; min-width: 0; }
   .session-list li { min-width: 0; }
+  .list-summary { margin: -4px 4px -4px; color: var(--text-2); font-size: 0.8rem; }
   @media (max-width: 1100px) {
     .toolbar { grid-template-columns: minmax(0, 1fr); gap: 16px; padding: 16px; }
     .segmented { width: 100%; }

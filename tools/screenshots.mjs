@@ -151,6 +151,7 @@ const mobileEvents = [
 ];
 
 async function shot(page, name, { webp = true, png = false } = {}) {
+  if (await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1)) throw new Error('Horizontal overflow in ' + name);
   const file = join(docs, name + '.png');
   await page.screenshot({ path: file });
   if (webp) execFileSync('cwebp', ['-quiet', '-q', '82', file, '-o', join(docs, name + '.webp')]);
@@ -169,6 +170,34 @@ async function open(browser, { width, height, theme, mobile = false }) {
   const page = await context.newPage();
   page.on('pageerror', error => console.error('Browser error:', error.message));
   return { context, page };
+}
+
+async function checkPullToRefresh(page, path, endpoint) {
+  await page.goto(BASE + path); await settle(page);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  for (const [selector, dx, dy] of [['.page h1', 0, 60], ['.page h1', 150, 20], ['.refresh-control button', 0, 160]]) {
+    await page.evaluate(({ selector, dx, dy }) => {
+      const target = document.querySelector(selector);
+      const touch = (x, y) => new Touch({ identifier: 1, target, clientX: x, clientY: y });
+      target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [touch(100, 100)] }));
+      target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [touch(100 + dx, 100 + dy)] }));
+      target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] }));
+    }, { selector, dx, dy });
+    if (await page.locator('.refresh-message').textContent()) throw new Error('Non-refresh gesture triggered refresh: ' + selector);
+  }
+  const response = page.waitForResponse(r => r.url().endsWith(endpoint) && r.ok());
+  await page.evaluate(() => {
+    const target = document.querySelector('.page h1');
+    if (!target) throw new Error('Missing gesture target');
+    const touch = y => new Touch({ identifier: 1, target, clientX: 100, clientY: y });
+    target.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, touches: [touch(100)] }));
+    target.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [touch(260)] }));
+    target.dispatchEvent(new TouchEvent('touchend', { bubbles: true, touches: [] }));
+  });
+  await response;
+  await page.getByRole('status').filter({ hasText: 'Up to date' }).waitFor();
+  await page.getByRole('button', { name: 'Refresh page data' }).click();
+  await page.getByRole('status').filter({ hasText: 'Up to date' }).waitFor();
 }
 
 async function settle(page, ms = 1200) {
@@ -211,22 +240,26 @@ try {
     await shot(page, 'session-list-desktop');
     await page.goto(BASE + '/automations'); await settle(page);
     await shot(page, 'automations');
+    await page.getByRole('button', { name: 'Disabled', exact: true }).click();
+    if (await page.locator('.routine-table tbody tr').count() !== 1) throw new Error('Automation status filter failed');
+    await page.getByRole('button', { name: 'All', exact: true }).click();
     await page.getByRole('searchbox').fill('Morning');
-    if (await page.locator('.automation-card').count() !== 1) throw new Error('Automation search failed');
+    if (await page.locator('.routine-table tbody tr').count() !== 1) throw new Error('Automation search failed');
     await page.getByRole('searchbox').fill('');
     await page.goto(BASE + '/automations/demo-review'); await settle(page);
     await shot(page, 'automation-detail');
     await page.getByRole('tab', { name: /Run history/ }).click();
-    if (await page.locator('.run-card').count() !== 10) throw new Error('History page size is not 10');
+    if (await page.locator('.routine-table tbody tr').count() !== 10) throw new Error('History page size is not 10');
     await page.getByRole('button', { name: 'Next page', exact: true }).click();
     if (!(await page.locator('.automation-pagination').textContent()).includes('Page 2')) throw new Error('Pagination failed');
     await page.getByRole('button', { name: 'Previous page', exact: true }).click();
     await shot(page, 'automation-history');
     await page.getByLabel('Run status').selectOption('failed');
-    if (await page.locator('.run-card').count() !== 6) throw new Error('History filter failed');
+    if (await page.locator('.routine-table tbody tr').count() !== 6) throw new Error('History filter failed');
     await page.getByRole('tab', { name: 'Summary', exact: true }).click();
-    await page.getByRole('button', { name: 'Edit script', exact: true }).click();
-    await page.locator('.editor').scrollIntoViewIfNeeded();
+    await page.getByRole('button', { name: 'Edit automation', exact: true }).click();
+    if (!(await page.getByLabel('Automation name', { exact: true }).evaluate(el => el === document.activeElement))) throw new Error('Editor did not focus');
+    await sleep(500);
     await shot(page, 'automation-editor');
     await page.getByLabel('Automation name', { exact: true }).fill('');
     await page.getByRole('button', { name: 'Save automation', exact: true }).click();
@@ -239,6 +272,13 @@ try {
     await page.goto(BASE + '/sessions/demo-automated'); await settle(page);
     if (await page.locator('.composer textarea').count()) throw new Error('Automated session exposes composer');
     await shot(page, 'automation-session');
+    await page.goto(BASE + '/devices'); await settle(page); await shot(page, 'devices');
+    await page.goto(BASE + '/settings'); await settle(page); await shot(page, 'settings');
+    const publicUrl = page.locator('#public-url');
+    await publicUrl.fill('https://unsaved.example.com');
+    await page.getByRole('button', { name: 'Refresh page data' }).click();
+    await page.getByRole('status').filter({ hasText: 'Up to date' }).waitFor();
+    if (await publicUrl.inputValue() !== 'https://unsaved.example.com') throw new Error('Refresh discarded settings edits');
     await context.close();
   }
 
@@ -262,6 +302,7 @@ try {
   // Phone screens, dark.
   {
     const { context, page } = await open(browser, { width: 390, height: 844, theme: 'dark', mobile: true });
+    for (const [path, endpoint] of [['/', '/api/automations'], ['/sessions', '/api/sessions'], ['/automations', '/api/automations'], ['/settings', '/api/settings']]) await checkPullToRefresh(page, path, endpoint);
     await page.goto(BASE + '/sessions');
     await settle(page);
     await shot(page, 'session-list');
@@ -294,9 +335,25 @@ try {
     await shot(page, 'automations-mobile');
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('Mobile automation list overflows');
     await page.goto(BASE + '/automations/demo-review'); await settle(page);
+    await shot(page, 'automation-detail-mobile');
     await page.getByRole('tab', { name: /Run history/ }).click();
+    await page.locator('#panel-history .collection-toolbar').scrollIntoViewIfNeeded();
     await shot(page, 'automation-history-mobile');
     if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth)) throw new Error('Mobile automation history overflows');
+    await page.goto(BASE + '/automations'); await settle(page);
+    await page.route('**/api/automations', route => route.fulfill({ status: 503, contentType: 'text/plain', body: 'Unavailable' }));
+    await page.getByRole('button', { name: 'Refresh page data' }).click();
+    await page.getByRole('status').filter({ hasText: 'Refresh failed:' }).waitFor();
+    await page.unroute('**/api/automations');
+    await page.getByRole('button', { name: 'Refresh page data' }).click();
+    await page.getByRole('status').filter({ hasText: 'Up to date' }).waitFor();
+    await page.goto(BASE + '/settings'); await settle(page); await shot(page, 'settings-mobile');
+    await page.setViewportSize({ width: 320, height: 844 });
+    for (const path of ['/', '/sessions', '/automations', '/automations/demo-review', '/settings', '/devices']) {
+      await page.goto(BASE + path); await settle(page);
+      if (await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)) throw new Error('320px overflow: ' + path);
+    }
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.goto(BASE + '/sessions/demo-mobile'); await settle(page);
     // Connection recovery: stop the daemon underneath the open page.
     daemon.kill();

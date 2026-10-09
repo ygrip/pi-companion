@@ -2,7 +2,7 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.1:** claymorphic automation workspaces with searchable, status-filtered, paginated lists; Summary/History tabs and calendar-style run cards; sanitized Markdown/ADF/JSON results; a staged job editor with strict validation and optional failed-action retries (up to 5, default 10-second interval). Per-automation history keeps the latest 30 runs by default, with 10 per page. Automated sessions are clearly marked as answers-only. Type `/` in a normal session to discover available commands, skills, and prompt templates. See [automations](docs/automations.md).
+**New in 0.3.2:** responsive automation and run-history tables, rounded status chips, matching clay-icon headers, and a single-column automation workspace with full-width mobile controls. **Edit automation** scrolls to and focuses the inline editor. Pull to refresh Overview, Sessions, Automations, or Settings—or use the Refresh button; unsaved settings stay intact. Camera-policy guidance now explains HTTPS proxy configuration. Existing rich results, staged job editing, optional retries, and answers-only automation sessions are retained. See [automations](docs/automations.md).
 
 Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, browser fan-out, and the embedded web UI.
 
@@ -151,6 +151,12 @@ Pi's `companion_ask_user` tool asks one to four questions at once. Each question
 
 Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. Question tools that draw their own `ctx.ui.custom` picker are relayed through a small adapter: pi-jar's `jar_ask` is supported, and a companion answer completes its terminal picker. Other `ctx.ui.custom` components and `ctx.ui.editor` stay terminal-only because they cannot be answered from outside. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
 
+## Refreshing your workspace
+
+On Overview, Sessions, Automations, and Settings, pull down from the top of the page and release when prompted to refresh current data. Each page also provides a keyboard-accessible **Refresh** button with progress and error feedback. This refreshes data without reloading the app; Settings preserves unsaved edits. Gestures inside inputs and nested scrollable lists are left alone.
+
+The Sessions, Devices, and Settings pages now share the automation page’s clay-icon header style. See [device management](docs/devices.webp), [settings](docs/settings.webp), and [mobile settings](docs/settings-mobile.webp).
+
 ## Notifications, camera and catching up
 
 Settings → **Notifications and camera** (on every device, not just the console) asks the browser for both permissions from a tap, as browsers require, and shows whether each is allowed, blocked or unavailable. Overview also offers a one-time "Turn on notifications" banner.
@@ -254,6 +260,18 @@ which destroys one temporary file by opaque id.
 
 This means the agent can consume uploaded artifacts using its normal file capabilities while Pi Companion retains ownership of upload placement and cleanup.
 
+### Camera access through Cloudflare or another HTTPS proxy
+
+Camera scanning works through an HTTPS tunnel; Companion serves `Permissions-Policy: camera=(self)`. A proxy response-header rule that replaces it with `camera=()` blocks the camera before the browser can ask permission. JavaScript cannot override that restriction.
+
+For a Cloudflare **Modify Response Header** rule scoped to your Companion hostname (for example, `http.host eq "companion.readynaz.com"`), set `Permissions-Policy` to:
+
+```text
+geolocation=(), camera=(self), microphone=(), payment=(), usb=(), accelerometer=(), gyroscope=(), magnetometer=()
+```
+
+Exclude the Companion hostname from any broader rule that still sets `camera=()`, and check Workers or other proxies for duplicate overrides. Keep Cloudflare Access authentication enabled and tunnel only the paired-device listener. Open Companion directly, not inside an iframe. After signing in, verify the final page response in browser DevTools → Network: its camera directive must be `camera=(self)`. The Access login redirect is not the app response. Reload the app (and restart an older daemon after upgrading), then allow Camera in browser site permissions. Manual pairing-code entry remains available.
+
 ## Workspace and tunnel connection errors
 
 If a tunnel closes, the workspace stops, or your device loses its network, Companion shows an actionable **Workspace connection interrupted** notice with **Retry now** and reconnect instructions. On initial connection failure, it shows **Workspace unavailable**, not a misleading empty session list or “session not found.” Gateway errors (including HTTP 502/503/504 and tunnel-provider errors) are translated into readable messages rather than raw HTML or JSON parse errors. A browser cannot always distinguish a closed tunnel from a daemon, DNS or network failure, so these messages describe possible causes rather than claiming certainty.
@@ -354,7 +372,7 @@ Clone the repository, then:
 
 `npm run serve` builds the embedded Svelte UI and starts the Rust daemon in the foreground. It prints:
 
-      Pi Companion v0.3.1
+      Pi Companion v0.3.2
 
       Console          http://127.0.0.1:43721
       Paired devices   http://127.0.0.1:43722

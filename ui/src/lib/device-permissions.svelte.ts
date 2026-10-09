@@ -27,7 +27,7 @@ export function cameraAvailability(): PermissionValue {
 export function cameraFailure(error: unknown): { state: PermissionValue; message: string } {
   const availability = cameraAvailability();
   if (availability === 'insecure') return { state: availability, message: 'Camera requires HTTPS or localhost. Open the HTTPS Companion link, or enter the pairing code instead.' };
-  if (availability === 'policy') return { state: availability, message: 'Camera is disabled by this page’s security policy. Update/restart the Companion daemon, reload this page, and check any proxy Permissions-Policy header. You can still enter the pairing code.' };
+  if (availability === 'policy') return { state: availability, message: 'Camera is disabled by this page’s security policy. Open Companion directly over HTTPS. Your proxy must allow camera=(self) in Permissions-Policy, not camera=(). After a daemon upgrade, restart it and reload. You can still enter the pairing code.' };
   if (availability === 'unsupported') return { state: availability, message: 'This browser does not provide camera access. Try a supported browser, or enter the pairing code.' };
   const name = error && typeof error === 'object' && 'name' in error ? String(error.name) : '';
   if (name === 'NotAllowedError' || name === 'PermissionDeniedError') return { state: 'denied', message: 'Camera access was denied. Allow Camera for this site in your browser settings and check OS camera access, then try again. You can also enter the pairing code.' };
@@ -121,6 +121,12 @@ class DevicePermissions {
       await this.notify('Notifications are on', 'Pi Companion will tell you when a session needs you.', { tag: 'pi-companion-welcome' });
     }
     return this.notifications;
+  }
+
+  /** Re-read device permissions without triggering a browser prompt. */
+  async refresh() {
+    this.notifications = notificationState();
+    await this.refreshCamera();
   }
 
   private async refreshCamera() {

@@ -10,8 +10,8 @@
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import '#lib/automation.css';
   import automationArt from '../assets/automation-clay.svg';
-  import AutomationBadge from '#lib/AutomationBadge.svelte';
-  import { automationSchedule } from '#lib/automations.ts';
+  import AutomationTable from '#lib/AutomationTable.svelte';
+  import PullToRefresh from '#lib/PullToRefresh.svelte';
   import { errorMessage } from '#lib/toast.svelte.ts';
   import type { Automation } from '#lib/types.ts';
   import SessionCard from '#lib/SessionCard.svelte';
@@ -56,6 +56,13 @@
     return () => { alive = false; clearInterval(timer); };
   });
 
+  async function refreshOverview() {
+    await Promise.all([companion.refresh(), (async () => {
+      try { automations = (await companion.request<{ automations: Automation[] }>('/api/automations')).automations; automationError = ''; }
+      catch (cause) { automationError = errorMessage(cause); throw cause; }
+    })()]);
+  }
+
   type Stat = { label: string; value: number | string; hint: string; icon: IconName; href: string };
   const stats = $derived<Stat[]>([
     { label: 'Running', value: live.length, hint: working ? (working === 1 ? 'Pi is busy on 1' : 'Pi is busy on ' + working) : 'All quiet for now', icon: 'sessions', href: '/sessions' },
@@ -85,6 +92,7 @@
 <svelte:head><title>Overview · Pi Companion</title></svelte:head>
 
 <div class="page">
+  <PullToRefresh onrefresh={refreshOverview} />
   <section class="hero card">
     {#if DotField}
       <DotField
@@ -149,7 +157,7 @@
 
   <section class="recent" aria-labelledby="live-heading">
     <div class="section-head">
-      <h2 id="live-heading">Running now</h2>
+      <h2 id="live-heading"><img src={computerClay} alt="" aria-hidden="true" />Running now</h2>
       <a class="btn view-all" href="/sessions">All sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a>
     </div>
     {#if live.length}
@@ -181,7 +189,7 @@
     {#if automationError}<div class="bento-card" role="alert">Automations are unavailable right now: {automationError}</div>
     {:else if automationLoading}<div class="bento-card" role="status">Loading your automations…</div>
     {:else if !automations.length}<div class="bento-card automation-empty"><Icon name="lightning" size={28} /><h2>A little less busywork</h2><p>Set up your first automation on the desktop dashboard, or ask Pi to create one for you.</p><a class="btn" href="/automations">Explore automations<Icon name="chevron" size={16} /></a></div>
-    {:else}<div class="automation-grid">{#each recentAutomations as automation (automation.id)}<a class="automation-card" href={'/automations/' + encodeURIComponent(automation.id)}><div class="card-top"><AutomationBadge status={automation.enabled ? 'enabled' : 'disabled'} /><Icon name="chevron" size={16} /></div><h3>{automation.name}</h3><p class="schedule-copy">{automationSchedule(automation.schedule)}</p><div class="card-footer"><span><Icon name="plan" size={14} />{automation.actions.length} steps</span><span>{automation.schedule ? 'Scheduled routine' : 'Run when you need it'}</span></div></a>{/each}</div>{/if}
+    {:else}<AutomationTable automations={recentAutomations} />{/if}
   </section>
 </div>
 

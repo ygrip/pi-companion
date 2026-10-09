@@ -32,7 +32,7 @@
 
   function hint(kind: 'notifications' | 'camera', state: PermissionValue) {
     if (kind === 'camera' && devicePermissions.cameraError) return devicePermissions.cameraError;
-    if (state === 'policy') return 'The page or proxy blocks camera access. Update/restart Companion, reload, and check Permissions-Policy. Enter a pairing code instead if needed.';
+    if (state === 'policy') return 'The page or proxy blocks camera access. Open Companion directly over HTTPS. In your proxy’s Permissions-Policy, use camera=(self), not camera=(). Restart Companion after upgrading and reload. Manual-code pairing still works.';
     if (state === 'insecure') return 'Open Pi Companion through its HTTPS link to use this. Camera access is unavailable on plain HTTP phone/LAN links.';
     if (state === 'denied') return 'Blocked by your browser. Open the site settings (the icon next to the address) and set it to Allow, then reload.';
     if (kind === 'notifications') {

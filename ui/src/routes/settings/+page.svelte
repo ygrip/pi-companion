@@ -1,5 +1,9 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import PageHero from '#lib/PageHero.svelte';
+  import PullToRefresh from '#lib/PullToRefresh.svelte';
+  import { devicePermissions } from '#lib/device-permissions.svelte.ts';
+  import clayIcon from '../../assets/clay/bulb.webp';
   import Icon, { type IconName } from '#lib/Icon.svelte';
   import { companion } from '#lib/companion.svelte.ts';
   import DevicePermissions from '#lib/DevicePermissions.svelte';
@@ -76,6 +80,17 @@
     }
   });
 
+  async function refreshSettings() {
+    await Promise.all([companion.refresh(), devicePermissions.refresh(), (async () => {
+      if (!companion.isAdmin) return;
+      const response = await companion.getSettings();
+      if (dirty || saving) { toasts.show('Settings refreshed. Your unsaved edits are preserved.', 'info'); }
+      else apply(response);
+      loadError = '';
+    })()]);
+    usageNow = Date.now();
+  }
+
   async function save() {
     error = '';
     saving = true;
@@ -99,13 +114,9 @@
 
 <svelte:head><title>Settings · Pi Companion</title></svelte:head>
 
-<div class="page narrow">
-  <header class="page-head">
-    <div>
-      <h1>Settings</h1>
-      <p>{companion.isAdmin ? 'Choose how Pi Companion looks and alerts you here, and how the daemon on this computer behaves.' : 'Choose how Pi Companion looks and alerts you on this device.'}</p>
-    </div>
-  </header>
+<div class="page narrow automation-workspace">
+  <PullToRefresh onrefresh={refreshSettings} />
+  <PageHero icon={clayIcon} eyebrow="MAKE YOURSELF AT HOME" title="Settings" subtitle="Your look, your alerts, your rhythm. Make Companion feel like you." />
 
   <div class="settings-tabs" role="tablist" aria-label="Settings sections">
     <button id="settings-general-tab" type="button" role="tab" aria-selected={tab === 'general'} aria-controls="settings-general-panel" tabindex={tab === 'general' ? 0 : -1} onclick={() => { tab = 'general'; }} onkeydown={tabKey}>General</button>
