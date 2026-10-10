@@ -22,7 +22,7 @@ const socket = dataModule(`
     static OPEN = 1;
     readyState = 0;
     frames = [];
-    constructor() { super(); globalThis.__companionLifecycleTest.sockets.push(this); }
+    constructor(url) { super(); this.url = url; globalThis.__companionLifecycleTest.sockets.push(this); }
     send(frame) { this.frames.push(JSON.parse(frame)); }
     close() { this.readyState = 3; this.emit('close'); }
   }
@@ -144,6 +144,7 @@ test('daemon starts privately and remote-control alone shares with safe session 
   const originalStatus = ctx.ui.setStatus;
   install({
     getSessionName: () => sessionName,
+    appendEntry: () => {},
     events: { on: (channel: string, fn: any) => { bus[channel] = fn; }, emit: () => {} },
     sendUserMessage: async () => { prompts++; },
     on: (name: string, fn: any) => { events[name] = fn; },
@@ -264,4 +265,110 @@ test('daemon starts privately and remote-control alone shares with safe session 
   assert.equal(ctx.ui.select, originalSelect);
   events.session_shutdown({}, ctx);
   delete (globalThis as any).__companionLifecycleTest;
+});
+
+test('resume restores opt-in and stable identity, explicit off persists, and titles follow prompts and renames', async () => {
+  (globalThis as any).__companionLifecycleTest = state;
+  const { default: install } = await import(extension);
+  const base = state.sockets.length;
+  const history = new Map<string, any[]>([['session-one', []], ['session-two', []]]);
+  const branches = new Map<string, any[]>([['session-one', []], ['session-two', []]]);
+  let id = 'session-one';
+  let name: string | undefined;
+  const ctx: any = {
+    cwd: '/project/demo', hasUI: true, isIdle: () => true,
+    sessionManager: {
+      getSessionId: () => id, getEntries: () => history.get(id), getBranch: () => branches.get(id)
+    },
+    ui: { notify() {}, select: async () => undefined, confirm: async () => false,
+      input: async () => undefined, custom: async () => undefined, setStatus() {} }
+  };
+  function launch() {
+    const events: Record<string, any> = {}, commands: Record<string, any> = {};
+    install({
+      getSessionName: () => name, getCommands: () => [],
+      appendEntry: (customType: string, data: unknown) => history.get(id)!.push({ type: 'custom', customType, data }),
+      events: { on() {}, emit() {} }, on: (key: string, fn: any) => { events[key] = fn; },
+      registerCommand: (key: string, command: any) => { commands[key] = command; }, registerTool() {}
+    });
+    return { events, commands };
+  }
+  function open() {
+    const socket = state.sockets.at(-1);
+    socket.readyState = 1;
+    socket.emit('open');
+    return socket;
+  }
+  let app = launch();
+  try {
+    app.events.session_start({}, ctx);
+    await nextTurn();
+    assert.equal(state.sockets.length, base, 'a fresh session is private');
+    app.events.input({ text: 'Fix login\n  redirect handling', source: 'interactive' }, ctx);
+    await app.commands['remote-control'].handler('on', ctx);
+    await nextTurn();
+    const first = open();
+    assert.ok(first.url.endsWith('/ws/bridge/session-one'));
+    assert.equal(first.frames[0].session.id, 'session-one');
+    assert.equal(first.frames[0].session.shortTitle, 'Fix login redirect handling');
+    branches.set(id, [{ type: 'message', message: { role: 'user', content: [
+      { type: 'image', data: 'ignored' }, { type: 'text', text: 'Fix login\n  redirect handling' }
+    ] } }]);
+    app.events.input({ text: 'Now run tests' }, ctx);
+    name = 'Authentication repair';
+    app.events.session_info_changed({ name }, ctx);
+    assert.equal(first.frames.at(-1).session.shortTitle, name);
+    name = undefined;
+    app.events.session_info_changed({ name }, ctx);
+    assert.equal(first.frames.at(-1).session.shortTitle, 'Fix login redirect handling');
+    const originalBranch = branches.get(id)!;
+    branches.set(id, [{ type: 'message', message: { role: 'user', content: 'Review authorization flow' } }]);
+    app.events.session_tree({}, ctx);
+    assert.equal(first.frames.at(-1).session.shortTitle, 'Review authorization flow');
+    branches.set(id, originalBranch);
+    app.events.session_tree({}, ctx);
+    app.events.session_shutdown({}, ctx);
+
+    // A new Pi process resumes the same saved session, not a new dashboard row.
+    app = launch();
+    app.events.session_start({}, ctx);
+    await nextTurn();
+    const resumed = open();
+    assert.equal(state.sockets.length, base + 2);
+    assert.equal(resumed.url, first.url);
+    assert.equal(resumed.frames[0].session.shortTitle, 'Fix login redirect handling');
+    assert.equal(history.get(id)!.length, 1, 'restoration does not append another opt-in');
+
+    // Switching to a different session must not inherit remote control.
+    id = 'session-two';
+    // Forked history can contain the original opt-in, but it belongs to another ID.
+    history.set(id, [...history.get('session-one')!]);
+    app.events.session_start({}, ctx);
+    await nextTurn();
+    assert.equal(state.sockets.length, base + 2);
+    branches.set(id, [{ type: 'message', message: { role: 'user', content: 'Investigate payments' } }]);
+    await app.commands.companion.handler('', ctx);
+    await nextTurn();
+    const second = open();
+    assert.ok(second.url.endsWith('/ws/bridge/session-two'));
+    assert.equal(second.frames[0].session.shortTitle, 'Investigate payments');
+
+    id = 'session-one';
+    app.events.session_start({}, ctx);
+    await nextTurn();
+    assert.equal(open().url, first.url);
+    await app.commands['remote-control'].handler('off', ctx);
+    app.events.session_shutdown({}, ctx);
+    app = launch();
+    const before = state.sockets.length;
+    app.events.session_start({}, ctx);
+    await nextTurn();
+    assert.equal(state.sockets.length, before, 'explicit off survives restart');
+    await app.commands['remote-control'].handler('on', ctx);
+    await nextTurn();
+    assert.equal(open().url, first.url, 're-enabling still uses the same identity');
+  } finally {
+    app.events.session_shutdown({}, ctx);
+    delete (globalThis as any).__companionLifecycleTest;
+  }
 });

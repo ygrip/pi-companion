@@ -524,6 +524,7 @@ async fn bridge_reconnect_keeps_the_session_and_its_files() {
     let files = next_matching(&mut pi, |v| v["type"] == "temp.files").await;
     assert_eq!(files["files"].as_array().unwrap().len(), 1, "uploads survive a bridge reconnect");
     next_matching(&mut browser, |v| v["type"] == "session.register").await;
+    assert_eq!(state.sessions.read().await.len(), 1, "resume replaces the same registry entry");
 
     send_json(&mut browser, json!({ "sessionId": "s1", "command": { "type": "prompt", "text": "again" } })).await;
     let command = next_matching(&mut pi, |v| v["type"] == "command").await;

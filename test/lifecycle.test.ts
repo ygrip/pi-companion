@@ -2,13 +2,16 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { it } from "node:test";
 
-it("session_start checks daemon availability but never shares a session", async () => {
+it("session_start restores only a recorded per-session opt-in", async () => {
   const source = await readFile(new URL("../src/index.ts", import.meta.url), "utf8");
   const start = source.split('pi.on("session_start"')[1].split('pi.on("session_info_changed"')[0];
   assert.match(start, /bridge\.close\(\)/);
-  assert.match(start, /bridge = new CompanionBridge\(pi\)/);
+  assert.match(start, /bridge = new CompanionBridge\(pi, ctx\.sessionManager\?\.getSessionId\?\.\(\)\)/);
   assert.match(start, /checkDaemon\(ctx\)/);
-  assert.doesNotMatch(start, /bridge\.connect|bridge\.activate|setRemoteEnabled\(true\)/);
+  assert.match(start, /entry\.customType === "companion:sharing"/);
+  assert.match(start, /enabled === true/);
+  assert.match(start, /saved\.sessionId === bridge\.sessionId/);
+  assert.match(start, /setSharing\(true, ctx, false\)/);
 });
 
 it("connecting and reconnecting require explicit per-session activation", async () => {

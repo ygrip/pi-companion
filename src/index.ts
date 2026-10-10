@@ -92,21 +92,33 @@ export default function companionExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", (_event, ctx) => {
-    // Switching or starting a Pi session must not inherit the previous opt-in.
+    // Restore only this session's explicit opt-in, never the previous session's.
     sharingGeneration += 1;
     quotas.stop();
     quotas = new ProviderQuotaPoller(value => bridge.ingestTelemetry(value, 'subscription limits'));
     bridge.close();
-    bridge = new CompanionBridge(pi);
+    bridge = new CompanionBridge(pi, ctx.sessionManager?.getSessionId?.());
     bridge.setContext(ctx);
     bridge.emit("session.start", { cwd: ctx.cwd });
-    void checkDaemon(ctx);
+    const sharing = ctx.sessionManager?.getEntries?.().filter(entry =>
+      entry.type === "custom" && entry.customType === "companion:sharing"
+    ).at(-1);
+    const saved = sharing?.type === "custom" ? sharing.data as { enabled?: boolean; sessionId?: string } | undefined : undefined;
+    if (saved?.enabled === true && saved.sessionId === bridge.sessionId) {
+      void setSharing(true, ctx, false);
+    } else {
+      void checkDaemon(ctx);
+    }
     if (daemonMonitor) clearInterval(daemonMonitor);
     daemonMonitor = setInterval(() => {
       void checkDaemon(ctx);
       if (bridge.isRemoteEnabled()) void quotas.refresh(ctx);
     }, 30_000);
     daemonMonitor.unref();
+  });
+  pi.on("input", (event, ctx) => {
+    bridge.setContext(ctx);
+    bridge.setPrompt(event.text);
   });
   pi.on("session_info_changed", (event, ctx) => {
     bridge.setContext(ctx);
@@ -306,10 +318,11 @@ export default function companionExtension(pi: ExtensionAPI) {
     }
   });
 
-  async function setSharing(enabled: boolean, ctx: ExtensionContext) {
+  async function setSharing(enabled: boolean, ctx: ExtensionContext, persist = true) {
     const generation = ++sharingGeneration;
     bridge.setContext(ctx);
     if (!enabled) {
+      if (persist) pi.appendEntry("companion:sharing", { enabled: false, sessionId: bridge.sessionId });
       bridge.setRemoteEnabled(false);
       ctx.ui.notify("Remote control disabled; Pi continues locally. The daemon remains available.", "info");
       return;
@@ -321,6 +334,7 @@ export default function companionExtension(pi: ExtensionAPI) {
       ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
       return;
     }
+    if (persist) pi.appendEntry("companion:sharing", { enabled: true, sessionId: bridge.sessionId });
     bridge.activate();
     bridge.setRemoteEnabled(true);
     void quotas.refresh(ctx);

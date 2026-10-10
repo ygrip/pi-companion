@@ -12,7 +12,7 @@ import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnaps
 const execFileAsync = promisify(execFile);
 
 export class CompanionBridge implements AskChannel {
-  readonly sessionId = randomUUID();
+  private pendingPrompt?: string;
   /** Relays question tools that ask through ctx.ui.custom (fed from tool_execution_* events). */
   readonly toolDialogs = new ToolDialogRelay(this);
   readonly popups = new PopupRelay(popups => {
@@ -39,7 +39,7 @@ export class CompanionBridge implements AskChannel {
   private asks = new Map<string, { request: AskRequest; settle: (answers: AskAnswers | null) => void }>();
   private pendingDeletes = new Map<string, { resolve: (result: { ok: boolean; error?: string }) => void; timer: NodeJS.Timeout }>();
   private snapshot: SessionSnapshot = {
-    id: this.sessionId,
+    id: "",
     cwd: process.cwd(),
     pid: process.pid,
     shortTitle: process.cwd().split(/[\\/]/).filter(Boolean).pop() ?? "Pi",
@@ -49,7 +49,9 @@ export class CompanionBridge implements AskChannel {
     asks: []
   };
 
-  constructor(private readonly pi: ExtensionAPI) {}
+  constructor(private readonly pi: ExtensionAPI, readonly sessionId: string = randomUUID()) {
+    this.snapshot.id = sessionId;
+  }
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
@@ -59,8 +61,30 @@ export class CompanionBridge implements AskChannel {
 
   setName(name?: string) {
     this.snapshot.name = name ?? null;
-    this.snapshot.shortTitle = name?.trim() || this.snapshot.cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
+    this.snapshot.shortTitle = this.contextTitle(name, this.snapshot.cwd);
     this.send({ type: "session.update", session: { name: name ?? null, shortTitle: this.snapshot.shortTitle } });
+  }
+
+  /** Input arrives before Pi appends the user message to session history. */
+  setPrompt(text: string) {
+    if (text.trim()) this.pendingPrompt ??= text;
+    this.refreshMetadata();
+  }
+
+  private contextTitle(name: string | null | undefined, cwd: string) {
+    if (name?.trim()) return name.trim();
+    const entries = this.ctx?.sessionManager?.getBranch?.() ?? [];
+    let prompt = this.pendingPrompt;
+    for (const entry of entries) {
+      if (entry.type !== "message" || entry.message.role !== "user") continue;
+      const content = entry.message.content;
+      const text = typeof content === "string" ? content : content
+        .filter(part => part.type === "text").map(part => part.text).join(" ");
+      if (text.trim()) { prompt = text; break; }
+    }
+    const title = prompt?.replace(/\s+/g, " ").trim();
+    if (title) return title.length > 120 ? title.slice(0, 119) + "…" : title;
+    return cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
   }
 
   /** Context getters remain live while idle; send only changed metadata, including explicit clears. */
@@ -72,7 +96,7 @@ export class CompanionBridge implements AskChannel {
     if ((this.snapshot.mainModel ?? null) !== (ctx.model?.id ?? null)) this.telemetry.invalidateContext();
     const next = {
       name, cwd,
-      shortTitle: name?.trim() || cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi",
+      shortTitle: this.contextTitle(name, cwd),
       mainModel: ctx.model?.id ?? null,
       effort: ctx.thinkingLevel ?? this.pi.getThinkingLevel?.() ?? null,
       telemetry: this.telemetry.snapshot(ctx),
@@ -91,6 +115,7 @@ export class CompanionBridge implements AskChannel {
   }
 
   invalidateContext() {
+    this.pendingPrompt = undefined;
     this.telemetry.invalidateContext();
   }
 

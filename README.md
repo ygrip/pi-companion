@@ -2,7 +2,7 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.6:** The extension automatically ensures the background daemon is available, while sessions stay private until `/remote-control`. Per-user services restart the daemon; concurrent startup is locked and upgrades verify the replacement first. Subscription limits are tracked separately for supported OAuth providers, and provider failures appear as clear messages in the activity feed.
+**New in 0.3.7:** Resuming a previously shared Pi session reconnects automatically under the same dashboard identity. Explicit `/remote-control off` survives resume; new and forked sessions stay private. Unnamed session titles now reflect the first user prompt, refresh with branch context, and remain editable with `/name`.
 
 When a session is shared, Companion fetches OpenAI Codex and Anthropic subscription usage via Pi's existing OAuth resolver, independently per provider with five-minute caching and failure backoff. Credentials are never sent to the browser or stored by the daemon. API-key accounts and unsupported providers have no built-in subscription lookup; extensions can still publish the neutral telemetry contract. Provider rate-limit, quota and authentication failures are shown in the activity feed with safe remediation guidance rather than raw provider payloads.
 
@@ -192,7 +192,7 @@ Each paired device shows a live **Connected** / **Disconnected** status (with th
 
 Paired devices (name, browser user agent, pairing and last-seen times, credential hash) and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json`, created with mode 0600 inside a 0700 directory and replaced atomically; a looser mode found on startup is tightened. Override the directory with `PI_COMPANION_HOME`.
 
-A phone pairs once with the daemon. Individual Pi sessions opt in using `/remote-control`.
+A phone pairs once with the daemon. Individual Pi sessions opt in using `/remote-control`. This choice is saved in Pi session history: resuming that same session restores sharing unless you used `/remote-control off`. New sessions and forks do not inherit another session's opt-in. After upgrading from 0.3.6 or earlier, enable sharing once to save this choice; older versions did not record it.
 
 Network loss and daemon restarts reconnect automatically with bounded backoff. Heartbeats detect silent connections, and returning to the foreground or restoring network access retries immediately. Pairing credentials and unsent drafts survive outages; session snapshots, pending questions, and previously loaded upload lists refresh on reconnect. Recent activity is replayed from the daemon’s bounded log, but prompts/answers are never automatically resent. A deliberate **Disconnect** waits for the device’s explicit retry; **Revoke** removes access and requires pairing again.
 
@@ -294,6 +294,8 @@ A previously cached PWA shell can also explain gateway failures on reload. If th
 
 ## Session identity
 
+Companion uses Pi's persistent session ID, so restarting, resuming, or re-enabling sharing replaces the same dashboard entry instead of creating a duplicate. Unnamed sessions use the first text-bearing user prompt in the current branch as their title (whitespace-normalized and capped at 120 characters), with the project folder as a fallback before a prompt exists. `/name` overrides that title and updates the dashboard live; clearing the name restores the prompt-derived title.
+
 Every registered Pi session publishes a compact display model to the daemon:
 
 - session name
@@ -304,7 +306,7 @@ Every registered Pi session publishes a compact display model to the daemon:
 - working directory and process id
 - remote-control state
 
-Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period. Use **Archive session** on the list or in the session menu to remove a disconnected/stopped entry. The daemon rejects removal of active, idle, waiting, or otherwise connected sessions. Archiving removes only the daemon entry; it never deletes Pi history, project files or other files on disk. Temporary uploads still follow the existing disconnect cleanup lifecycle. Reopening the Pi session and running `/companion` can register it again.
+Stopped sessions remain visible in the daemon registry so the dashboard does not lose context when a Pi process exits. Their controls are disabled and their temporary sandbox is cleaned after the reconnect grace period. Use **Archive session** on the list or in the session menu to remove a disconnected/stopped entry. The daemon rejects removal of active, idle, waiting, or otherwise connected sessions. Archiving removes only the daemon entry; it never deletes Pi history, project files or other files on disk. Temporary uploads still follow the existing disconnect cleanup lifecycle. Reopening a previously shared Pi session registers it again automatically; otherwise use `/companion`. Entries created by older versions with random IDs can be archived once disconnected.
 
 ## UI
 
