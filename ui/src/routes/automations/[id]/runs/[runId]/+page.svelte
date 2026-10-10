@@ -33,7 +33,7 @@
 </script>
 <svelte:head><title>Run result · Pi Companion</title></svelte:head>
 <div class="page automation-workspace">
-  <a class="automation-back subtle" href={'/automations/' + encodeURIComponent(id)}><Icon name="back" size={16} />Automation workspace</a>
+  <a class="automation-back btn btn-ghost" href={'/automations/' + encodeURIComponent(id)}><Icon name="back" size={16} />Automation workspace</a>
   <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">EXECUTION REPORT</span><h1>Automation run</h1><p class="subtle">A clear record of what happened, from first check to final summary.</p></div></div>{#if run}<AutomationBadge status={run.status} />{/if}</header>
   {#if error}<p class="error" role="alert">{error}</p>{/if}
   {#if run}
