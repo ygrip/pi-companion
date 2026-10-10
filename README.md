@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.2:** responsive automation and run-history tables, rounded status chips, matching clay-icon headers, and a single-column automation workspace with full-width mobile controls. **Edit automation** scrolls to and focuses the inline editor. Pull to refresh Overview, Sessions, Automations, or Settings—or use the Refresh button; unsaved settings stay intact. Camera-policy guidance now explains HTTPS proxy configuration. Existing rich results, staged job editing, optional retries, and answers-only automation sessions are retained. See [automations](docs/automations.md).
+**New in 0.3.3:** Provider usage now shows measured session tokens and cost without pretending they are subscription quotas. Compatible extensions can still supply real weekly/5-hour limits. Mobile sessions, automations and usage use cards; the overview has compact activity filters; automation buttons share a consistent style; pull-to-refresh is gesture-only. No data or provider credentials are collected by the daemon outside the already shared session metadata.
+
+**New in 0.3.2:** responsive automation and run-history tables, rounded status chips, matching clay-icon headers, and a single-column automation workspace with full-width mobile controls. **Edit automation** scrolls to and focuses the inline editor. Pull to refresh Overview, Sessions, Automations, or Settings—with a gesture; unsaved settings stay intact. Camera-policy guidance now explains HTTPS proxy configuration. Existing rich results, staged job editing, optional retries, and answers-only automation sessions are retained. See [automations](docs/automations.md).
 
 Pi Companion is deliberately not another agent runtime. Pi owns execution and conversation state. A single Rust daemon owns session discovery, pairing, temporary file exchange, browser fan-out, and the embedded web UI.
 
@@ -192,7 +194,7 @@ Network loss and daemon restarts reconnect automatically with bounded backoff. H
 
 Shared session title, model, effort and working directory refresh on Pi events and once per second while sharing, including while idle. Session detail shows context-window usage and estimated session cost. Native Pi context and recorded usage costs take precedence; independent extension reports fill unavailable fields. Missing usage is shown as unavailable, not zero.
 
-**Settings → Usage** is available on the console and paired devices. It displays the latest snapshot per provider: weekly usage, 5-hour usage when reported, reset times, source and snapshot age. Quota snapshots are not added across sessions or accounts. These are extension-reported limits, not billing totals or locally inferred quotas; providers without a quota report remain unavailable.
+**Settings → Usage** is available on the console and paired devices. It displays the latest snapshot per provider: weekly usage, 5-hour usage when reported, reset times, source and snapshot age. Quota snapshots are not added across sessions or accounts. Those limits are extension-reported, not billing totals or locally inferred quotas. Companion additionally reports actual session token consumption and cost grouped by the model's provider from Pi's recorded assistant messages; this is session-only data, not an account-wide tally. When no quota adapter is installed, 5-hour and weekly quotas still show as unavailable rather than fabricated percentages.
 
 Extensions can publish a provider-neutral event without importing Companion:
 
