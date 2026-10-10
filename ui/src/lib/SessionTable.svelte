@@ -34,6 +34,27 @@
   </table>
 </div>
 
+<div class="mobile-session-cards" aria-label={label}>
+  {#each sessions as session (session.id)}
+    {@const waiting = companion.pendingAsks(session.id)}
+    <a class="mobile-session-card" href="/sessions/{encodeURIComponent(session.id)}">
+      <div class="mobile-session-head">
+        <div class="mobile-session-name">
+          <strong>{sessionTitle(session)}</strong>
+          {#if session.readOnly || session.automationId}<AutomatedSessionBadge />{/if}
+          {#if waiting}<span class="question-count"><Icon name="question" size={14} />{waiting} {waiting === 1 ? 'question waiting' : 'questions waiting'}</span>{/if}
+        </div>
+        <span class="badge" class:ok={session.status === 'active'} class:accent={session.status === 'idle'}><span class="dot {session.status}" aria-hidden="true"></span>{statusLabel[session.status]}</span>
+      </div>
+      <div class="mobile-session-path"><Icon name="folder" size={15} /><code>{prettyPath(session.cwd)}</code></div>
+      <div class="mobile-session-bottom">
+        <span class="mobile-session-model">{session.mainModel ?? 'Model not reported'}{#if session.effort}<small> · {session.effort}</small>{/if}</span>
+        <span class="mobile-session-arrow" aria-hidden="true"><Icon name="chevron" size={17} /></span>
+      </div>
+    </a>
+  {/each}
+</div>
+
 <style>
   .session-table { min-width: 0; overflow: hidden; border-radius: 20px; background: var(--surface); }
   table { width: 100%; table-layout: fixed; border-collapse: collapse; text-align: left; }
@@ -81,5 +102,24 @@
     .workspace-cell { grid-column: 1 / -1; }
     .state-cell { align-self: start; padding-top: 8px; }
     .action-cell { display: none; }
+  }
+
+  .mobile-session-cards { display: none; }
+  @media (max-width: 1100px) {
+    .session-table { display: none; }
+    .mobile-session-cards { display: grid; gap: 12px; min-width: 0; }
+    .mobile-session-card { display: grid; gap: 14px; min-width: 0; padding: 18px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text); text-decoration: none; box-shadow: var(--clay-raised); }
+    .mobile-session-card:hover { background: var(--surface-2); border-color: var(--accent-line); }
+    .mobile-session-card:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .mobile-session-head { display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; }
+    .mobile-session-name { display: grid; gap: 5px; flex: 1; min-width: 120px; }
+    .mobile-session-name strong { font-size: .98rem; line-height: 1.4; overflow-wrap: anywhere; }
+    .mobile-session-head > .badge { flex: none; }
+    .mobile-session-path { display: flex; align-items: start; gap: 8px; color: var(--text-2); font-size: .77rem; min-width: 0; }
+    .mobile-session-path :global(svg) { flex: none; color: var(--accent-text); }
+    .mobile-session-path code { white-space: normal; overflow-wrap: anywhere; }
+    .mobile-session-bottom { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding-top: 12px; border-top: 1px solid var(--border); color: var(--text-2); font-size: .78rem; }
+    .mobile-session-model { min-width: 0; overflow-wrap: anywhere; }
+    .mobile-session-arrow { flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; background: var(--surface-2); }
   }
 </style>
