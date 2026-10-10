@@ -10,7 +10,7 @@
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { Settings, SettingsResponse } from '#lib/types.ts';
-  import { providerSnapshots, reportedTime, snapshotStatus, usagePercent } from '#lib/usage.ts';
+  import { estimatedCost, providerSnapshots, reportedTime, snapshotStatus, usagePercent } from '#lib/usage.ts';
 
   let tab = $state<'general' | 'usage'>('general');
   let usageNow = $state(Date.now());
@@ -222,8 +222,8 @@
     <section class="card tile usage-section" aria-labelledby="provider-usage-heading">
       <div class="section-copy">
         <h2 id="provider-usage-heading">Provider usage</h2>
-        <p class="muted">Latest account-limit snapshots relayed by shared sessions and compatible extensions. These percentages are not added across sessions.</p>
-        <p class="subtle">Live reports update automatically. An em dash means the provider has not reported that window.</p>
+        <p class="muted">Provider quotas come from compatible extensions; recorded tokens and cost come directly from shared Pi sessions.</p>
+        <p class="subtle">Account limits and session totals are different. Missing quotas stay unavailable, never estimated from token usage.</p>
       </div>
       {#if companion.connection !== 'online'}
         <p class="usage-notice" role="status">Live updates are disconnected. Showing the last available snapshots.</p>
@@ -234,21 +234,37 @@
         <div class="usage-scroll" role="region" aria-label="Provider usage table, scroll horizontally for all columns" tabindex="0">
           <table class="usage-table">
             <caption>Weekly and 5-hour usage by provider</caption>
-            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly usage</th><th scope="col">5-hour usage</th><th scope="col">Snapshot</th></tr></thead>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly usage</th><th scope="col">5-hour usage</th><th scope="col">Session tokens</th><th scope="col">Session cost</th><th scope="col">Snapshot</th></tr></thead>
             <tbody>
               {#each usage as snapshot (snapshot.provider.toLowerCase())}
                 <tr>
                   <th scope="row"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></th>
                   <td><strong>{usagePercent(snapshot.weekly)}</strong>{#if snapshot.weekly?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.weekly.resetsAt)}</span>{/if}</td>
                   <td><strong>{usagePercent(snapshot.fiveHour)}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
+                  <td>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</td>
+                  <td>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</td>
                   <td><span>{reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span></td>
                 </tr>
               {/each}
             </tbody>
           </table>
         </div>
+        <div class="usage-cards" aria-label="Provider usage">
+          {#each usage as snapshot (snapshot.provider.toLowerCase())}
+            <article class="usage-card">
+              <div class="usage-card-head"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></div>
+              <dl>
+                <div><dt>Weekly quota</dt><dd>{usagePercent(snapshot.weekly)}{#if snapshot.weekly?.resetsAt}<small>Resets {reportedTime(snapshot.weekly.resetsAt)}</small>{/if}</dd></div>
+                <div><dt>5-hour quota</dt><dd>{usagePercent(snapshot.fiveHour)}{#if snapshot.fiveHour?.resetsAt}<small>Resets {reportedTime(snapshot.fiveHour.resetsAt)}</small>{/if}</dd></div>
+                <div><dt>Session tokens</dt><dd>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</dd></div>
+                <div><dt>Session cost</dt><dd>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</dd></div>
+              </dl>
+              <div class="usage-card-foot">{snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>
+            </article>
+          {/each}
+        </div>
       {:else}
-        <div class="usage-empty"><Icon name="activity" /><h3>No provider usage reported yet</h3><p class="muted">Share a Pi session with <code>/companion</code> and use an extension that reports provider limits. Session token and cost estimates do not indicate weekly or 5-hour account usage.</p></div>
+        <div class="usage-empty"><Icon name="activity" /><h3>No provider usage reported yet</h3><p class="muted">Share a Pi session with <code>/companion</code> and send a model request to see recorded usage. Account quota limits additionally require a compatible reporting extension.</p></div>
       {/if}
     </section>
   </div>
@@ -271,7 +287,8 @@
   .settings-tabs button:focus-visible, .usage-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   .usage-section { display: grid; gap: 20px; padding: 24px; min-width: 0; }
   .usage-scroll { max-width: 100%; overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
-  .usage-table { width: 100%; min-width: 640px; border-collapse: collapse; text-align: left; font-size: 0.88rem; }
+  .usage-cards { display: none; }
+  .usage-table { width: 100%; min-width: 850px; border-collapse: collapse; text-align: left; font-size: 0.88rem; }
   .usage-table caption { padding: 12px 16px; text-align: left; color: var(--text-2); font-size: 0.82rem; }
   .usage-table th, .usage-table td { padding: 14px 16px; border-top: 1px solid var(--border); vertical-align: top; }
   .usage-table thead { color: var(--text-2); background: var(--surface-2); }
@@ -281,6 +298,19 @@
   .usage-notice { padding: 12px 16px; border: 1px solid var(--border); border-radius: 12px; color: var(--text-2); background: var(--surface-2); font-size: 0.88rem; }
   .usage-empty { display: grid; gap: 8px; padding: 16px 0; justify-items: start; }
   .usage-empty h3 { margin: 0; font-size: 1rem; }
+  @media (max-width: 760px) {
+    .usage-scroll { display: none; }
+    .usage-cards { display: grid; gap: 12px; min-width: 0; }
+    .usage-card { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: var(--clay-soft); }
+    .usage-card-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+    .usage-card-head strong { font-size: .95rem; overflow-wrap: anywhere; }
+    .usage-card-head .subtle { font-size: .72rem; }
+    .usage-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin: 0; }
+    .usage-card dt { color: var(--text-2); font-size: .72rem; margin-bottom: 5px; }
+    .usage-card dd { margin: 0; font-size: 1rem; font-weight: 650; overflow-wrap: anywhere; }
+    .usage-card dd small { display: block; margin-top: 4px; font-size: .7rem; font-weight: 400; color: var(--text-2); }
+    .usage-card-foot { padding-top: 10px; border-top: 1px solid var(--border); font-size: .71rem; color: var(--text-2); }
+  }
 
   .section {
     display: grid;
