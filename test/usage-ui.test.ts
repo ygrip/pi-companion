@@ -59,6 +59,35 @@ test('provider snapshots use the newest report from any extension or session and
   assert.equal(rows[1].fiveHour, undefined, 'do not silently combine different provider snapshots');
 });
 
+test('session consumption is visible even without quota, while older real quotas remain authoritative', () => {
+  const rows = providerSnapshots([
+    session('quota', [{ provider: 'Codex', source: 'quota plugin', updatedAt: at, weekly: { usedPercent: 19 } }]),
+    session('local', [{ provider: 'codex', source: 'Pi session', updatedAt: '2026-10-07T10:02:00Z', sessionTokens: 1234, sessionCost: 0 }])
+  ]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].weekly?.usedPercent, 19);
+  assert.equal(rows[0].source, 'quota plugin');
+  assert.equal(rows[0].sessionTokens, 1234);
+  assert.equal(rows[0].sessionCost, 0);
+  const localOnly = providerSnapshots([session('local', [{ provider: 'anthropic', updatedAt: at, sessionTokens: 35 }])]);
+  assert.equal(localOnly[0].sessionTokens, 35);
+  assert.equal(localOnly[0].weekly, undefined);
+});
+
+test('mobile usage has compact cards and pull-to-refresh has no redundant button', () => {
+  const settings = readFileSync(new URL('../ui/src/routes/settings/+page.svelte', import.meta.url), 'utf8');
+  assert.match(settings, /class="usage-cards"/);
+  assert.match(settings, /Session tokens/);
+  assert.match(settings, /Session cost/);
+  const refresh = readFileSync(new URL('../ui/src/lib/PullToRefresh.svelte', import.meta.url), 'utf8');
+  assert.doesNotMatch(refresh, /<button/);
+  assert.match(refresh, /touchend/);
+  for (const file of ['AutomationTable.svelte', 'SessionTable.svelte']) {
+    const source = readFileSync(new URL('../ui/src/lib/' + file, import.meta.url), 'utf8');
+    assert.match(source, /mobile-session-cards|routine-cards/);
+  }
+});
+
 test('invalid timestamps cannot displace dated provider snapshots and active copies win ties', () => {
   const rows = providerSnapshots([
     session('invalid', [{ provider: 'OpenAI', updatedAt: 'bad', weekly: { usedPercent: 80 } }]),
