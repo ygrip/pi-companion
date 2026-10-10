@@ -103,4 +103,12 @@
   .automation-detail .automation-actions > .btn { width: 100%; }
   .automation-detail .info-pairs { grid-template-columns: 1fr; }
 }
+@media(max-width: 760px) {
+  /* Run history reads as a compact card on phones rather than stacked table cells. */
+  .automation-detail .routine-table tr { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+  .automation-detail .routine-table .title-cell { grid-column: 1 / -1; grid-row: 1; }
+  .automation-detail .routine-table .title-cell .row-link { font-size: .9rem; }
+  .automation-detail .routine-table td[data-label="Duration"] { grid-column: 1; grid-row: 2; }
+  .automation-detail .routine-table .status-cell { grid-column: 2; grid-row: 2; justify-self: end; }
+}
 @media(prefers-reduced-motion: reduce) { .automation-workspace * { transition: none !important; animation: none !important; } }
