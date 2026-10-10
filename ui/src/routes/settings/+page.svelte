@@ -243,7 +243,10 @@
                   <td><strong>{usagePercent(snapshot.fiveHour)}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
                   <td>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</td>
                   <td>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</td>
-                  <td><span>{reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span></td>
+                  <td>
+                    {#if snapshot.weekly || snapshot.fiveHour}<span>Quota: {reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span>{/if}
+                    {#if snapshot.sessionUpdatedAt}<span>Session: {reportedTime(snapshot.sessionUpdatedAt)}</span><span class="subtle">{snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)}</span>{/if}
+                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -259,7 +262,10 @@
                 <div><dt>Session tokens</dt><dd>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</dd></div>
                 <div><dt>Session cost</dt><dd>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</dd></div>
               </dl>
-              <div class="usage-card-foot">{snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>
+              <div class="usage-card-foot">
+                {#if snapshot.weekly || snapshot.fiveHour}<div>Quota: {snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>{/if}
+                {#if snapshot.sessionUpdatedAt}<div>Session: {snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)} · {reportedTime(snapshot.sessionUpdatedAt)}</div>{/if}
+              </div>
             </article>
           {/each}
         </div>

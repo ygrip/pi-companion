@@ -123,4 +123,11 @@ test('native assistant usage populates provider session totals without inventing
   const merged = relay.snapshot(ctx, 3000).providers?.find(provider => provider.provider === 'openai-codex');
   assert.equal(merged?.weekly?.usedPercent, 23);
   assert.equal(merged?.sessionTokens, 450);
+  assert.equal(merged?.updatedAt, new Date(2500).toISOString());
+  assert.equal(merged?.sessionUpdatedAt, new Date(1000).toISOString());
+  entries.push({ type: 'message', message: { role: 'assistant', provider: 'openai-codex', usage: { totalTokens: 50, cost: { total: 0.01 } } } });
+  const changed = relay.snapshot(ctx, 4000).providers?.find(provider => provider.provider === 'openai-codex');
+  assert.equal(changed?.sessionTokens, 500);
+  assert.equal(changed?.updatedAt, merged?.updatedAt, 'native updates must not freshen unchanged quota');
+  assert.equal(changed?.sessionUpdatedAt, new Date(4000).toISOString());
 });

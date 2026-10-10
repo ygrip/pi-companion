@@ -40,7 +40,7 @@ export function reportedTime(value: string | undefined): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unknown';
 }
 
-export type ProviderSnapshot = ProviderUsage & { ended: boolean };
+export type ProviderSnapshot = ProviderUsage & { ended: boolean; sessionEnded?: boolean };
 
 /** Account limits are snapshots, not additive session usage. The newest report wins. */
 export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
@@ -62,7 +62,8 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
       const key = provider.toLowerCase();
       const next = { ...snapshot, provider, ended: session.status === 'stopped' };
       if ((snapshot.weekly || snapshot.fiveHour) && newer(next, quota.get(key))) quota.set(key, next);
-      if ((nonnegative(snapshot.sessionTokens) || nonnegative(snapshot.sessionCost)) && newer(next, local.get(key))) local.set(key, next);
+      const consumption = { ...next, updatedAt: snapshot.sessionUpdatedAt ?? snapshot.updatedAt };
+      if ((nonnegative(snapshot.sessionTokens) || nonnegative(snapshot.sessionCost)) && newer(consumption, local.get(key))) local.set(key, consumption);
     }
   }
   return [...new Set([...quota.keys(), ...local.keys()])].map(key => {
@@ -70,7 +71,8 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
     const consumption = local.get(key);
     const chosen = (limit ?? consumption)!;
     return { ...chosen,
-      ...(consumption && { sessionTokens: consumption.sessionTokens, sessionCost: consumption.sessionCost })
+      ...(consumption && { sessionTokens: consumption.sessionTokens, sessionCost: consumption.sessionCost,
+        sessionUpdatedAt: consumption.updatedAt, sessionEnded: consumption.ended })
     };
   }).sort((a, b) => a.provider.localeCompare(b.provider));
 }

@@ -171,6 +171,7 @@ export class TelemetryRelay {
         const old = providers.get(provider);
         providers.set(provider, {
           ...old, provider, source: old?.source ?? "Pi session", updatedAt: old?.updatedAt ?? updatedAt,
+          sessionUpdatedAt: updatedAt,
           ...(total.hasTokens ? { sessionTokens: total.tokens } : {}),
           ...(total.hasCost ? { sessionCost: total.cost } : {})
         });

@@ -46,6 +46,8 @@ export type ProviderUsage = {
   /** Observed consumption in this shared Pi session, not account quota utilization. */
   sessionTokens?: number;
   sessionCost?: number;
+  /** Native consumption freshness, independent of the account quota report. */
+  sessionUpdatedAt?: string;
 };
 export type SessionTelemetry = {
   context?: { tokens?: number; window?: number; percent?: number; source?: string };

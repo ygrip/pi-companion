@@ -37,6 +37,7 @@ export type ProviderUsage = {
   fiveHour?: UsageWindow;
   sessionTokens?: number;
   sessionCost?: number;
+  sessionUpdatedAt?: string;
 };
 
 export type SessionTelemetry = {

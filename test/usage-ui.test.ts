@@ -74,6 +74,28 @@ test('session consumption is visible even without quota, while older real quotas
   assert.equal(localOnly[0].weekly, undefined);
 });
 
+test('native totals use their own freshness while quota freshness and session status stay independent', () => {
+  const active = session('active', [{ provider: 'anthropic', source: 'quota', updatedAt: at,
+    weekly: { usedPercent: 20 }, sessionTokens: 5000, sessionCost: 1,
+    sessionUpdatedAt: '2026-10-07T10:10:00.000Z' }]);
+  const stopped = session('stopped', [{ provider: 'anthropic', updatedAt: '2026-10-07T10:05:00.000Z',
+    sessionTokens: 100, sessionCost: 0.01 }], 'stopped');
+  for (const sessions of [[active, stopped], [stopped, active]]) {
+    const row = providerSnapshots(sessions)[0];
+    assert.equal(row.sessionTokens, 5000);
+    assert.equal(row.sessionCost, 1);
+    assert.equal(row.updatedAt, at);
+    assert.equal(row.sessionUpdatedAt, '2026-10-07T10:10:00.000Z');
+    assert.equal(row.sessionEnded, false);
+    assert.equal(row.weekly?.usedPercent, 20);
+  }
+  stopped.telemetry!.providers![0].sessionUpdatedAt = '2026-10-07T10:11:00.000Z';
+  const row = providerSnapshots([active, stopped])[0];
+  assert.equal(row.sessionTokens, 100);
+  assert.equal(row.sessionEnded, true, 'stopped consumption must not inherit the quota session status');
+  assert.equal(row.ended, false);
+});
+
 test('mobile usage has compact cards and pull-to-refresh has no redundant button', () => {
   const settings = readFileSync(new URL('../ui/src/routes/settings/+page.svelte', import.meta.url), 'utf8');
   assert.match(settings, /class="usage-cards"/);
