@@ -49,7 +49,7 @@
 <svelte:head><title>Automations · Pi Companion</title></svelte:head>
 <div class="page automation-workspace">
   <PullToRefresh onrefresh={load} />
-  <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">YOUR WORK, ON AUTOPILOT</span><h1>Automations</h1><p class="subtle">Small routines. More room for the work that matters.</p></div></div>{#if canEdit}<button class="btn-bento primary" aria-expanded={creating} onclick={() => creating = !creating}><Icon name="plus" />{creating ? 'Close editor' : 'Create automation'}</button>{/if}</header>
+  <header class="automation-hero"><div class="hero-copy"><img class="clay-icon" src={clayIcon} alt="" /><div><span class="eyebrow">YOUR WORK, ON AUTOPILOT</span><h1>Automations</h1><p class="subtle">Small routines. More room for the work that matters.</p></div></div>{#if canEdit}<button class="btn btn-primary" aria-expanded={creating} onclick={() => creating = !creating}><Icon name="plus" />{creating ? 'Close editor' : 'Create automation'}</button>{/if}</header>
   {#if creating && canEdit}<AutomationEditor busy={saving} onsave={create} oncancel={() => creating = false} />{/if}
   {#if error}<div class="bento-card automation-empty" role="alert"><Icon name="alert" /><p>{error}</p><button class="btn" onclick={() => void load().catch(() => {})}>Try again</button></div>
   {:else if loading}<div class="bento-card automation-empty" role="status">Loading your automations…</div>
