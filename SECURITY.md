@@ -24,6 +24,8 @@ Strict Origin checks: WebSocket upgrades and POST/DELETE requests must carry an 
 
 Pairing invitations are single-use and expire (5 minutes by default). The short typed code is rate limited: ten wrong codes within ten minutes withdraw every open invitation and further code claims get HTTP 429 until the window passes.
 
+Extension startup may download/start the daemon and register a per-user login service (launchd, systemd user service, or Windows scheduled task), but never activates normal session sharing. Services run with the current user's permissions. Downloads are SHA256-verified and version-checked before an older daemon is stopped. `PI_COMPANION_AUTOSTART=0` disables extension-managed starts/upgrades; `PI_COMPANION_SERVICE=0` disables new service registration. Neither setting uninstalls an existing service; see README for removal instructions.
+
 Paired devices can see only sessions that explicitly enabled remote control, including daemon-owned automation sessions created by an authorized automation run. Paired devices may read automation definitions/history and start/stop existing automations, but cannot create, edit, delete, or enable/disable them.
 
 Revoking a device deletes its credential hash and closes its open connections immediately (WebSocket close 4003). Disconnecting closes them without deleting the credential (close 4001).

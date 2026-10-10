@@ -78,7 +78,7 @@ The extension registers `companion_automation` and ships the `companion-automati
 {"action":"create","automation":{"name":"Check","enabled":true,"schedule":null,"preconditions":[],"actions":[{"type":"command","command":"git","args":["status","--short"],"cwd":"/absolute/project"}],"postActions":[]}}
 ```
 
-Tools only contact an already-running daemon. They never download/start one or activate sharing for a normal Pi session. Start Companion explicitly via `/companion` or `npm run serve` first. Inspect the final run status rather than assuming an accepted start means success.
+Tools only contact an already-running daemon. They never download/start one or activate sharing for a normal Pi session. The extension checks/starts the daemon automatically on load, without sharing a session. Standalone MCP users can start it via `npm run serve`. Inspect the final run status rather than assuming an accepted start means success.
 
 ## Standalone MCP
 

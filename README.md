@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.5:** Shared files now have authenticated Download buttons, filename filtering, and You / Agent source badges. Custom terminal popups retain the scrollable claymorphism viewer and touch-friendly controls introduced in 0.3.4.
+**New in 0.3.6:** The extension automatically ensures the background daemon is available, while sessions stay private until `/remote-control`. Per-user services restart the daemon; concurrent startup is locked and upgrades verify the replacement first. Subscription limits are tracked separately for supported OAuth providers, and provider failures appear as clear messages in the activity feed.
+
+When a session is shared, Companion fetches OpenAI Codex and Anthropic subscription usage via Pi's existing OAuth resolver, independently per provider with five-minute caching and failure backoff. Credentials are never sent to the browser or stored by the daemon. API-key accounts and unsupported providers have no built-in subscription lookup; extensions can still publish the neutral telemetry contract. Provider rate-limit, quota and authentication failures are shown in the activity feed with safe remediation guidance rather than raw provider payloads.
 
 Filename search is case-insensitive. New browser uploads are marked **You**; local agent uploads can declare **Agent** by posting to `/api/sessions/{session_id}/files?source=agent`. This query is honored only on the local admin endpoint; remote uploads always remain user uploads. Older files without provenance show **Unknown**. Source badges describe upload provenance, not file-content authorship.
 
@@ -29,9 +31,9 @@ or straight from git:
 
     pi install git:github.com/ygrip/pi-companion
 
-Then start Pi as usual. Installing the Pi extension is enough for normal use: the extension does not probe, connect to, download, or start a daemon until you run `/companion` in that session. On first use it downloads the matching sha256-verified daemon binary from GitHub Releases, caches it under `~/.pi/agent/pi-companion/bin/<version>/`, and reuses the same daemon across Pi sessions.
+Then start Pi as usual. When the extension loads, it checks the local daemon and starts it if needed, downloading the matching sha256-verified release into `~/.pi/agent/pi-companion/bin/<version>/`. Daemon startup does **not** share your session.
 
-Use `/companion` in each session you want to share with paired devices. It enables remote access for that session and prints the local dashboard address. `/companion off` stops sharing that session.
+Use `/remote-control` in any session to toggle sharing; `/remote-control on` and `/remote-control off` are explicit alternatives. No `/companion` prerequisite. `/companion` and `/companion off` remain compatibility aliases.
 
 You do **not** need to run `pi-companion-server` manually for a normal npm install. Manual daemon startup is mainly for local development, debugging, or when `PI_COMPANION_AUTOSTART=0` is set.
 
@@ -82,25 +84,19 @@ For a normal install:
 
     pi install npm:@yunazgr/pi-companion
 
-That is enough. Start Pi normally, then run `/companion` in the session you want to share. Only then does the extension connect or start the daemon on demand and keep its daemon version aligned with the installed extension. Updating the Pi package is therefore enough to update both pieces. You do not need a separate terminal, launch agent, system service, or manual `pi-companion-server` process.
+Start Pi normally; daemon availability is automatic. Sessions stay private until `/remote-control` enables sharing. Updating the package and reloading Pi upgrades the daemon to the matching release; older Pi processes do not downgrade a newer daemon.
 
 The lifecycle is:
 
-1. A Pi session loads the extension without daemon network or startup work.
-2. You run `/companion` in that session; the extension probes `http://127.0.0.1:43721`.
-3. If the daemon is already running, this opted-in session connects to it.
-4. If not, the extension resolves the daemon binary, downloading the matching GitHub Release on first use if necessary.
-5. It starts the daemon detached in the background.
-6. Other Pi sessions reuse the same daemon only after their own `/companion` command. New sessions start disconnected, even when another session has enabled Companion.
-7. On extension upgrades, the extension compares its package version with the running daemon. If they differ, it stops the old local daemon, resolves/downloads the matching release, and starts the new daemon automatically.
-8. The daemon keeps running independently until it is stopped or the machine restarts.
+1. Extension startup probes the daemon and repeats the check every 30 seconds while Pi is open, without publishing this session.
+2. A process-owned startup lock serializes concurrent sessions, including long downloads. The daemon also refuses duplicate port binds.
+3. Resolve/download and version-check the replacement **before** stopping the existing daemon. Missing releases or invalid binaries leave the old daemon untouched; there is no latest-release fallback.
+4. When starting a managed daemon, register one per-user background service: macOS `launchd`, Linux `systemd --user`, or Windows Task Scheduler. Its supervisor restarts the daemon after crashes and reads the updated binary configuration after upgrades.
+5. If service registration is unavailable (for example no Linux user systemd or insufficient Windows permissions), warn and start a detached daemon instead. Extension-load and periodic checks remain the fallback.
+6. `/remote-control` toggles only the current session. Session switches reset sharing; turning sharing off never shuts down the daemon.
+7. Upgrades close sockets so browsers and opted-in Pi sessions reconnect. Active automation runs are stopped during daemon shutdown; the in-memory feed and temporary-file registry do not survive daemon replacement.
 
-There is exactly one daemon per machine, shared by every Pi session. The extension manages it with no configuration:
-
-1. It probes http://127.0.0.1:43721. If anything answers (a daemon started by another session, or one you ran yourself with cargo run), it just connects. It never starts a second copy.
-2. If nothing answers, one Pi session takes a lock (so several sessions starting at once don't race), launches the daemon detached, and waits for it to be ready. The others wait for that daemon.
-3. If a live connection drops, the extension waits 20 seconds before launching a replacement, so restarting a dev daemon doesn't get pre-empted.
-4. The daemon also refuses to run twice: if its ports are taken it prints a message and exits 0.
+Services run with your user privileges, not administrator/root privileges. Login/logout behavior depends on the OS: Linux may need user lingering for logout persistence, and Windows scheduling may be restricted by policy. A pre-existing same-version manual daemon is reused without takeover; service registration happens when Companion needs to start or upgrade it. Package installation alone does not execute a downloader—Pi must load the extension once.
 
 The daemon binary is resolved in this order:
 
@@ -112,13 +108,17 @@ The daemon binary is resolved in this order:
 | 4 | pi-companion-server on PATH |
 | 5 | download of the GitHub release matching the package version, verified against SHA256SUMS, then cached |
 
+To remove background startup, first set `PI_COMPANION_SERVICE=0` for Pi, then disable the per-user service: macOS `launchctl bootout gui/$(id -u)/dev.pi-companion.daemon` and remove `~/Library/LaunchAgents/dev.pi-companion.daemon.plist`; Linux `systemctl --user disable --now pi-companion.service` and remove `~/.config/systemd/user/pi-companion.service`; Windows `schtasks /End /TN "Pi Companion"` then `schtasks /Delete /TN "Pi Companion" /F`. Package removal alone does not uninstall an OS service. The supervisor/configuration lives under the daemon home directory's `service/` folder.
+
 Optional environment variables (none are required):
 
 | Variable | Effect |
 |---|---|
 | PI_COMPANION_SERVER | use this daemon binary |
 | PI_COMPANION_URL | daemon WebSocket URL (default ws://127.0.0.1:43721); autostart only happens for loopback URLs |
-| PI_COMPANION_AUTOSTART=0 | never launch a daemon, only connect |
+| PI_COMPANION_AUTOSTART=0 | disable automatic starts/upgrades and startup monitoring (does not uninstall a previously registered service) |
+| PI_COMPANION_SERVICE=0 | use detached startup instead of registering a background service (does not uninstall an existing service) |
+| PI_COMPANION_QUOTAS=0 | disable Companion's OAuth subscription-limit requests |
 | PI_COMPANION_PUBLIC_URL | daemon-side: public URL embedded in pairing QR codes |
 | PI_COMPANION_ALLOWED_ORIGINS | daemon-side: extra comma-separated browser origins accepted besides the loopback addresses and the public URL |
 | PI_COMPANION_ADMIN_ADDR, PI_COMPANION_DEVICE_ADDR | daemon-side: loopback listen addresses (default `127.0.0.1:43721` / `127.0.0.1:43722`), for running a second daemon next to the usual one, e.g. for screenshots. The extension still looks for 43721 unless `PI_COMPANION_URL` points elsewhere |
@@ -147,7 +147,7 @@ Inside any Pi session:
     /companion off      # stop sharing this session
     /remote-control     # toggle sharing on/off
 
-A paired device cannot access sessions that have not explicitly enabled remote control. Turning `/remote-control` off or running `/companion off` closes this session’s daemon channel: it disappears from paired devices and becomes **Ended** on the local dashboard. Pi continues locally; local Pi history is untouched. Sharing does not reconnect itself while disabled. After the initial opt-in, `/remote-control` can enable sharing again; `/companion` can also resume it. Temporary uploads follow the usual disconnected-session cleanup below.
+A paired device cannot access sessions that have not explicitly enabled remote control. Turning `/remote-control` off or running `/companion off` closes this session’s daemon channel: it disappears from paired devices and becomes **Ended** on the local dashboard. Pi continues locally; local Pi history is untouched. Sharing does not reconnect itself while disabled. `/remote-control` can enable sharing directly, including on a fresh session; `/companion` can also resume it. Temporary uploads follow the usual disconnected-session cleanup below.
 
 ## Questions from Pi
 
@@ -192,7 +192,7 @@ Each paired device shows a live **Connected** / **Disconnected** status (with th
 
 Paired devices (name, browser user agent, pairing and last-seen times, credential hash) and settings survive daemon restarts. They are stored in `~/.pi/agent/pi-companion/state.json`, created with mode 0600 inside a 0700 directory and replaced atomically; a looser mode found on startup is tightened. Override the directory with `PI_COMPANION_HOME`.
 
-A phone pairs once with the daemon. Individual Pi sessions still opt in using /companion.
+A phone pairs once with the daemon. Individual Pi sessions opt in using `/remote-control`.
 
 Network loss and daemon restarts reconnect automatically with bounded backoff. Heartbeats detect silent connections, and returning to the foreground or restoring network access retries immediately. Pairing credentials and unsent drafts survive outages; session snapshots, pending questions, and previously loaded upload lists refresh on reconnect. Recent activity is replayed from the daemon’s bounded log, but prompts/answers are never automatically resent. A deliberate **Disconnect** waits for the device’s explicit retry; **Revoke** removes access and requires pairing again.
 
@@ -426,7 +426,7 @@ To test the same behavior as a published install, stop any development daemon fi
 
     pi install npm:@yunazgr/pi-companion
 
-Then start Pi and run `/companion`. The extension downloads and starts the released daemon on demand; merely starting Pi does neither.
+Then start Pi. Extension startup ensures the released daemon is available; use `/remote-control` only for sessions you want to share.
 
 ## Releases
 
@@ -440,7 +440,7 @@ Before publishing, the workflow requires X.Y.Z to match both package.json and se
 
 Only after the GitHub Release exists, the same tag publishes @yunazgr/pi-companion to npm with provenance through npm Trusted Publishing (GitHub OIDC). No long-lived NPM_TOKEN is required. The trusted publisher should point to GitHub owner ygrip, repository pi-companion, workflow release.yml. Git installs need no npm credential.
 
-On first use the extension downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`), verifies it against `SHA256SUMS`, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. On later extension upgrades it detects a running daemon with a different version, stops it locally, and starts the matching daemon automatically. A git install from a branch that is ahead of the newest tag falls back to the latest release.
+On extension load, Companion downloads `pi-companion-server-<os>-<arch>` for its own package version (`releases/download/v<version>/`) if needed, verifies `SHA256SUMS` and the binary version, and caches it under `~/.pi/agent/pi-companion/bin/<version>/`. Upgrades prepare the replacement before gracefully stopping the older daemon. Git installs ahead of the newest release must provide a matching local build; missing releases never trigger a downgrade or shutdown.
 
 ## Security boundary
 

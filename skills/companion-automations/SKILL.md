@@ -5,7 +5,7 @@ description: Create, update, delete, enable, disable, run, stop, and inspect Pi 
 
 # Companion automations
 
-Use `companion_automation` (native extension or standalone MCP surface). It talks only to the local admin daemon; it does not launch the daemon or enable session sharing. If unavailable, ask the user to start Companion with `/companion` or `npm run serve`.
+Use `companion_automation` (native extension or standalone MCP surface). It talks only to the local admin daemon; it does not launch the daemon or enable session sharing. The Pi extension checks/starts the daemon on load independently of session sharing. If unavailable, reload the extension or start a development daemon with `npm run serve`. `/remote-control` is only needed to share a normal session.
 
 ## Safety
 

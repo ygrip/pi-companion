@@ -89,6 +89,8 @@ function reduce(entries: ActivityEntry[], message: any): ActivityEntry[] {
       next[index] = { ...current, status, body: result ? current.body + (current.body ? '\n→ ' : '') + result : current.body };
       return next;
     }
+    case 'provider.error':
+      return cap([...entries, entry('error', String(payload.title ?? 'Provider error') + ' · ' + String(payload.provider ?? 'unknown'), String(payload.message ?? 'The provider could not complete this request.'))]);
     case 'user.message':
       return cap([...entries, entry('user', String(payload.title ?? 'You'), String(payload.text ?? ''))]);
     case 'agent.start':

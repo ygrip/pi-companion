@@ -318,6 +318,31 @@ async fn protocol_relays_registration_updates_and_commands() {
 }
 
 #[tokio::test]
+async fn daemon_shutdown_releases_live_browser_and_bridge_sockets() {
+    let state = test_state();
+    let addr = serve(local_router(state.clone())).await;
+    let mut browser = ws_connect(addr, "/ws/browser", None, None).await.unwrap();
+    next_matching(&mut browser, |value| value["type"] == "resync").await;
+    let mut agent = bridge(addr, "restart", true).await;
+    state.shutdown_tx.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(message) = browser.next().await {
+            match message {
+                Ok(WsMessage::Close(Some(frame))) => { assert_eq!(u16::from(frame.code), 1012); break; }
+                Ok(WsMessage::Close(None)) | Err(_) => break,
+                _ => {}
+            }
+        }
+    }).await.expect("browser must disconnect on restart");
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(Ok(message)) = agent.next().await {
+            if matches!(message, WsMessage::Close(_)) { break; }
+        }
+    }).await.expect("bridge should release on restart");
+    assert!(state.sessions.read().await["restart"].command_tx.is_none());
+}
+
+#[tokio::test]
 async fn protocol_ignores_malformed_browser_frames() {
     let state = test_state();
     let addr = serve(local_router(state.clone())).await;

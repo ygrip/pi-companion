@@ -87,6 +87,19 @@ export class TelemetryRelay {
   status(key: string, value: string | undefined) {
     if (!value) { this.sources.delete("status:" + key); return; }
     const plain = value.replace(/\x1b\[[0-9;]*m/g, "");
+    if (key.startsWith('pi-jar.quota.')) {
+      try {
+        const quota = record(JSON.parse(plain));
+        const expiresAt = number(quota?.expiresAt);
+        if (!quota || !expiresAt || expiresAt <= Date.now() || expiresAt > Date.now() + 300_000) return;
+        const convert = (value: unknown) => {
+          const item = record(value);
+          return item ? { usedPercent: item.used, resetsAt: typeof item.resetsAt === 'number' ? new Date(item.resetsAt).toISOString() : undefined } : undefined;
+        };
+        this.ingest({ providers: [{ provider: key.slice('pi-jar.quota.'.length), weekly: convert(quota.week), fiveHour: convert(quota.fiveHour) }] }, 'status:' + key);
+      } catch { /* Malformed or expired quota reports are not authoritative. */ }
+      return;
+    }
     const telemetry: Record<string, unknown> = { source: "status:" + key };
     const context = plain.match(/(?:context|ctx)\s*[:=]?\s*([\d.]+)%/i);
     const labelledCost = plain.match(/cost\s*[:=]?\s*\$([\d.]+)/i);

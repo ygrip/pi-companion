@@ -42,7 +42,8 @@ const extension = dataModule(transpile('../src/index.ts')
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
   .replace('from "./bridge.js"', `from ${JSON.stringify(bridge)}`)
   .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
-  .replace('from "./automation.ts"', `from ${JSON.stringify(new URL('../src/automation.ts', import.meta.url).href)}`));
+  .replace('from "./automation.ts"', `from ${JSON.stringify(new URL('../src/automation.ts', import.meta.url).href)}`)
+  .replace('from "./provider-status.ts"', `from ${JSON.stringify(new URL('../src/provider-status.ts', import.meta.url).href)}`));
 
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
 
@@ -120,7 +121,7 @@ test('daemon-owned RPC automation can ask without activating a companion bridge'
   }
 });
 
-test('real extension remains inert until /companion and resets activation on session switch', async () => {
+test('daemon starts privately and remote-control alone shares with safe session resets', async () => {
   const { default: install } = await import(extension);
   const events: Record<string, (event: any, ctx: any) => any> = {};
   const commands: Record<string, any> = {};
@@ -153,16 +154,15 @@ test('real extension remains inert until /companion and resets activation on ses
   events.agent_start({}, ctx);
   events.agent_end({}, ctx);
   events.model_select({}, ctx);
-  await commands['remote-control'].handler('', ctx);
   await commands.companion.handler('off', ctx);
   await nextTurn();
-  assert.equal(state.probes, 0);
+  assert.equal(state.probes, 1, 'session startup checks the daemon independently of sharing');
   assert.equal(state.sockets.length, 0);
   assert.equal(ctx.ui.select, originalSelect, 'dialog wrappers are deferred too');
 
-  await commands.companion.handler('', ctx);
+  await commands['remote-control'].handler('', ctx);
   await nextTurn();
-  assert.ok(state.probes > 0);
+  assert.ok(state.probes > 1);
   assert.equal(state.sockets.length, 1);
   const live = state.sockets[0];
   live.readyState = 1;
@@ -246,10 +246,9 @@ test('real extension remains inert until /companion and resets activation on ses
   assert.equal(resumed.readyState, 3, '/companion off has the same end-sharing semantics');
   events.session_start({}, ctx);
   assert.equal(ctx.ui.select, originalSelect, 'switch restores terminal dialogs');
-  await commands['remote-control'].handler('', ctx);
   events.agent_start({}, ctx);
   await nextTurn();
-  assert.equal(state.probes, probes, 'new session does not inherit daemon opt-in');
+  assert.ok(state.probes > probes, 'new session checks daemon availability without inheriting sharing');
   assert.equal(state.sockets.length, 2);
   assert.equal(live.readyState, 3);
   state.deferProbe = true;

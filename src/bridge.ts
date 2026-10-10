@@ -147,7 +147,7 @@ export class CompanionBridge implements AskChannel {
     return [...this.tempFiles];
   }
 
-  /** Only an explicit /companion command may activate this session's bridge. */
+  /** Only an explicit sharing command may activate this session's bridge. */
   activate() {
     this.activated = true;
     if (this.snapshot.remoteEnabled && this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs, this.popups);
@@ -287,7 +287,7 @@ export class CompanionBridge implements AskChannel {
   }
 
   async deleteTempFile(fileId: string) {
-    if (!this.isActivated()) return { ok: false, error: "Run /companion first to enable this session." };
+    if (!this.isActivated()) return { ok: false, error: "Run /remote-control to share this session." };
     const requestId = randomUUID();
     this.send({ type: "file.delete", requestId, fileId });
     return await new Promise<{ ok: boolean; error?: string }>(resolve => {

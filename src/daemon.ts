@@ -102,17 +102,9 @@ async function downloadRelease(version: string, log: DaemonLog) {
   const dir = cacheDir(version);
   const target = join(dir, EXE);
   const exact = "https://github.com/" + REPO + "/releases/download/v" + version + "/";
-  // A git install from a branch can be ahead of the newest tag; fall back to the latest release.
-  const latest = "https://github.com/" + REPO + "/releases/latest/download/";
-
   log("Downloading Pi Companion daemon v" + version + "…");
-  let base = exact;
-  let archiveRes = await fetch(base + asset, { signal: AbortSignal.timeout(120_000) });
-  if (archiveRes.status === 404) {
-    log("No daemon release for v" + version + "; using the latest release.", "warning");
-    base = latest;
-    archiveRes = await fetch(base + asset, { signal: AbortSignal.timeout(120_000) });
-  }
+  const base = exact;
+  const archiveRes = await fetch(base + asset, { signal: AbortSignal.timeout(120_000) });
   if (!archiveRes.ok) throw new Error("download failed: " + archiveRes.status + " " + asset);
   const sumsRes = await fetch(base + "SHA256SUMS", { signal: AbortSignal.timeout(30_000) });
   if (!sumsRes.ok) throw new Error("checksum download failed: " + sumsRes.status);
@@ -180,7 +172,14 @@ async function acquireLock() {
   } catch {
     try {
       const info = await stat(lock);
-      if (Date.now() - info.mtimeMs > LOCK_STALE_MS) {
+      const owner = Number(readFileSync(lock, "utf8").trim());
+      let alive = false;
+      if (Number.isInteger(owner) && owner > 1) {
+        try { process.kill(owner, 0); alive = true; }
+        catch (error) { alive = (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+      }
+      // Downloads can take minutes. Age alone must never steal a live owner's lock.
+      if (!alive && Date.now() - info.mtimeMs > LOCK_STALE_MS) {
         await rm(lock, { force: true });
         return await acquireLock();
       }
@@ -199,13 +198,22 @@ async function waitForDaemon(ms: number, expectedVersion?: string) {
   return false;
 }
 
-async function waitForDaemonDown(ms: number) {
+async function waitForDaemonDown(ms: number, old: DaemonContext) {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
-    if (!(await isDaemonUp(300))) return true;
+    const current = await daemonContext(300);
+    if (!current || (current.pid !== undefined && old.pid !== undefined && current.pid !== old.pid)) return true;
     await new Promise(resolve => setTimeout(resolve, 200));
   }
   return false;
+}
+
+export function versionAtLeast(actual: string | undefined, expected: string): boolean {
+  if (actual === expected) return true;
+  if (!actual || !/^\d+\.\d+\.\d+$/.test(actual) || !/^\d+\.\d+\.\d+$/.test(expected)) return false;
+  const a = actual.split('.').map(Number), b = expected.split('.').map(Number);
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
+  return true;
 }
 
 async function stopDaemonForUpgrade(context: DaemonContext, log: DaemonLog) {
@@ -214,7 +222,7 @@ async function stopDaemonForUpgrade(context: DaemonContext, log: DaemonLog) {
       method: "POST",
       signal: AbortSignal.timeout(2_000)
     });
-    if (response.ok && await waitForDaemonDown(5_000)) return true;
+    if (response.ok && await waitForDaemonDown(5_000, context)) return true;
   } catch {
     // Older daemons do not have /api/shutdown. Fall through to a local process stop.
   }
@@ -222,16 +230,15 @@ async function stopDaemonForUpgrade(context: DaemonContext, log: DaemonLog) {
   try {
     if (typeof context.pid === "number" && Number.isInteger(context.pid) && context.pid > 1) {
       process.kill(context.pid, "SIGTERM");
-    } else if (process.platform === "win32") {
-      await execFileAsync("taskkill", ["/IM", "pi-companion-server.exe", "/F"]);
     } else {
-      await execFileAsync("pkill", ["-f", "pi-companion-server"]);
+      log("The older daemon has no verifiable PID; refusing to stop unrelated processes.", "warning");
+      return false;
     }
   } catch {
     // The process may already have exited between the probe and the stop attempt.
   }
 
-  const stopped = await waitForDaemonDown(5_000);
+  const stopped = await waitForDaemonDown(5_000, context);
   if (!stopped) log("Could not stop the older Pi Companion daemon automatically.", "warning");
   return stopped;
 }
@@ -243,15 +250,29 @@ async function stopDaemonForUpgrade(context: DaemonContext, log: DaemonLog) {
 export async function ensureDaemon(log: DaemonLog) {
   const expectedVersion = packageVersion();
   const running = await daemonContext();
-  if (running?.version === expectedVersion) return true;
+  if (running && versionAtLeast(running.version, expectedVersion)) return true;
   if (process.env.PI_COMPANION_AUTOSTART === "0" || !isLocalTarget()) return Boolean(running);
 
   const release = await acquireLock();
   if (!release) return await waitForDaemon(10_000, expectedVersion); // another Pi session is starting/upgrading it
   try {
     const current = await daemonContext();
-    if (current?.version === expectedVersion) return true;
+    if (current && versionAtLeast(current.version, expectedVersion)) return true;
 
+    // Download and validate before touching the healthy running process.
+    const binary = await resolveDaemonBinary(log);
+    const { stdout } = await execFileAsync(binary, ["--version"], { timeout: 10_000 });
+    if (stdout.trim() !== "pi-companion-server " + expectedVersion) {
+      throw new Error("replacement daemon version does not match installed extension v" + expectedVersion);
+    }
+    let managed = false;
+    if (process.env.PI_COMPANION_SERVICE !== "0") {
+      try {
+        const { startBackgroundService } = await import("./background-service.js");
+        await startBackgroundService(binary); managed = true;
+      }
+      catch (error) { log("Background service unavailable; using detached daemon: " + (error instanceof Error ? error.message : String(error)), "warning"); }
+    }
     if (current) {
       log(
         "Updating Pi Companion daemon from v" + (current.version ?? "unknown") + " to v" + expectedVersion + "…"
@@ -259,7 +280,10 @@ export async function ensureDaemon(log: DaemonLog) {
       if (!(await stopDaemonForUpgrade(current, log))) return false;
     }
 
-    const binary = await resolveDaemonBinary(log);
+    if (managed) {
+      // A supervisor already running the old binary restarts using the updated config.
+      return await waitForDaemon(15_000, expectedVersion);
+    }
     await new Promise<void>((resolve, reject) => {
       const child = spawn(binary, [], { detached: true, stdio: "ignore", windowsHide: true });
       child.once("error", reject);

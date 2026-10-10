@@ -1,8 +1,9 @@
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { formatAnswers, toQuestions } from "./ask.js";
 import { CompanionBridge } from "./bridge.js";
 import { adminHttpUrl, ensureDaemon } from "./daemon.js";
+import { ProviderQuotaPoller, providerError } from "./provider-status.ts";
 import { automationTool, executeAutomation, type AutomationParams } from "./automation.ts";
 
 const AskOptionParam = Type.Union([
@@ -71,6 +72,19 @@ function resultText(result: unknown) {
 export default function companionExtension(pi: ExtensionAPI) {
   let bridge = new CompanionBridge(pi);
   let sharingGeneration = 0;
+  let quotas = new ProviderQuotaPoller(value => bridge.ingestTelemetry(value, 'subscription limits'));
+  let daemonCheck: Promise<boolean> | undefined;
+  let daemonMonitor: ReturnType<typeof setInterval> | undefined;
+  const checkDaemon = (ctx: ExtensionContext) => {
+    if (process.env.PI_COMPANION_AUTOSTART === "0") return Promise.resolve(false);
+    if (!daemonCheck) {
+      daemonCheck = ensureDaemon((message, level = "info") => {
+        // Background startup should not interrupt the user unless something fails.
+        if (level !== "info") ctx.ui.notify(message, level);
+      }).finally(() => { daemonCheck = undefined; });
+    }
+    return daemonCheck;
+  };
 
   // Any extension can publish the neutral contract. No dependency on a particular footer/provider.
   for (const channel of ["companion:telemetry", "usage:update", "session:usage", "provider:usage"]) {
@@ -80,16 +94,26 @@ export default function companionExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     // Switching or starting a Pi session must not inherit the previous opt-in.
     sharingGeneration += 1;
+    quotas.stop();
+    quotas = new ProviderQuotaPoller(value => bridge.ingestTelemetry(value, 'subscription limits'));
     bridge.close();
     bridge = new CompanionBridge(pi);
     bridge.setContext(ctx);
     bridge.emit("session.start", { cwd: ctx.cwd });
+    void checkDaemon(ctx);
+    if (daemonMonitor) clearInterval(daemonMonitor);
+    daemonMonitor = setInterval(() => {
+      void checkDaemon(ctx);
+      if (bridge.isRemoteEnabled()) void quotas.refresh(ctx);
+    }, 30_000);
+    daemonMonitor.unref();
   });
   pi.on("session_info_changed", (event, ctx) => {
     bridge.setContext(ctx);
     bridge.setName(event.name);
   });
   pi.on("model_select", (_event, ctx) => {
+    if (bridge.isRemoteEnabled()) void quotas.refresh(ctx);
     bridge.invalidateContext();
     bridge.setContext(ctx);
   });
@@ -106,7 +130,11 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.updateStatus("idle");
     bridge.emit("agent.end", { messages: Array.isArray((event as { messages?: unknown[] }).messages) ? (event as { messages: unknown[] }).messages.length : 0 });
   });
-  pi.on("message_end", (_event, ctx) => bridge.setContext(ctx));
+  pi.on("message_end", (event, ctx) => {
+    bridge.setContext(ctx);
+    const failure = providerError(event.message);
+    if (failure) bridge.emit('provider.error', failure);
+  });
   pi.on("session_compact", (_event, ctx) => {
     bridge.invalidateContext();
     bridge.setContext(ctx);
@@ -138,6 +166,9 @@ export default function companionExtension(pi: ExtensionAPI) {
     });
   });
   pi.on("session_shutdown", event => {
+    quotas.stop();
+    if (daemonMonitor) clearInterval(daemonMonitor);
+    daemonMonitor = undefined;
     sharingGeneration += 1;
     bridge.updateStatus("stopped");
     bridge.emit("session.shutdown", event);
@@ -275,52 +306,42 @@ export default function companionExtension(pi: ExtensionAPI) {
     }
   });
 
+  async function setSharing(enabled: boolean, ctx: ExtensionContext) {
+    const generation = ++sharingGeneration;
+    bridge.setContext(ctx);
+    if (!enabled) {
+      bridge.setRemoteEnabled(false);
+      ctx.ui.notify("Remote control disabled; Pi continues locally. The daemon remains available.", "info");
+      return;
+    }
+    const currentBridge = bridge;
+    const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
+    if (bridge !== currentBridge || generation !== sharingGeneration) return;
+    if (!up) {
+      ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
+      return;
+    }
+    bridge.activate();
+    bridge.setRemoteEnabled(true);
+    void quotas.refresh(ctx);
+    void bridge.connect();
+    ctx.ui.notify("Remote control enabled for this session: " + adminHttpUrl(), "info");
+  }
+
   pi.registerCommand("companion", {
     description: "Enable Pi Companion for this session and show the dashboard address (`/companion off` to stop sharing)",
-    handler: async (args, ctx) => {
-      const generation = ++sharingGeneration;
-      bridge.setContext(ctx);
-      if (args.trim().toLowerCase() === "off") {
-        bridge.setRemoteEnabled(false);
-        ctx.ui.notify("Pi Companion sharing ended for this session. Pi continues locally.", "info");
-        return;
-      }
-      const currentBridge = bridge;
-      const up = await ensureDaemon((message, level = "info") => ctx.ui.notify(message, level));
-      if (bridge !== currentBridge || generation !== sharingGeneration) return;
-      if (!up) {
-        ctx.ui.notify("Pi Companion daemon is not reachable at " + adminHttpUrl(), "warning");
-        return;
-      }
-      bridge.activate();
-      void bridge.connect();
-      const enabled = true;
-      bridge.setRemoteEnabled(enabled);
-      ctx.ui.notify(
-        enabled
-          ? "Pi Companion enabled for this session: " + adminHttpUrl() + " (paired devices can now see it)"
-          : "Pi Companion sharing ended for this session. Pi continues locally.",
-        "info"
-      );
-    }
+    handler: async (args, ctx) => setSharing(args.trim().toLowerCase() !== "off", ctx)
   });
 
   pi.registerCommand("remote-control", {
     description: "Toggle remote control for this Pi session",
-    handler: async (_args, ctx) => {
-      sharingGeneration += 1;
-      if (!bridge.isActivated()) {
-        ctx.ui.notify("Run /companion first to enable this session's daemon connection.", "warning");
+    handler: async (args, ctx) => {
+      const mode = args.trim().toLowerCase();
+      if (mode && mode !== "on" && mode !== "off") {
+        ctx.ui.notify("Usage: /remote-control [on|off]", "warning");
         return;
       }
-      const enabled = !bridge.isRemoteEnabled();
-      bridge.setRemoteEnabled(enabled);
-      ctx.ui.notify(
-        enabled
-          ? "Remote control enabled for this session. Pair a device from Pi Companion."
-          : "Remote control disabled; this Companion session has ended. Pi continues locally.",
-        enabled ? "info" : "warning"
-      );
+      await setSharing(mode === "on" || (mode !== "off" && !bridge.isRemoteEnabled()), ctx);
     }
   });
 }

@@ -214,6 +214,10 @@ type ApiResult<T> = Result<T, ApiError>;
 
 #[tokio::main]
 async fn main() {
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("pi-companion-server {VERSION}");
+        return;
+    }
     // Without RUST_LOG, show this daemon's info logs and other crates' warnings.
     // (EnvFilter's own default is ERROR only, which hid the startup addresses.)
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1065,6 +1069,7 @@ async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<St
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.browser_tx.subscribe();
     let mut kicks = state.kick_tx.subscribe();
+    let mut shutdown = state.shutdown_tx.subscribe();
     let (close_tx, mut close_rx) = mpsc::unbounded_channel::<(u16, &'static str)>();
     if let Some(id) = &device_id {
         set_device_connection(&state, id, 1).await;
@@ -1114,6 +1119,11 @@ async fn browser_socket(socket: WebSocket, state: AppState, device_id: Option<St
     let mut liveness = tokio::time::interval(Duration::from_secs(15));
     loop {
         tokio::select! {
+            _ = shutdown.recv() => {
+                let _ = close_tx.send((1012, "Daemon restarting"));
+                kicked = true;
+                break;
+            }
             _ = &mut send_task => break,
             _ = liveness.tick() => {
                 if last_received.elapsed() >= Duration::from_secs(45) { break; }
@@ -1178,6 +1188,7 @@ async fn bridge_ws(
 async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
     let (mut sender, mut receiver) = socket.split();
     let (command_tx, mut command_rx) = mpsc::unbounded_channel::<Value>();
+    let mut shutdown = state.shutdown_tx.subscribe();
     let mut send_task = tokio::spawn(async move {
         let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
         loop {
@@ -1197,6 +1208,7 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
     let mut liveness = tokio::time::interval(Duration::from_secs(15));
     loop {
         let message = tokio::select! {
+            _ = shutdown.recv() => break,
             _ = &mut send_task => break,
             _ = liveness.tick() => {
                 if last_received.elapsed() >= Duration::from_secs(45) { break; }
