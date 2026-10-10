@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import Icon from './Icon.svelte';
   import { errorMessage } from './toast.svelte.ts';
   let { onrefresh }: { onrefresh: () => Promise<unknown> } = $props();
   let control: HTMLDivElement;
@@ -47,11 +46,13 @@
 </script>
 <div class="refresh-control" bind:this={control}>
   <span class="refresh-message" role="status" aria-live="polite">{busy ? 'Refreshing…' : distance >= 70 ? 'Release to refresh' : distance > 0 ? 'Pull to refresh' : message}</span>
-  <button class="btn btn-sm" disabled={busy} onclick={refresh} aria-label="Refresh page data"><Icon name="refresh" size={16} />{busy ? 'Refreshing…' : 'Refresh'}</button>
 </div>
-{#if distance > 0}<div class="pull-space" style:height={distance + 'px'} aria-hidden="true"><Icon name="refresh" /></div>{/if}
+{#if distance > 0}<div class="pull-space" style:height={distance + 'px'} aria-hidden="true"><span class="pull-spinner" class:ready={distance >= 70}>↻</span></div>{/if}
 <style>
-  .refresh-control { display: flex; align-items: center; justify-content: flex-end; gap: 12px; min-width: 0; }
+  .refresh-control { display: flex; align-items: center; justify-content: center; min-width: 0; }
   .refresh-message { font-size: .75rem; color: var(--text-2); overflow-wrap: anywhere; }
+  .refresh-message:empty { display: none; }
+  .pull-spinner { font-size: 1.45rem; line-height: 1; opacity: .5; }
+  .pull-spinner.ready { transform: rotate(90deg); opacity: 1; }
   .pull-space { display: grid; place-items: center; color: var(--accent-text); }
 </style>
