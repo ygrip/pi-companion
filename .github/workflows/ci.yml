@@ -1,8 +1,8 @@
 name: CI
 
-# Validate pull requests as well as release tags; releases remain gated separately.
+# Runs only for release tags (vX.Y.Z), not on every commit or pull request.
+# Use workflow_dispatch to run it manually.
 on:
-  pull_request:
   push:
     tags:
       - "v*.*.*"
