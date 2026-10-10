@@ -44,23 +44,33 @@ export type ProviderSnapshot = ProviderUsage & { ended: boolean };
 
 /** Account limits are snapshots, not additive session usage. The newest report wins. */
 export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
-  const latest = new Map<string, ProviderSnapshot>();
+  const quota = new Map<string, ProviderSnapshot>();
+  const local = new Map<string, ProviderSnapshot>();
+  const newer = (next: ProviderSnapshot, old?: ProviderSnapshot) => {
+    if (!old) return true;
+    const nextTime = Date.parse(next.updatedAt);
+    const oldTime = Date.parse(old.updatedAt);
+    return Number.isFinite(nextTime) &&
+      (!Number.isFinite(oldTime) || nextTime > oldTime || nextTime === oldTime && old.ended && !next.ended);
+  };
   for (const session of sessions) {
-    const snapshots = session.telemetry?.providers;
-    if (!Array.isArray(snapshots)) continue;
-    for (const snapshot of snapshots) {
+    for (const snapshot of session.telemetry?.providers ?? []) {
       if (typeof snapshot?.provider !== 'string' || !snapshot.provider.trim()) continue;
       const provider = snapshot.provider.trim();
       const key = provider.toLowerCase();
-      const previous = latest.get(key);
-      const timestamp = Date.parse(snapshot.updatedAt);
-      const previousTimestamp = previous ? Date.parse(previous.updatedAt) : NaN;
-      if (!previous || Number.isFinite(timestamp) && (!Number.isFinite(previousTimestamp) || timestamp > previousTimestamp || timestamp === previousTimestamp && previous.ended && session.status !== 'stopped')) {
-        latest.set(key, { ...snapshot, provider, ended: session.status === 'stopped' });
-      }
+      const next = { ...snapshot, provider, ended: session.status === 'stopped' };
+      if ((snapshot.weekly || snapshot.fiveHour) && newer(next, quota.get(key))) quota.set(key, next);
+      if ((nonnegative(snapshot.sessionTokens) || nonnegative(snapshot.sessionCost)) && newer(next, local.get(key))) local.set(key, next);
     }
   }
-  return [...latest.values()].sort((a, b) => a.provider.localeCompare(b.provider));
+  return [...new Set([...quota.keys(), ...local.keys()])].map(key => {
+    const limit = quota.get(key);
+    const consumption = local.get(key);
+    const chosen = (limit ?? consumption)!;
+    return { ...chosen,
+      ...(consumption && { sessionTokens: consumption.sessionTokens, sessionCost: consumption.sessionCost })
+    };
+  }).sort((a, b) => a.provider.localeCompare(b.provider));
 }
 
 export function snapshotStatus(snapshot: ProviderSnapshot, now = Date.now()): string {
