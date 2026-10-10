@@ -100,3 +100,27 @@ test('legacy status adapters work without stealing another extension status rend
   assert.equal(relay.snapshot(undefined).cost?.amount, 2.5);
   assert.equal(relay.snapshot(undefined).providers?.[0].provider, 'codex');
 });
+
+
+test('native assistant usage populates provider session totals without inventing account quota', () => {
+  const relay = new TelemetryRelay();
+  const entries = [
+    { type: 'message', message: { role: 'assistant', provider: 'openai-codex', usage: { totalTokens: 250, cost: { total: 0.15 } } } },
+    { type: 'message', message: { role: 'assistant', provider: 'openai-codex', usage: { input: 100, output: 50, cacheRead: 30, cacheWrite: 20, cost: { total: 0 } } } },
+    { type: 'message', message: { role: 'assistant', provider: 'anthropic', usage: { totalTokens: 75, cost: { total: 0.05 } } } },
+    { type: 'message', message: { role: 'toolResult', provider: 'openai-codex', usage: { totalTokens: 999 } } }
+  ];
+  const ctx = context({ sessionManager: { getEntries: () => entries } });
+  const first = relay.snapshot(ctx, 1000);
+  const codex = first.providers?.find(provider => provider.provider === 'openai-codex');
+  assert.equal(codex?.sessionTokens, 450);
+  assert.equal(codex?.sessionCost, 0.15);
+  assert.equal(codex?.weekly, undefined);
+  assert.equal(codex?.fiveHour, undefined);
+  assert.equal(first.providers?.find(provider => provider.provider === 'anthropic')?.sessionTokens, 75);
+  assert.equal(relay.snapshot(ctx, 2000).providers?.find(provider => provider.provider === 'openai-codex')?.updatedAt, codex?.updatedAt, 'unchanged consumption should not spam updated snapshots');
+  relay.ingest({ source: 'quota', provider: 'openai-codex', weekly: { usedPercent: 23 } }, 'quota', 2500);
+  const merged = relay.snapshot(ctx, 3000).providers?.find(provider => provider.provider === 'openai-codex');
+  assert.equal(merged?.weekly?.usedPercent, 23);
+  assert.equal(merged?.sessionTokens, 450);
+});
