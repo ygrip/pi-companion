@@ -54,7 +54,9 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
       (!Number.isFinite(oldTime) || nextTime > oldTime || nextTime === oldTime && old.ended && !next.ended);
   };
   for (const session of sessions) {
-    for (const snapshot of session.telemetry?.providers ?? []) {
+    const snapshots = session.telemetry?.providers;
+    if (!Array.isArray(snapshots)) continue;
+    for (const snapshot of snapshots) {
       if (typeof snapshot?.provider !== 'string' || !snapshot.provider.trim()) continue;
       const provider = snapshot.provider.trim();
       const key = provider.toLowerCase();
