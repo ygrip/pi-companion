@@ -2,7 +2,7 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.3:** Provider usage now shows measured session tokens and cost without pretending they are subscription quotas. Compatible extensions can still supply real weekly/5-hour limits. Mobile sessions, automations and usage use cards; the overview has compact activity filters; automation buttons share a consistent style; pull-to-refresh is gesture-only. No data or provider credentials are collected by the daemon outside the already shared session metadata.
+**New in 0.3.4:** Custom Pi terminal popups now appear in Companion with a claymorphism shell, scrollable terminal view, adjustable text size, and touch-friendly navigation and input controls. Interact with custom slash-command screens or question pickers from either device; native question sheets still work for standard dialogs and `jar_ask`.
 
 **New in 0.3.2:** responsive automation and run-history tables, rounded status chips, matching clay-icon headers, and a single-column automation workspace with full-width mobile controls. **Edit automation** scrolls to and focuses the inline editor. Pull to refresh Overview, Sessions, Automations, or Settings—with a gesture; unsaved settings stay intact. Camera-policy guidance now explains HTTPS proxy configuration. Existing rich results, staged job editing, optional retries, and answers-only automation sessions are retained. See [automations](docs/automations.md).
 
@@ -151,7 +151,11 @@ A paired device cannot access sessions that have not explicitly enabled remote c
 
 Pi's `companion_ask_user` tool asks one to four questions at once. Each question can offer options with descriptions, allow several choices (`multiSelect`), and accept a free-text "Other" answer; a question without options is free text. The browser shows them in a bottom sheet within thumb reach; "Later" hides it until you tap the waiting-question badge.
 
-Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. Question tools that draw their own `ctx.ui.custom` picker are relayed through a small adapter: pi-jar's `jar_ask` is supported, and a companion answer completes its terminal picker. Other `ctx.ui.custom` components and `ctx.ui.editor` stay terminal-only because they cannot be answered from outside. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
+Dialogs from other extensions (`ctx.ui.select`, `ctx.ui.confirm`, `ctx.ui.input`) are relayed to the same sheet while the terminal dialog stays open: whichever side answers first wins and the other closes. Question tools that draw their own `ctx.ui.custom` picker can use a native-sheet adapter: pi-jar's `jar_ask` is supported, and a companion answer completes its terminal picker. Standard dialogs work for any extension, not just `jar_ask`. Pending questions are part of the session snapshot, so a browser that connects later still sees them.
+
+Other `ctx.ui.custom` components are mirrored in a terminal-style popup, including custom slash-command screens. ANSI colors and selection highlighting are preserved inside a clay-styled, vertically and horizontally scrollable viewer. Text-size controls and view-scroll buttons make long or wide screens easier to read; separate navigation controls and expandable extra keys operate the original component. The input bar stays available while the popup body scrolls, and unsent text is retained if the connection drops. Enter submits according to the extension's keybindings; Close sends Escape so the component supplies its own cancellation result. Components that ignore Escape may remain open. Local completion closes the companion view, and pending frames survive browser reconnects. Ending sharing stops mirroring without closing the local component.
+
+Custom popups use the local terminal's rendered width (scroll horizontally on narrow screens), not an independently resized terminal. Mouse-only interactions, terminal images, and direct terminal I/O are not mirrored. RPC automation sessions cannot mirror custom terminal components because Pi does not create them in RPC mode. `ctx.ui.editor` remains terminal-only.
 
 ## Refreshing your workspace
 

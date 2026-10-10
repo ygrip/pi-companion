@@ -6,6 +6,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from "./ask.js";
 import { ensureDaemon } from "./daemon.js";
 import { TelemetryRelay } from "./telemetry.js";
+import { PopupRelay } from "./popup.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
@@ -14,6 +15,10 @@ export class CompanionBridge implements AskChannel {
   readonly sessionId = randomUUID();
   /** Relays question tools that ask through ctx.ui.custom (fed from tool_execution_* events). */
   readonly toolDialogs = new ToolDialogRelay(this);
+  readonly popups = new PopupRelay(popups => {
+    this.snapshot.popups = popups;
+    this.send({ type: "session.update", session: { popups } });
+  });
   private ws?: WebSocket;
   private ctx?: ExtensionContext;
   private reconnect?: NodeJS.Timeout;
@@ -48,7 +53,7 @@ export class CompanionBridge implements AskChannel {
 
   setContext(ctx: ExtensionContext) {
     this.ctx = ctx;
-    if (this.activated && this.snapshot.remoteEnabled && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs);
+    if (this.activated && this.snapshot.remoteEnabled && ctx.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(ctx.ui, this, this.toolDialogs, this.popups);
     this.refreshMetadata();
   }
 
@@ -115,6 +120,7 @@ export class CompanionBridge implements AskChannel {
     // End only Companion sharing: Pi itself and its local history keep running.
     this.restoreDialogs?.();
     this.restoreDialogs = undefined;
+    this.popups.clear();
     this.restoreStatus?.();
     this.restoreStatus = undefined;
     if (this.metadataTimer) clearInterval(this.metadataTimer);
@@ -144,7 +150,7 @@ export class CompanionBridge implements AskChannel {
   /** Only an explicit /companion command may activate this session's bridge. */
   activate() {
     this.activated = true;
-    if (this.snapshot.remoteEnabled && this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs);
+    if (this.snapshot.remoteEnabled && this.ctx?.hasUI && !this.restoreDialogs) this.restoreDialogs = relayDialogs(this.ctx.ui, this, this.toolDialogs, this.popups);
     if (!this.snapshot.remoteEnabled) return;
     const ui = this.ctx?.ui;
     if (ui && typeof ui.setStatus === "function" && !this.restoreStatus) {
@@ -233,6 +239,7 @@ export class CompanionBridge implements AskChannel {
     this.closed = true;
     this.restoreDialogs?.();
     this.restoreDialogs = undefined;
+    this.popups.clear();
     this.restoreStatus?.();
     this.restoreStatus = undefined;
     if (this.metadataTimer) clearInterval(this.metadataTimer);
@@ -334,6 +341,12 @@ export class CompanionBridge implements AskChannel {
         break;
       case "git_diff":
         await this.sendGitDiff(Boolean(command.staged));
+        break;
+      case "popup_input":
+        this.popups.input(command.popupId, command.data);
+        break;
+      case "popup_close":
+        this.popups.close(command.popupId);
         break;
       case "ask_answer":
         this.asks.get(command.requestId)?.settle(command.answers ?? {});

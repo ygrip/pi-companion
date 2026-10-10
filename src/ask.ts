@@ -1,5 +1,6 @@
 import type { ExtensionUIContext } from "@earendil-works/pi-coding-agent";
 import type { AskAnswers, AskOption, AskQuestion, AskRequest } from "./protocol.js";
+import type { PopupRelay } from "./popup.js";
 
 export type AskInput = Omit<AskRequest, "requestId" | "createdAt">;
 
@@ -16,10 +17,10 @@ const RELAYED = Symbol.for("pi-companion.dialog-relay");
  *
  * Pi hands every extension the same ui object, so patching it once per object covers all of
  * them. The terminal dialog stays open; whichever side answers first wins and the other is
- * dismissed. `editor` takes no AbortSignal, so it stays terminal-only. `custom` dialogs are
- * relayed only for known question tools (see ToolDialogRelay).
+ * dismissed. `editor` takes no AbortSignal, so it stays terminal-only. Known custom question
+ * tools use native sheets (ToolDialogRelay); other custom components use terminal mirroring.
  */
-export function relayDialogs(ui: ExtensionUIContext, channel: AskChannel, tools: ToolDialogRelay) {
+export function relayDialogs(ui: ExtensionUIContext, channel: AskChannel, tools: ToolDialogRelay, popups?: PopupRelay) {
   const target = ui as ExtensionUIContext & { [RELAYED]?: true };
   if (target[RELAYED]) return;
   target[RELAYED] = true;
@@ -32,7 +33,7 @@ export function relayDialogs(ui: ExtensionUIContext, channel: AskChannel, tools:
 
   ui.custom = (factory, options) => {
     const complete = tools.claim();
-    if (!complete) return custom(factory, options);
+    if (!complete) return custom(popups ? popups.wrap(factory) : factory, options);
     return custom((tui, theme, keybindings, done) => {
       complete((result) => done(result as never));
       return factory(tui, theme, keybindings, done);

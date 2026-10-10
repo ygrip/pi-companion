@@ -46,7 +46,10 @@ export type SessionTelemetry = {
   providers?: ProviderUsage[];
 };
 
+export type TerminalPopup = { id: string; lines: string[]; width: number };
+
 export type Session = {
+  popups?: TerminalPopup[];
   id: string;
   name?: string | null;
   shortTitle: string;

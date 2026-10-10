@@ -35,7 +35,8 @@ const bridge = dataModule(transpile('../src/bridge.ts')
   .replace('from "ws"', `from ${JSON.stringify(socket)}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
   .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
-  .replace('from "./telemetry.js"', `from ${JSON.stringify(new URL('../src/telemetry.ts', import.meta.url).href)}`));
+  .replace('from "./telemetry.js"', `from ${JSON.stringify(new URL('../src/telemetry.ts', import.meta.url).href)}`)
+  .replace('from "./popup.js"', `from ${JSON.stringify(new URL('../src/popup.ts', import.meta.url).href)}`));
 const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
@@ -44,6 +45,50 @@ const extension = dataModule(transpile('../src/index.ts')
   .replace('from "./automation.ts"', `from ${JSON.stringify(new URL('../src/automation.ts', import.meta.url).href)}`));
 
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+test('custom popup frames and input round-trip through the live bridge transport', async () => {
+  const { CompanionBridge } = await import(bridge);
+  const previousProbes = state.probes;
+  const previousSockets = state.sockets.length;
+  let component: any;
+  let text = 'initial';
+  const ui: any = {
+    select: async () => undefined, confirm: async () => false, input: async () => undefined,
+    custom: (factory: any) => new Promise(resolve => {
+      Promise.resolve(factory({ requestRender() { component?.render(80); } }, {}, {}, resolve)).then(value => {
+        component = value;
+        component.render(80);
+      });
+    })
+  };
+  const instance = new CompanionBridge({ getSessionName: () => undefined, getCommands: () => [] } as any);
+  instance.setContext({ cwd: '/project/demo', hasUI: true, isIdle: () => true, ui } as any);
+  instance.setRemoteEnabled(true);
+  instance.activate();
+  await instance.connect();
+  const socket = state.sockets.at(-1);
+  socket.readyState = 1;
+  socket.emit('open');
+  try {
+    const answer = ui.custom((_tui: any, _theme: any, _keys: any, done: any) => ({
+      invalidate() {}, render: () => [text],
+      handleInput(data: string) { if (data === '\x1b') done({ kind: 'cancel' }); else text = data; }
+    }));
+    await nextTurn();
+    const frame = socket.frames.findLast((frame: any) => frame.session?.popups?.length)?.session.popups[0];
+    assert.deepEqual(frame.lines, ['initial']);
+    socket.emit('message', JSON.stringify({ type: 'command', command: { type: 'popup_input', popupId: frame.id, data: 'remote' } }));
+    await nextTurn();
+    assert.equal(text, 'remote');
+    socket.emit('message', JSON.stringify({ type: 'command', command: { type: 'popup_close', popupId: frame.id } }));
+    assert.deepEqual(await answer, { kind: 'cancel' });
+    assert.deepEqual(socket.frames.at(-1).session.popups, []);
+  } finally {
+    instance.close();
+    state.probes = previousProbes;
+    state.sockets.splice(previousSockets);
+  }
+});
 
 test('daemon-owned RPC automation can ask without activating a companion bridge', async () => {
   const { default: install } = await import(extension);

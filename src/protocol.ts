@@ -55,7 +55,10 @@ export type SessionTelemetry = {
   providers?: ProviderUsage[];
 };
 
+export type TerminalPopup = { id: string; lines: string[]; width: number };
+
 export type SessionSnapshot = {
+  popups?: TerminalPopup[];
   id: string;
   name?: string | null;
   cwd: string;
@@ -73,6 +76,8 @@ export type SessionSnapshot = {
 };
 
 export type BrowserCommand =
+  | { type: "popup_input"; popupId: string; data: string }
+  | { type: "popup_close"; popupId: string }
   | { type: "prompt"; text: string }
   | { type: "steer"; text: string }
   | { type: "abort" }

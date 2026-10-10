@@ -2,6 +2,7 @@
   import { onDestroy, tick } from 'svelte';
   import { page } from '$app/state';
   import AskSheet from '#lib/AskSheet.svelte';
+  import TerminalPopup from '#lib/TerminalPopup.svelte';
   import { matchingSlashCommands } from '#lib/slash-commands.ts';
   import AutomatedSessionBadge from '#lib/AutomatedSessionBadge.svelte';
   import Icon from '#lib/Icon.svelte';
@@ -736,7 +737,10 @@
     </section>
   </div>
 
-  {#if !ended}<AskSheet sessionId={id} {asks} bind:open={askOpen} />{/if}
+  {#if !ended}
+    <AskSheet sessionId={id} {asks} bind:open={askOpen} />
+    <TerminalPopup sessionId={id} popups={session?.popups ?? []} />
+  {/if}
 {/if}
 
 <style>
