@@ -9,7 +9,6 @@
 .automation-workspace .hero-copy p { font-size: .82rem; margin-top: 8px; }
 .automation-workspace .automation-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .automation-workspace .btn { min-height: 44px; border-radius: 14px; }
-.automation-workspace .btn-bento { min-height: 60px; padding: 14px 22px; flex-direction: row; font-size: .82rem; }
 .automation-workspace .bento-card { padding: 22px; border: 1px solid var(--border); border-radius: 22px; background: var(--clay-surface); box-shadow: var(--clay-raised); min-width: 0; }
 .automation-workspace .bento-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
 .automation-workspace .stat { padding: 16px 20px; display: grid; gap: 5px; }
@@ -62,10 +61,10 @@
 @media (max-width: 900px) { .automation-workspace .summary-grid { grid-template-columns: 1fr; } .automation-workspace .automation-grid { grid-template-columns: 1fr; } }
 @media (max-width: 550px) { .automation-workspace { gap: 14px; } .automation-workspace .automation-hero { padding: 20px; gap: 16px; } .automation-workspace .clay-icon { width: 52px; height: 52px; } .automation-workspace .hero-copy { gap: 12px; } .automation-workspace .bento-card { padding: 16px; } .automation-workspace .bento-stats { gap: 8px; } .automation-workspace .stat { padding: 12px; } .automation-workspace .stat strong { font-size: 1.15rem; } .automation-workspace .stat span { font-size: .65rem; } .automation-workspace .filters, .automation-workspace .filter-field { flex: 1; } .automation-workspace .search-input { width: 100%; min-width: 120px; } .automation-workspace .collection-scroll { max-height: 60vh; padding-right: 4px; } .automation-workspace .run-card { grid-template-columns: minmax(0, 1fr) auto; } .automation-workspace .run-card > .automation-badge { grid-column: 1 / -1; } .automation-workspace .info-pairs { gap: 12px; } .automation-workspace .tab-bar { align-self: stretch; } .automation-workspace .tab-bar button { flex: 1; justify-content: center; padding: 10px; } }
 .automation-detail .automation-hero { flex-direction: column; align-items: stretch; }
-.automation-detail .automation-hero .automation-actions, .automation-detail .automation-hero .btn-bento { width: 100%; }
+.automation-detail .automation-hero .automation-actions { width: 100%; }
 .automation-detail .automation-actions > .btn { flex: 1; }
 .automation-detail #automation-editor { scroll-margin-top: 100px; }
-.automation-workspace .automation-back { box-shadow: var(--clay-raised); padding: 12px 18px; border: 1px solid var(--border); background: var(--clay-surface); color: var(--text); }
+.automation-workspace .automation-back { width: fit-content; }
 .automation-workspace .filters { flex: 1; }
 .automation-workspace .filter-field:has(input) { flex: 1; }
 .automation-workspace .search-input { width: 100%; }
@@ -97,7 +96,7 @@
 }
 @media(max-width: 550px) {
   .automation-workspace .automation-hero > .hero-copy { flex-basis: 100%; }
-  .automation-workspace .automation-hero > .btn-bento { width: 100%; }
+  .automation-workspace .automation-hero > .btn { width: 100%; }
   .automation-workspace .filters { width: 100%; flex-direction: column; align-items: stretch; }
   .automation-workspace .filter-field { width: 100%; }
   .automation-detail .automation-actions { flex-direction: column; }
