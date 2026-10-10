@@ -25,9 +25,9 @@
 
   const live = $derived(companion.sessions.filter((session) => session.status !== 'stopped'));
   const needsAnswer = $derived(live.filter((session) => companion.pendingAsks(session.id) > 0));
+  let runningFilter = $state<'all' | 'active' | 'idle'>('all');
   const liveNow = $derived(
-    live
-      .filter((session) => companion.pendingAsks(session.id) === 0)
+    live.filter((session) => companion.pendingAsks(session.id) === 0 && (runningFilter === 'all' || session.status === runningFilter))
       .sort((a, b) => Number(b.status === 'active') - Number(a.status === 'active'))
       .slice(0, 6)
   );
@@ -38,7 +38,9 @@
   let automations = $state<Automation[]>([]);
   let automationError = $state('');
   let automationLoading = $state(true);
-  const recentAutomations = $derived([...automations].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4));
+  let automationFilter = $state<'all' | 'enabled' | 'disabled'>('all');
+  const recentAutomations = $derived(automations.filter(a => automationFilter === 'all' || a.enabled === (automationFilter === 'enabled'))
+    .sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 4));
   let overviewMounted = $state(false);
   onMount(() => { overviewMounted = true; return () => { overviewMounted = false; }; });
   $effect(() => {
@@ -155,16 +157,19 @@
     </section>
   {/if}
 
-  <section class="recent" aria-labelledby="live-heading">
-    <div class="section-head">
-      <h2 id="live-heading"><img src={computerClay} alt="" aria-hidden="true" />Running now</h2>
-      <a class="btn view-all" href="/sessions">All sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a>
+  <section class="recent home-panel" aria-labelledby="live-heading">
+    <div class="panel-topline"><div class="section-head"><h2 id="live-heading"><img src={computerClay} alt="" aria-hidden="true" />Running now</h2><p class="subtle">Your shared sessions, at a glance.</p></div>
+      <a class="btn view-all" href="/sessions">All sessions<span class="badge count quiet">{totalSessions}</span><Icon name="chevron" size={16} /></a></div>
+    <div class="panel-controls" role="group" aria-label="Filter running sessions">
+      {#each [{ value: 'all', label: 'All' }, { value: 'active', label: 'Working' }, { value: 'idle', label: 'Idle' }] as option}
+        <button class="btn" class:active={runningFilter === option.value} aria-pressed={runningFilter === option.value} onclick={() => runningFilter = option.value as typeof runningFilter}>{option.label}</button>
+      {/each}
     </div>
     {#if live.length}
       {#if liveNow.length}
         <SessionTable sessions={liveNow} label="Running now" />
       {:else}
-        <p class="muted">Everything that’s running is up there, waiting on your answer.</p>
+        <p class="muted panel-empty">{runningFilter === 'all' ? 'Every session is waiting on your answer.' : 'No sessions match this filter.'}</p>
       {/if}
     {:else}
       <div class="tile empty">
@@ -183,12 +188,18 @@
       </div>
     {/if}
   </section>
-  <section class="recent automation-workspace" aria-labelledby="home-automation-heading">
-    <div class="section-head"><h2 id="home-automation-heading"><img src={automationArt} alt="" width="38" height="38" />Your automations</h2><a class="btn view-all" href="/automations">All automations<span class="badge count quiet">{automations.length}</span><Icon name="chevron" size={16} /></a></div>
-    <p class="automation-note">Let Pi take care of the repeatable tasks. Open a routine to run it or check its latest results.</p>
+  <section class="recent automation-workspace home-panel" aria-labelledby="home-automation-heading">
+    <div class="panel-topline"><div class="section-head"><h2 id="home-automation-heading"><img src={automationArt} alt="" width="38" height="38" />Your automations</h2><p class="subtle">Your repeatable routines, ready when you need them.</p></div>
+      <a class="btn view-all" href="/automations">All automations<span class="badge count quiet">{automations.length}</span><Icon name="chevron" size={16} /></a></div>
+    <div class="panel-controls" role="group" aria-label="Filter automations">
+      {#each [{ value: 'all', label: 'All' }, { value: 'enabled', label: 'Enabled' }, { value: 'disabled', label: 'Disabled' }] as option}
+        <button class="btn" class:active={automationFilter === option.value} aria-pressed={automationFilter === option.value} onclick={() => automationFilter = option.value as typeof automationFilter}>{option.label}</button>
+      {/each}
+    </div>
     {#if automationError}<div class="bento-card" role="alert">Automations are unavailable right now: {automationError}</div>
     {:else if automationLoading}<div class="bento-card" role="status">Loading your automations…</div>
     {:else if !automations.length}<div class="bento-card automation-empty"><Icon name="lightning" size={28} /><h2>A little less busywork</h2><p>Set up your first automation on the desktop dashboard, or ask Pi to create one for you.</p><a class="btn" href="/automations">Explore automations<Icon name="chevron" size={16} /></a></div>
+    {:else if !recentAutomations.length}<p class="muted panel-empty">No automations match this filter.</p>
     {:else}<AutomationTable automations={recentAutomations} />{/if}
   </section>
 </div>
@@ -332,6 +343,18 @@
   }
 
   .session-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+  .home-panel { display: grid; gap: 14px; padding: 20px; border: 1px solid var(--border); border-radius: 24px; background: var(--clay-surface); box-shadow: var(--clay-raised); min-width: 0; }
+  .panel-topline { display: flex; align-items: center; justify-content: space-between; gap: 14px; flex-wrap: wrap; }
+  .panel-topline .section-head { display: grid; gap: 2px; margin: 0; }
+  .panel-topline .section-head h2 { margin: 0; }
+  .panel-topline .section-head p { font-size: .78rem; }
+  .panel-controls { display: flex; gap: 6px; padding: 5px; border-radius: 14px; background: var(--surface-2); border: 1px solid var(--border); width: fit-content; max-width: 100%; }
+  .panel-controls .btn { min-height: 38px; border-color: transparent; background: transparent; border-radius: 10px; padding-inline: 14px; font-size: .78rem; }
+  .panel-controls .btn.active { background: var(--surface); border-color: var(--border); color: var(--accent-text); box-shadow: var(--clay-soft); font-weight: 700; }
+  .panel-empty { border: 1px dashed var(--border-strong); border-radius: 16px; background: var(--surface); padding: 22px; font-size: .85rem; }
+  .home-panel :global(.session-table), .home-panel :global(.routine-table) { background: var(--surface); }
+  @media (max-width: 600px) { .home-panel { padding: 14px; border-radius: 20px; } .panel-topline { align-items: stretch; } .panel-topline .view-all { width: 100%; } .panel-controls { width: 100%; } .panel-controls .btn { flex: 1; padding-inline: 8px; } }
+
 
   .guide-tile {
     display: grid;
