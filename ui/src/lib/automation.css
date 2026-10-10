@@ -35,7 +35,7 @@
 .automation-workspace .automation-empty { display: grid; justify-items: center; text-align: center; gap: 12px; padding: 36px 20px; color: var(--text-2); }
 .automation-workspace .automation-empty p { max-width: 440px; font-size: .84rem; }
 .automation-workspace .error { color: var(--danger); font-size: .84rem; }
-.automation-workspace .automation-back { display: inline-flex; gap: 8px; align-items: center; text-decoration: none; font-size: .8rem; align-self: start; min-height: 36px; }
+.automation-workspace .automation-back { display: inline-flex; gap: 8px; align-items: center; text-decoration: none; font-size: .8rem; align-self: start; min-height: 44px; }
 .automation-workspace .automation-note { font-size: .76rem; line-height: 1.7; color: var(--text-2); }
 .automation-workspace .summary-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
 .automation-workspace .span-all { grid-column: 1 / -1; }
