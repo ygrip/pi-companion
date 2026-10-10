@@ -43,6 +43,9 @@ export type ProviderUsage = {
   updatedAt: string;
   weekly?: UsageWindow;
   fiveHour?: UsageWindow;
+  /** Observed consumption in this shared Pi session, not account quota utilization. */
+  sessionTokens?: number;
+  sessionCost?: number;
 };
 export type SessionTelemetry = {
   context?: { tokens?: number; window?: number; percent?: number; source?: string };
