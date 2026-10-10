@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.4:** Custom Pi terminal popups now appear in Companion with a claymorphism shell, scrollable terminal view, adjustable text size, and touch-friendly navigation and input controls. Interact with custom slash-command screens or question pickers from either device; native question sheets still work for standard dialogs and `jar_ask`.
+**New in 0.3.5:** Shared files now have authenticated Download buttons, filename filtering, and You / Agent source badges. Custom terminal popups retain the scrollable claymorphism viewer and touch-friendly controls introduced in 0.3.4.
+
+Filename search is case-insensitive. New browser uploads are marked **You**; local agent uploads can declare **Agent** by posting to `/api/sessions/{session_id}/files?source=agent`. This query is honored only on the local admin endpoint; remote uploads always remain user uploads. Older files without provenance show **Unknown**. Source badges describe upload provenance, not file-content authorship.
 
 **New in 0.3.2:** responsive automation and run-history tables, rounded status chips, matching clay-icon headers, and a single-column automation workspace with full-width mobile controls. **Edit automation** scrolls to and focuses the inline editor. Pull to refresh Overview, Sessions, Automations, or Settings—with a gesture; unsaved settings stay intact. Camera-policy guidance now explains HTTPS proxy configuration. Existing rich results, staged job editing, optional retries, and answers-only automation sessions are retained. See [automations](docs/automations.md).
 

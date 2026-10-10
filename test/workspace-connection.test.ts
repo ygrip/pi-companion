@@ -19,6 +19,19 @@ test('workspace requests return JSON/204 and never cache API responses', async (
   });
 });
 
+test('file downloads return exact blob bytes and reject non-attachment proxy pages', async () => {
+  await withFetch(async (_path, init) => {
+    assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer device-token');
+    return new Response('file bytes', { headers: { 'content-type': 'application/octet-stream', 'content-disposition': 'attachment; filename="example.txt"' } });
+  }, async () => {
+    const blob = await workspaceRequest<Blob>('/api/sessions/a/files/id', { headers: { authorization: 'Bearer device-token' } }, 1000, 'blob');
+    assert.equal(await blob.text(), 'file bytes');
+  });
+  await withFetch(async () => new Response('<html>portal</html>', { headers: { 'content-type': 'text/html' } }), async () => {
+    await assert.rejects(workspaceRequest('/api/sessions/a/files/id', {}, 1000, 'blob'), /did not return a file download/);
+  });
+});
+
 test('closed tunnel and gateway responses produce readable errors rather than proxy HTML', async () => {
   for (const status of [502, 503, 504, 520, 521, 522, 523, 524, 525, 526, 527, 530]) {
     await withFetch(async () => new Response('<html>Cloudflare secret diagnostic</html>', {

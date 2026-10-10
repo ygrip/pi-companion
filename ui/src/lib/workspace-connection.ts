@@ -13,7 +13,7 @@ export function unreachableMessage(online = typeof navigator === 'undefined' || 
 }
 
 /** Never expose a reverse proxy's HTML error page as an API error or JSON parse error. */
-export async function workspaceRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 10_000): Promise<T> {
+export async function workspaceRequest<T>(path: string, init: RequestInit = {}, timeoutMs = 10_000, responseType: 'json' | 'blob' = 'json'): Promise<T> {
   const deadline = AbortSignal.timeout(timeoutMs);
   const signal = init.signal ? AbortSignal.any([init.signal, deadline]) : deadline;
   try {
@@ -28,6 +28,12 @@ export async function workspaceRequest<T>(path: string, init: RequestInit = {}, 
       throw new ApiError(response.status, message || `The workspace rejected this request (HTTP ${response.status}).`);
     }
     if (response.status === 204) return undefined as T;
+    if (responseType === 'blob') {
+      if (!/^attachment\b/i.test(response.headers.get('content-disposition') ?? '')) {
+        throw new WorkspaceConnectionError('The workspace did not return a file download. Check the tunnel and retry.');
+      }
+      return await response.blob() as T;
+    }
     if (!/\bapplication\/(?:[\w.-]+\+)?json\b/i.test(response.headers.get('content-type') ?? '')) {
       throw new WorkspaceConnectionError('This address did not return a workspace response. Check that the tunnel is running and you opened the current Pi Companion URL.');
     }

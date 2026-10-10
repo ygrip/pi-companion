@@ -14,7 +14,7 @@ use std::{
 
 use axum::{
     extract::{
-        DefaultBodyLimit, Multipart, Path, Request, State,
+        DefaultBodyLimit, Multipart, Path, Query, Request, State,
         ws::{CloseFrame, Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, Method, StatusCode, header},
@@ -129,6 +129,7 @@ struct Session {
 
 #[derive(Clone, Serialize)]
 struct TempFile {
+    source: String,
     id: String,
     name: String,
     path: String,
@@ -303,7 +304,7 @@ fn local_router(state: AppState) -> Router {
         .route("/api/sessions/{session_id}", delete(delete_session_local))
         .route("/api/sessions/{session_id}/activity", get(session_activity))
         .route("/api/sessions/{session_id}/files", get(list_files).post(upload_file))
-        .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_local))
+        .route("/api/sessions/{session_id}/files/{file_id}", get(download_file_local).delete(delete_file_local))
         .route("/api/pairing/start", post(start_pairing))
         .route("/api/devices", get(list_devices))
         .route("/api/devices/{device_id}", delete(revoke_device))
@@ -328,7 +329,7 @@ fn remote_router(state: AppState) -> Router {
         .route("/api/sessions/{session_id}", delete(delete_session_remote))
         .route("/api/sessions/{session_id}/activity", get(session_activity_remote))
         .route("/api/sessions/{session_id}/files", get(list_files_remote).post(upload_file_remote))
-        .route("/api/sessions/{session_id}/files/{file_id}", delete(delete_file_remote))
+        .route("/api/sessions/{session_id}/files/{file_id}", get(download_file_remote).delete(delete_file_remote))
         .route("/ws/browser", get(browser_ws_remote))
         .fallback(get(assets::serve))
         .layer(middleware::from_fn_with_state(state.clone(), require_device_origin))
@@ -768,9 +769,11 @@ async fn list_files_remote(
 async fn upload_file(
     State(state): State<AppState>,
     Path(session_id): Path<String>,
+    Query(query): Query<HashMap<String, String>>,
     multipart: Multipart,
 ) -> ApiResult<Json<TempFile>> {
-    store_upload(&state, &session_id, multipart).await.map(Json)
+    let source = if query.get("source").is_some_and(|source| source == "agent") { "agent" } else { "user" };
+    store_upload(&state, &session_id, multipart, source).await.map(Json)
 }
 
 async fn upload_file_remote(
@@ -781,7 +784,7 @@ async fn upload_file_remote(
 ) -> ApiResult<Json<TempFile>> {
     authorize_device(&state, bearer_token(&headers)?).await?;
     require_remote_session(&state, &session_id).await?;
-    store_upload(&state, &session_id, multipart).await.map(Json)
+    store_upload(&state, &session_id, multipart, "user").await.map(Json)
 }
 
 /// Session ids come from URL paths and become directory names: allow only a safe alphabet.
@@ -819,7 +822,7 @@ fn upload_mime(settings: &Settings, name: &str, declared: Option<&str>) -> ApiRe
     Ok(mime)
 }
 
-async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipart) -> ApiResult<TempFile> {
+async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipart, source: &str) -> ApiResult<TempFile> {
     require_interactive_session(state, session_id).await?;
     check_session_id(session_id)?;
     if !state.sessions.read().await.contains_key(session_id) {
@@ -866,6 +869,7 @@ async fn store_upload(state: &AppState, session_id: &str, mut multipart: Multipa
         }
 
         let file = TempFile {
+            source: source.to_string(),
             id,
             name: safe_name,
             path: disk_path.to_string_lossy().to_string(),
@@ -888,6 +892,48 @@ fn bad_upload(error: axum::extract::multipart::MultipartError) -> ApiError {
         return (status, "File is larger than the upload limit.".into());
     }
     (status, error.body_text())
+}
+
+async fn download_file_local(
+    State(state): State<AppState>,
+    Path((session_id, file_id)): Path<(String, String)>,
+) -> ApiResult<Response> {
+    download_temp_file(&state, &session_id, &file_id).await
+}
+
+async fn download_file_remote(
+    State(state): State<AppState>,
+    Path((session_id, file_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> ApiResult<Response> {
+    authorize_device(&state, bearer_token(&headers)?).await?;
+    require_remote_session(&state, &session_id).await?;
+    download_temp_file(&state, &session_id, &file_id).await
+}
+
+async fn download_temp_file(state: &AppState, session_id: &str, file_id: &str) -> ApiResult<Response> {
+    check_session_id(session_id)?;
+    let file = state.files.read().await.get(session_id)
+        .and_then(|files| files.iter().find(|file| file.id == file_id)).cloned()
+        .ok_or((StatusCode::NOT_FOUND, "Temporary file not found.".into()))?;
+    // Canonicalize both sides to reject symlinks escaping the session sandbox.
+    let root = fs::canonicalize(state.temp_root.join(session_id)).await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Temporary file not found.".into()))?;
+    let path = fs::canonicalize(&file.path).await
+        .map_err(|_| (StatusCode::NOT_FOUND, "Temporary file not found.".into()))?;
+    if !path.starts_with(&root) {
+        return Err((StatusCode::FORBIDDEN, "Refusing to download outside the session sandbox.".into()));
+    }
+    let bytes = fs::read(path).await.map_err(internal_error)?;
+    let name = safe_file_name(&file.name);
+    let encoded: String = name.bytes().map(|byte| format!("%{byte:02X}")).collect();
+    let disposition = format!("attachment; filename=\"download\"; filename*=UTF-8''{encoded}");
+    Ok(([
+        (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+        (header::CONTENT_DISPOSITION, disposition),
+        (header::CACHE_CONTROL, "no-store".to_string()),
+        (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
+    ], bytes).into_response())
 }
 
 async fn delete_file_local(

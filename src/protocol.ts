@@ -1,4 +1,5 @@
 export type TempFile = {
+  source?: 'user' | 'agent';
   id: string;
   name: string;
   path: string;

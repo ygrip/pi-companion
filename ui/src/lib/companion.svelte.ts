@@ -161,12 +161,12 @@ class Companion {
     this.unavailable(unreachableMessage(false));
   }
 
-  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number): Promise<T> {
+  async request<T>(path: string, init: RequestInit = {}, timeoutMs?: number, responseType: 'json' | 'blob' = 'json'): Promise<T> {
     const headers = new Headers(init.headers);
     const token = this.token;
     if (this.remote && token) headers.set('authorization', 'Bearer ' + token);
     try {
-      return await workspaceRequest<T>(path, { ...init, headers }, timeoutMs);
+      return await workspaceRequest<T>(path, { ...init, headers }, timeoutMs, responseType);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401 && this.remote && this.token === token && path !== '/api/pairing/claim') this.forget();
       else if (error instanceof WorkspaceConnectionError) this.unavailable(error.message);
@@ -430,6 +430,19 @@ class Companion {
     this.files = { ...this.files, [sessionId]: [...(this.files[sessionId] ?? []).filter((file) => file.id !== uploaded.id), uploaded] };
     void this.refreshFiles(sessionId).catch(() => {});
     return uploaded;
+  }
+
+  async downloadFile(sessionId: string, file: TempFile) {
+    const blob = await this.request<Blob>('/api/sessions/' + encodeURIComponent(sessionId) + '/files/' + encodeURIComponent(file.id), {}, 60_000, 'blob');
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = file.name;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Give mobile browsers time to start consuming the object URL.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   async removeFile(sessionId: string, fileId: string) {

@@ -93,6 +93,7 @@ export type AskRequest = {
 export type AskAnswers = Record<string, string[]>;
 
 export type TempFile = {
+  source?: 'user' | 'agent';
   id: string;
   name: string;
   path: string;

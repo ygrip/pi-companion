@@ -81,6 +81,45 @@ fn upload(path: &str, origin: Option<&str>, token: Option<&str>, file_name: &str
 }
 
 #[tokio::test]
+async fn shared_downloads_are_private_attachments_and_sources_are_recorded() {
+    let state = test_state();
+    add_session(&state, "download", true).await;
+    add_session(&state, "other", true).await;
+    let local = local_router(state.clone());
+    let remote = remote_router(state.clone());
+    let invite = invite_of(&start_pairing_via(&local).await);
+    let (_, claim) = call(&remote, post_json("/api/pairing/claim", Some(DEVICE_ORIGIN), json!({ "invite": invite, "deviceName": "Phone" }))).await;
+    let claim: Value = serde_json::from_str(&claim).unwrap();
+    let token = claim["token"].as_str().unwrap();
+    let (status, body) = call(&local, upload("/api/sessions/download/files?source=agent", None, None, "capture.png", "image/png", b"image bytes")).await;
+    assert_eq!(status, StatusCode::OK);
+    let file: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(file["source"], "agent");
+    let id = file["id"].as_str().unwrap();
+    let path = format!("/api/sessions/download/files/{id}");
+    assert_eq!(call(&remote, get(&path, Some(DEVICE_ORIGIN), None)).await.0, StatusCode::UNAUTHORIZED);
+    assert_eq!(call(&local, get(&format!("/api/sessions/other/files/{id}"), None, None)).await.0, StatusCode::NOT_FOUND);
+    let response = remote.clone().oneshot(get(&path, Some(DEVICE_ORIGIN), Some(token))).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/octet-stream");
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+    assert!(response.headers()[header::CONTENT_DISPOSITION].to_str().unwrap().starts_with("attachment;"));
+    assert_eq!(response.into_body().collect().await.unwrap().to_bytes(), b"image bytes"[..]);
+    let (_, body) = call(&remote, upload("/api/sessions/download/files?source=agent", Some(DEVICE_ORIGIN), Some(token), "user.png", "image/png", b"user")).await;
+    assert_eq!(serde_json::from_str::<Value>(&body).unwrap()["source"], "user");
+    state.sessions.write().await.get_mut("download").unwrap().snapshot["remoteEnabled"] = json!(false);
+    assert_eq!(call(&remote, get(&path, Some(DEVICE_ORIGIN), Some(token))).await.0, StatusCode::FORBIDDEN);
+    // Files registered in another session cannot escape the sandbox through symlinks.
+    let disk = PathBuf::from(file["path"].as_str().unwrap());
+    fs::remove_file(&disk).await.unwrap();
+    #[cfg(unix)] {
+        std::os::unix::fs::symlink("/etc/hosts", &disk).unwrap();
+        assert_eq!(call(&local, get(&path, None, None)).await.0, StatusCode::FORBIDDEN);
+    }
+    let _ = fs::remove_dir_all(&state.temp_root).await;
+}
+
+#[tokio::test]
 async fn context_exposes_current_upload_policy_without_private_settings() {
     let state = test_state();
     {

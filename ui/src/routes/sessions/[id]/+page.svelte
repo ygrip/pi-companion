@@ -120,6 +120,8 @@
   const uploadBlocked = $derived(companion.connection === 'disconnected' || companion.connection === 'revoked');
   const asks = $derived(companion.asks[id] ?? []);
   const files = $derived(companion.files[id] ?? []);
+  let fileFilter = $state('');
+  const filteredFiles = $derived(files.filter(file => file.name.toLocaleLowerCase().includes(fileFilter.trim().toLocaleLowerCase())));
   const diff = $derived(companion.diffs[id]);
 
   let tab = $state<Tab>('activity');
@@ -378,6 +380,14 @@
     if (picker && id === targetSession && generation === draftGeneration) picker.value = '';
   }
 
+  let downloading = $state<string[]>([]);
+  async function download(file: import('#lib/types.ts').TempFile) {
+    downloading = [...downloading, file.id];
+    try { await companion.downloadFile(id, file); }
+    catch (error) { toasts.show(errorMessage(error), 'error'); }
+    finally { downloading = downloading.filter(fileId => fileId !== file.id); }
+  }
+
   async function remove(fileId: string, name: string) {
     const targetSession = id;
     try {
@@ -615,14 +625,17 @@
             {/if}
 
             {#if files.length}
+              <div class="file-filter"><label for="shared-file-filter">Filter by filename</label><input id="shared-file-filter" class="input" type="search" placeholder="Search shared files…" bind:value={fileFilter} /><span class="muted">{filteredFiles.length} of {files.length} files</span></div>
+              {#if !filteredFiles.length}<p class="muted" role="status">No filenames match “{fileFilter}”.</p>{/if}
               <ul class="bento file-list">
-                {#each files as file (file.id)}
+                {#each filteredFiles as file (file.id)}
                   <li class="tile file">
                     <Icon name="file" />
                     <div class="file-main">
                       <strong title={file.name}>{file.name}</strong>
-                      <span class="chips"><span class="chip">{formatBytes(file.size)}</span><span class="chip">{relativeTime(file.createdAt)}</span></span>
+                      <span class="chips"><span class="chip" title="File upload source">{file.source === 'agent' ? 'Agent' : file.source === 'user' ? 'You' : 'Unknown'}</span><span class="chip">{formatBytes(file.size)}</span><span class="chip">{relativeTime(file.createdAt)}</span></span>
                     </div>
+                    <button class="btn" aria-label="Download {file.name}" disabled={downloading.includes(file.id)} onclick={() => download(file)}><Icon name="download" size={16} />{downloading.includes(file.id) ? 'Downloading…' : 'Download'}</button>
                     <button class="btn btn-ghost btn-icon" aria-label="Remove {file.name}" onclick={() => remove(file.id, file.name)}><Icon name="trash" size={16} /></button>
                   </li>
                 {/each}
@@ -1405,6 +1418,16 @@
     border-radius: 12px;
     background: var(--accent-soft);
     color: var(--accent-text);
+  }
+
+  .file-filter { display: grid; gap: 8px; margin-bottom: 16px; }
+  .file-filter label, .file-filter span { font-size: 12px; }
+  .file-filter input { min-height: 44px; }
+  @media (max-width: 600px) {
+    .file { flex-wrap: wrap; }
+    .file .file-main { flex: 1 1 calc(100% - 40px); }
+    .file .chips { flex-wrap: wrap; }
+    .file > .btn { min-height: 44px; }
   }
 
   .file-list {
