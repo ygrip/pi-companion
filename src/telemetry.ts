@@ -51,6 +51,7 @@ export function normalizeTelemetry(value: unknown, source = "extension", now = D
 /** Independent sources may supply different fields; one broken/missing adapter cannot erase another. */
 export class TelemetryRelay {
   private sources = new Map<string, { telemetry: SessionTelemetry; contextAt?: number; costAt?: number }>();
+  private nativeUsage = new Map<string, { fingerprint: string; updatedAt: string }>();
 
   ingest(value: unknown, fallbackSource = "extension", now = Date.now()) {
     const raw = record(value);
@@ -140,6 +141,42 @@ export class TelemetryRelay {
       }
       if (known && Number.isFinite(total)) result.cost = { amount: total, currency: "USD", source: "native" };
     } catch { /* Preserve extension estimate when native usage is unavailable. */ }
+    // Native session entries are available without another plugin. They report actual
+    // consumption, not provider subscription limits, and must never fabricate quotas.
+    try {
+      const totals = new Map<string, { tokens: number; cost: number; hasTokens: boolean; hasCost: boolean }>();
+      for (const entry of ctx?.sessionManager?.getEntries?.() ?? []) {
+        const raw = record(entry);
+        if (raw?.type !== "message") continue;
+        const message = record(raw.message);
+        if (message?.role !== "assistant") continue;
+        const provider = text(message.provider);
+        const usage = record(message.usage);
+        if (!provider || !usage) continue;
+        const pieces = [usage.input, usage.output, usage.cacheRead, usage.cacheWrite].map(number);
+        const tokens = number(usage.totalTokens) ?? (pieces.some(value => value !== undefined)
+          ? pieces.reduce<number>((sum, value) => sum + (value ?? 0), 0) : undefined);
+        const cost = number(record(usage.cost)?.total);
+        if (tokens === undefined && cost === undefined) continue;
+        const total = totals.get(provider) ?? { tokens: 0, cost: 0, hasTokens: false, hasCost: false };
+        if (tokens !== undefined) { total.tokens += tokens; total.hasTokens = true; }
+        if (cost !== undefined) { total.cost += cost; total.hasCost = true; }
+        totals.set(provider, total);
+      }
+      for (const [provider, total] of totals) {
+        const fingerprint = JSON.stringify(total);
+        const cached = this.nativeUsage.get(provider);
+        const updatedAt = cached?.fingerprint === fingerprint ? cached.updatedAt : new Date(now).toISOString();
+        this.nativeUsage.set(provider, { fingerprint, updatedAt });
+        const old = providers.get(provider);
+        providers.set(provider, {
+          ...old, provider, source: old?.source ?? "Pi session", updatedAt: old?.updatedAt ?? updatedAt,
+          ...(total.hasTokens ? { sessionTokens: total.tokens } : {}),
+          ...(total.hasCost ? { sessionCost: total.cost } : {})
+        });
+      }
+      if (providers.size) result.providers = [...providers.values()];
+    } catch { /* Keep independently reported quota snapshots if native entries are unavailable. */ }
     return result;
   }
 }
