@@ -157,6 +157,9 @@
   let staged = $state(false);
   let infoOpen = $state(false);
   let askOpen = $state(false);
+  let backgroundDialog = $state<HTMLDialogElement | null>(null);
+  let backgroundTrigger = $state<HTMLButtonElement | null>(null);
+  const backgroundStatus = (item: { id: string; state?: string }, fallback: string) => item.state ?? fallback;
   type DraftAttachment = { key: number; sessionId: string; file: File; preview: string; previewUnavailable?: boolean; status: 'uploading' | 'ready' | 'error'; error: string; uploaded?: TempFile };
   let attachmentKey = 0;
   let draftGeneration = 0;
@@ -210,6 +213,8 @@
     attachments = [];
     draftGeneration += 1;
     diffFilter = '';
+    staged = false;
+    backgroundDialog?.close();
     infoOpen = false;
     follow = true;
     unseen = 0;
@@ -280,7 +285,7 @@
     if (menuEl) menuEl.open = false;
     tab = next;
     if (next === 'files') void companion.refreshFiles(id).catch(() => {});
-    if (next === 'changes' && !diff) loadDiff();
+    if (next === 'changes') loadDiff();
   }
 
   function menuKey(event: KeyboardEvent) {
@@ -357,10 +362,11 @@
     promptEl.style.height = Math.min(promptEl.scrollHeight, Math.max(80, Math.min(180, innerHeight * 0.24))) + 'px';
   }
 
-  function loadDiff(nextStaged = staged) {
+  function loadDiff(nextStaged = staged, worktree = diff?.worktree) {
     if (readOnly || ended) return;
     staged = nextStaged;
-    if (!companion.send(id, { type: 'git_diff', staged: nextStaged })) toasts.show('Not connected.', 'error');
+    diffFilter = '';
+    if (!companion.requestDiff(id, nextStaged, worktree)) toasts.show('Not connected.', 'error');
   }
 
   async function uploadFiles(list: FileList | File[] | null | undefined) {
@@ -501,12 +507,20 @@
     </div>
 
     {#if backgroundShells.length || backgroundAgents.length}
-      <div class="background-work" role="status" aria-label="Background work" title={companion.connection === 'online' ? 'Reported background work' : 'Last reported background work · reconnecting'}>
-        {#if backgroundShells.length}<span title={backgroundShells.map(item => item.name).join(', ')}><Icon name="activity" size={13} />{backgroundShells.length} background {backgroundShells.length === 1 ? 'shell' : 'shells'}</span>{/if}
-        {#if backgroundAgents.length}<span title={backgroundAgents.map(item => item.name).join(', ')}><Icon name="brain" size={13} />{backgroundAgents.length} {backgroundAgents.length === 1 ? 'subagent' : 'subagents'}</span>{/if}
-        {#if companion.connection !== 'online'}<span>last reported</span>{/if}
-      </div>
+      <button type="button" class="background-badge" bind:this={backgroundTrigger} onclick={() => backgroundDialog?.showModal()} aria-label="Background work: {backgroundShells.length} shells and {backgroundAgents.length} subagents, open details" aria-haspopup="dialog">
+        <Icon name="activity" size={15} />
+        {#if backgroundShells.length}<span>{backgroundShells.length} {backgroundShells.length === 1 ? 'shell' : 'shells'}</span>{/if}
+        {#if backgroundAgents.length}<span>{backgroundAgents.length} {backgroundAgents.length === 1 ? 'subagent' : 'subagents'}</span>{/if}
+        {#if companion.connection !== 'online'}<span class="background-stale">last reported</span>{/if}
+        <Icon name="chevron" size={13} />
+      </button>
     {/if}
+    <dialog class="background-popup" bind:this={backgroundDialog} aria-labelledby="background-title" onclose={() => backgroundTrigger?.focus()}>
+      <header><div><h2 id="background-title">Background work</h2><p>{companion.connection === 'online' ? 'Latest reported activity in this session.' : 'Last reported activity. Reconnect for updates.'}</p></div><button type="button" class="btn btn-ghost btn-icon" aria-label="Close background work" onclick={() => backgroundDialog?.close()}><Icon name="close" /></button></header>
+      {#if backgroundShells.length}<h3>Background shells</h3><ul>{#each backgroundShells as item (item.id)}<li><Icon name="activity" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code></div><span class="background-state">{backgroundStatus(item, 'running')}</span></li>{/each}</ul>{/if}
+      {#if backgroundAgents.length}<h3>Subagents</h3><ul>{#each backgroundAgents as item (item.id)}<li><Icon name="brain" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code></div><span class="background-state">{backgroundStatus(item, 'working')}</span></li>{/each}</ul>{/if}
+      {#if !backgroundShells.length && !backgroundAgents.length}<p class="subtle">No background work is currently reported.</p>{/if}
+    </dialog>
 
     {#if readOnly}<div class="composer-notice" role="status"><AutomatedSessionBadge /><p>Pi is following this automation’s instructions. You can answer its questions here; steering, plans, and file uploads are turned off.</p>{#if session.automationId}<a href={'/automations/' + encodeURIComponent(session.automationId)}>Open automation workspace →</a>{/if}</div>{/if}
     <section class="panel">
@@ -686,10 +700,19 @@
               {/if}
               <button class="btn btn-ghost btn-icon refresh" aria-label="Refresh changes" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={16} /></button>
             </div>
+            <div class="worktree-bar">
+              <label for="changes-worktree">Worktree</label>
+              <select id="changes-worktree" class="input" value={diff?.worktree ?? ''} disabled={ended || !diff?.worktrees?.length} onchange={event => loadDiff(staged, event.currentTarget.value)}>
+                {#if !diff?.worktrees?.length}<option value="">Session directory</option>{/if}
+                {#each diff?.worktrees ?? [] as tree (tree.path)}<option value={tree.path} disabled={Boolean(tree.error)}>{tree.branch} · {prettyPath(tree.path)} · {tree.changedFiles === null ? 'unavailable' : `${tree.changedFiles} changed ${tree.changedFiles === 1 ? 'file' : 'files'}`}</option>{/each}
+              </select>
+              <p><Icon name="folder" size={13} /><code>{diff?.worktree ?? session.cwd}</code>{#if diff?.branch}<span class="chip">{diff.branch}</span>{/if}</p>
+              {#if diff?.warnings?.length}<p class="diff-warning" role="status">{diff.warnings.join(' ')}</p>{/if}
+            </div>
             <div class="diff-filter-bar"><label class="diff-filter"><Icon name="search" size={16} /><span class="sr-only">Filter changed files</span><input class="input" type="search" placeholder="Filter changed files…" bind:value={diffFilter} /></label><span class="diff-count" aria-live="polite">{shownChangedFiles.length} of {changedFiles.length} files</span></div>
             <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll this region) -->
             <div class="diff scroll" tabindex="0" role="region" aria-label="Changed files">
-              {#if !diff}
+              {#if !diff || diff.loading}
                 <p class="subtle none">{ended ? 'Changes are unavailable after the session ends.' : companion.connection !== 'online' ? 'Reconnect to your workspace to load changes.' : 'Loading changes…'}</p>
               {:else if diff.error}<p class="subtle none">Changes unavailable. {diff.error}</p>
               {:else if !diff.text.trim()}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
@@ -700,7 +723,7 @@
                     <summary class="diff-file-head">
                       <Icon name="chevron" size={16} class="diff-caret" />
                       <div class="diff-label"><strong><Icon name="file" size={16} /><code>{file.path}</code></strong>{#if file.oldPath && file.newPath && file.oldPath !== file.newPath}<span class="diff-rename">Renamed from <code>{file.oldPath}</code></span>{/if}</div>
-                      <span class="file-change-counts">{#if file.binary}<span class="chip">Binary file</span>{:else}<span class="chip plus">+{file.additions}</span><span class="chip minus">−{file.deletions}</span>{/if}</span>
+                      <span class="file-change-counts">{#if file.isNew}<span class="chip new-file">New</span>{/if}{#if file.binary}<span class="chip">Binary file</span>{:else}<span class="chip plus">+{file.additions}</span><span class="chip minus">−{file.deletions}</span>{/if}</span>
                     </summary>
                     <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll long patch lines) -->
                     <div class="diff-code scroll-x" tabindex="0" role="region" aria-label="Patch for {file.path}">
@@ -786,8 +809,24 @@
 {/if}
 
 <style>
-  .background-work { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-2); font-size: 0.75rem; }
-  .background-work > span { display: inline-flex; align-items: center; gap: 6px; }
+  .background-badge { align-self: flex-start; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 44px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 16px; color: var(--text-2); background: var(--surface-2); box-shadow: var(--clay-soft); font-size: 0.75rem; }
+  .background-badge:hover { background: var(--surface-3); }
+  .background-badge:active { box-shadow: var(--clay-pressed); }
+  .background-stale { color: var(--text-3); }
+  .background-popup { width: min(520px, calc(100vw - 32px)); max-height: min(640px, calc(100dvh - 40px)); margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: 24px; color: var(--text); background: var(--surface); box-shadow: var(--clay-raised); overflow: auto; }
+  .background-popup::backdrop { background: rgb(0 0 0 / 35%); }
+  .background-popup header { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+  .background-popup h2 { margin: 0; font-size: 1.1rem; }
+  .background-popup header p { margin: 6px 0 0; color: var(--text-2); font-size: 0.8rem; }
+  .background-popup header button { flex: none; min-width: 44px; min-height: 44px; }
+  .background-popup h3 { margin: 20px 0 8px; font-size: 0.8rem; color: var(--text-2); }
+  .background-popup ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 10px; }
+  .background-popup li { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 16px; background: var(--surface-2); box-shadow: var(--clay-soft); }
+  .background-popup li > div { flex: 1; min-width: 0; display: grid; gap: 4px; }
+  .background-popup strong, .background-popup code { overflow-wrap: anywhere; }
+  .background-popup strong { font-size: 0.85rem; }
+  .background-popup code { color: var(--text-3); font-size: 0.7rem; }
+  .background-state { flex: none; font-size: 0.7rem; color: var(--accent-text); }
   .shell-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto !important; min-width: 0; }
   /* Fills the content area; only regions inside the panel scroll. */
   .detail {
@@ -1601,6 +1640,13 @@
     background: var(--code-bg);
   }
 
+  .worktree-bar { flex: none; display: grid; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .worktree-bar label { color: var(--text-2); font-size: 0.75rem; }
+  .worktree-bar select { width: 100%; min-width: 0; min-height: 44px; }
+  .worktree-bar p { margin: 2px 0 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--text-3); font-size: 0.7rem; }
+  .worktree-bar code { overflow-wrap: anywhere; }
+  .worktree-bar .diff-warning { color: var(--warning, var(--text-2)); }
+  .new-file { color: var(--accent-text); }
   .diff-filter-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .diff-filter { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
   .diff-filter input { width: 100%; min-width: 0; min-height: 44px; }

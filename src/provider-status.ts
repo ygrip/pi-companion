@@ -6,20 +6,25 @@ const window = (used: unknown, reset: unknown): UsageWindow | undefined => {
   const date = typeof reset === 'number' ? new Date(reset * 1000) : typeof reset === 'string' ? new Date(reset) : undefined;
   return { usedPercent: used, ...(date && Number.isFinite(date.getTime()) ? { resetsAt: date.toISOString() } : {}) };
 };
-export function parseProviderQuota(provider: string, value: unknown): Pick<ProviderUsage, 'weekly' | 'fiveHour'> {
+export function parseProviderQuota(provider: string, value: unknown, now = Date.now()): Pick<ProviderUsage, 'weekly' | 'fiveHour'> {
   const body = object(value);
   if (provider === 'anthropic') return {
     weekly: window(object(body.seven_day).utilization, object(body.seven_day).resets_at),
     fiveHour: window(object(body.five_hour).utilization, object(body.five_hour).resets_at)
   };
   const quota: Pick<ProviderUsage, 'weekly' | 'fiveHour'> = {};
+  if (provider !== 'openai-codex') return quota;
   const rate = object(body.rate_limit);
   for (const [raw, fallback] of [[rate.primary_window, 'fiveHour'], [rate.secondary_window, 'weekly']] as const) {
-    const item = object(raw), parsed = window(item.used_percent, item.reset_at);
-    if (!parsed) continue;
+    const item = object(raw);
     const seconds = item.limit_window_seconds;
-    const key = typeof seconds === 'number' && seconds > 0 ? (seconds <= 86400 ? 'fiveHour' : 'weekly') : fallback;
-    quota[key] = parsed;
+    // Slots may swap, and a daily/model-specific limit is not a five-hour allowance.
+    const key = seconds === 18000 ? 'fiveHour' : seconds === 604800 ? 'weekly' : seconds == null ? fallback : undefined;
+    if (!key) continue;
+    const after = item.reset_after_seconds;
+    const reset = item.reset_at ?? (typeof after === 'number' && Number.isFinite(after) && after >= 0 ? now / 1000 + after : undefined);
+    const parsed = window(item.used_percent, reset);
+    if (parsed) quota[key] = parsed;
   }
   return quota;
 }

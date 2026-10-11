@@ -1,4 +1,5 @@
 mod activity;
+mod usage;
 mod automation;
 mod assets;
 mod config;
@@ -76,6 +77,7 @@ struct AppState {
     files: Arc<RwLock<HashMap<String, Vec<TempFile>>>>,
     /// Recent feed per session so reconnecting browsers can catch up.
     activity: Arc<RwLock<activity::ActivityStore>>,
+    usage: Arc<Mutex<usage::Store>>,
     pairings: Arc<RwLock<HashMap<String, PairingInvite>>>,
     /// Times of recent wrong pairing-code attempts (brute-force brake).
     code_failures: Arc<Mutex<Vec<u64>>>,
@@ -105,6 +107,7 @@ impl AppState {
             sessions: Arc::new(RwLock::new(HashMap::new())),
             files: Arc::new(RwLock::new(HashMap::new())),
             activity: Arc::new(RwLock::new(activity::ActivityStore::default())),
+            usage: Arc::new(Mutex::new(usage::Store::default())),
             pairings: Arc::new(RwLock::new(HashMap::new())),
             code_failures: Arc::new(Mutex::new(Vec::new())),
             devices: Arc::new(RwLock::new(devices)),
@@ -197,6 +200,8 @@ struct PairClaimResponse {
 #[derive(Serialize)]
 struct SessionsResponse {
     sessions: Vec<Value>,
+    #[serde(rename = "usageSnapshots")]
+    usage_snapshots: Vec<usage::Snapshot>,
 }
 
 #[derive(Serialize)]
@@ -276,6 +281,7 @@ async fn main() {
 
     // A duplicate process must not rewrite the live daemon's run history either.
     automation::initialize(&state).await.expect("load automation definitions");
+    *state.usage.lock().await = usage::load(&state.data_dir).await;
     // Do not execute scheduled jobs until both ports are owned by this daemon.
     let maintenance = state.clone();
     let mut maintenance_shutdown = state.shutdown_tx.subscribe();
@@ -508,10 +514,19 @@ async fn put_settings(
     Ok(get_settings(State(state)).await)
 }
 
+async fn cache_session_usage(state: &AppState, session_id: &str) {
+    // Serialize cache updates/writes, but never hold the sessions lock during disk I/O.
+    let mut store = state.usage.lock().await;
+    let snapshot = state.sessions.read().await.get(session_id).map(|s| s.snapshot.clone());
+    if let Some(snapshot) = snapshot && store.capture(session_id, &snapshot)
+        && let Err(error) = config::save_json(&state.data_dir, "usage.json", &*store).await {
+        tracing::warn!("could not save usage snapshots: {error}");
+    }
+}
+
 async fn list_sessions(State(state): State<AppState>) -> Json<SessionsResponse> {
-    Json(SessionsResponse {
-        sessions: state.sessions.read().await.values().map(|s| s.snapshot.clone()).collect(),
-    })
+    let sessions = state.sessions.read().await.values().map(|s| s.snapshot.clone()).collect();
+    Json(SessionsResponse { sessions, usage_snapshots: state.usage.lock().await.snapshots(false) })
 }
 
 async fn list_sessions_remote(
@@ -527,7 +542,11 @@ async fn list_sessions_remote(
         .filter(|s| s.snapshot.get("remoteEnabled").and_then(Value::as_bool) == Some(true))
         .map(|s| s.snapshot.clone())
         .collect();
-    Ok(Json(SessionsResponse { sessions }))
+    let mut usage_snapshots = state.usage.lock().await.snapshots(true);
+    // Re-check current sharing flags even if an update has not reached the cache yet.
+    let current = state.sessions.read().await;
+    usage_snapshots.retain(|s| current.get(&s.id).is_none_or(|live| live.snapshot["remoteEnabled"] == true));
+    Ok(Json(SessionsResponse { sessions, usage_snapshots }))
 }
 
 async fn delete_session_local(State(state): State<AppState>, Path(session_id): Path<String>) -> ApiResult<StatusCode> {
@@ -1239,6 +1258,7 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                     sessions.insert(session_id.clone(), Session { snapshot: snapshot.clone(), command_tx: Some(command_tx.clone()) });
                     broadcast(&state, serde_json::json!({ "type": "session.register", "session": snapshot }));
                 }
+                cache_session_usage(&state, &session_id).await;
                 notify_session_files(&state, &session_id).await;
             }
             Some("session.update") => {
@@ -1257,6 +1277,8 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
                         "patch": patch
                     }));
                 }
+                drop(sessions);
+                cache_session_usage(&state, &session_id).await;
             }
             Some("file.delete") => {
                 let request_id = value.get("requestId").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -1303,6 +1325,7 @@ async fn bridge_socket(socket: WebSocket, session_id: String, state: AppState) {
     };
     send_task.abort();
     if !stopped { return; }
+    cache_session_usage(&state, &session_id).await;
 
     let cleanup_state = state.clone();
     let cleanup_session = session_id.clone();

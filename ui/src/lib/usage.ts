@@ -40,10 +40,29 @@ export function reportedTime(value: string | undefined): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : 'Unknown';
 }
 
-export type ProviderSnapshot = ProviderUsage & { ended: boolean; sessionEnded?: boolean };
+export type UsageSnapshot = Pick<Session, 'id' | 'status' | 'remoteEnabled' | 'telemetry'>;
+export type ProviderSnapshot = ProviderUsage & { ended: boolean; sessionEnded?: boolean; sessionId?: string };
+
+/** Keep usage independent of the live session list. Account reports are never summed. */
+export function retainUsageSnapshots(cached: UsageSnapshot[], incoming: UsageSnapshot[], remote = false): UsageSnapshot[] {
+  const retained = new Map(cached.map(snapshot => [snapshot.id, snapshot]));
+  for (const session of incoming) {
+    if (remote && !session.remoteEnabled) { retained.delete(session.id); continue; }
+    const previous = retained.get(session.id);
+    const providers = providerSnapshots(previous ? [previous, session] : [session]).map(snapshot => {
+      const { ended: _ended, sessionEnded: _sessionEnded, sessionId: _sessionId, ...provider } = snapshot;
+      return provider;
+    });
+    const telemetry = providers.length ? { providers } : previous?.telemetry;
+    if (telemetry?.providers?.length) retained.set(session.id, {
+      id: session.id, status: session.status, remoteEnabled: session.remoteEnabled, telemetry
+    });
+  }
+  return [...retained.values()].filter(snapshot => !remote || snapshot.remoteEnabled).slice(-500);
+}
 
 /** Account limits are snapshots, not additive session usage. The newest report wins. */
-export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
+export function providerSnapshots(sessions: UsageSnapshot[], cached: UsageSnapshot[] = []): ProviderSnapshot[] {
   const quota = new Map<string, ProviderSnapshot>();
   const local = new Map<string, ProviderSnapshot>();
   const newer = (next: ProviderSnapshot, old?: ProviderSnapshot) => {
@@ -53,7 +72,7 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
     return Number.isFinite(nextTime) &&
       (!Number.isFinite(oldTime) || nextTime > oldTime || nextTime === oldTime && old.ended && !next.ended);
   };
-  for (const session of sessions) {
+  for (const session of [...cached.map(snapshot => ({ ...snapshot, status: 'stopped' as const })), ...sessions]) {
     const snapshots = session.telemetry?.providers;
     if (!Array.isArray(snapshots)) continue;
     for (const snapshot of snapshots) {
@@ -62,7 +81,7 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
       const key = provider.toLowerCase();
       const next = { ...snapshot, provider, ended: session.status === 'stopped' };
       if ((snapshot.weekly || snapshot.fiveHour) && newer(next, quota.get(key))) quota.set(key, next);
-      const consumption = { ...next, updatedAt: snapshot.sessionUpdatedAt ?? snapshot.updatedAt };
+      const consumption = { ...next, sessionId: session.id, updatedAt: snapshot.sessionUpdatedAt ?? snapshot.updatedAt };
       if ((nonnegative(snapshot.sessionTokens) || nonnegative(snapshot.sessionCost)) && newer(consumption, local.get(key))) local.set(key, consumption);
     }
   }
@@ -72,7 +91,7 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
     const chosen = (limit ?? consumption)!;
     return { ...chosen,
       ...(consumption && { sessionTokens: consumption.sessionTokens, sessionCost: consumption.sessionCost,
-        sessionUpdatedAt: consumption.updatedAt, sessionEnded: consumption.ended })
+        sessionUpdatedAt: consumption.updatedAt, sessionEnded: consumption.ended, sessionId: consumption.sessionId })
     };
   }).sort((a, b) => a.provider.localeCompare(b.provider));
 }
@@ -80,7 +99,7 @@ export function providerSnapshots(sessions: Session[]): ProviderSnapshot[] {
 export function snapshotStatus(snapshot: ProviderSnapshot, now = Date.now()): string {
   const timestamp = Date.parse(snapshot.updatedAt);
   if (!Number.isFinite(timestamp)) return 'Snapshot time unknown';
-  if (snapshot.ended) return 'Last report · session ended';
-  if (now - timestamp >= 15 * 60_000) return 'Older snapshot';
-  return 'Latest snapshot';
+  if (snapshot.ended) return 'Saved snapshot · session closed';
+  if (now - timestamp >= 15 * 60_000) return 'Saved snapshot · older than 15 minutes';
+  return 'Recent snapshot';
 }

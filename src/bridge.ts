@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { promisify } from "node:util";
 import WebSocket from "ws";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from "./ask.js";
@@ -8,10 +6,9 @@ import { ensureDaemon } from "./daemon.js";
 import { TelemetryRelay } from "./telemetry.js";
 import { PopupRelay } from "./popup.js";
 import { BackgroundWorkTracker } from "./background-work.js";
+import { gitChangesError, readGitChanges } from "./git-changes.js";
 import { heuristicTitle, inferTitle, needsInference, promptKey, savedTitles, TITLE_ENTRY } from "./title.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
-
-const execFileAsync = promisify(execFile);
 
 export class CompanionBridge implements AskChannel {
   private pendingPrompt?: string;
@@ -410,7 +407,7 @@ export class CompanionBridge implements AskChannel {
         await this.pi.sendUserMessage(command.text?.trim() ? "/plan " + command.text.trim() : "/plan");
         break;
       case "git_diff":
-        await this.sendGitDiff(Boolean(command.staged));
+        await this.sendGitDiff(Boolean(command.staged), command.worktree, command.requestId);
         break;
       case "popup_input":
         this.popups.input(command.popupId, command.data);
@@ -427,26 +424,13 @@ export class CompanionBridge implements AskChannel {
     }
   }
 
-  private async sendGitDiff(staged: boolean) {
-    const args = ["diff", "--no-ext-diff", "--no-color"];
-    if (staged) args.push("--cached");
+  private async sendGitDiff(staged: boolean, worktree?: string, requestId?: string) {
     try {
-      const result = await execFileAsync("git", args, {
-        cwd: this.ctx?.cwd ?? process.cwd(),
-        maxBuffer: 4 * 1024 * 1024
-      });
-      this.send({ type: "git.diff", staged, diff: result.stdout });
+      const changes = await readGitChanges(this.ctx?.cwd ?? process.cwd(), staged, worktree);
+      this.send({ type: "git.diff", staged, requestId, ...changes });
     } catch (error) {
       // Reported with the diff (shown as a toast), never as a session activity error.
-      const failure = error && typeof error === "object" ? error : {};
-      const stderr = "stderr" in failure ? String(failure.stderr ?? "") : "";
-      const missingGit = "code" in failure && failure.code === "ENOENT";
-      const message = /not a git repository/i.test(stderr)
-        ? "This project is not tracked by git."
-        : missingGit
-          ? "git is not installed on this computer."
-          : "git diff failed: " + (stderr.trim().split("\n")[0] || String(error));
-      this.send({ type: "git.diff", staged, diff: "", error: message });
+      this.send({ type: "git.diff", staged, requestId, diff: "", error: gitChangesError(error) });
     }
   }
 }

@@ -8,7 +8,7 @@ test('background shells use complete job snapshots and completion notifications'
     { id: 's1', name: 'server', status: 'running' },
     { id: 's2', name: 'test', status: 'exited' }
   ] });
-  assert.deepEqual(tracker.snapshot(), { shells: [{ id: 's1', name: 'server' }], agents: [] });
+  assert.deepEqual(tracker.snapshot(), { shells: [{ id: 's1', name: 'server', state: 'running' }], agents: [] });
   tracker.ingest('pi-jar.shell', { events: [{ id: 's1', name: 'server', kind: 'match', status: 'running' }] });
   assert.equal(tracker.snapshot().shells.length, 1, 'ready is not exited');
   tracker.ingest('pi-jar.shell', { events: [{ id: 's1', name: 'server', kind: 'exit', status: 'failed' }] });
@@ -23,7 +23,7 @@ test('subagents are merged across batches and settle, resume, pause and stop ind
   tracker.ingest('jar_delegate', { batch: 'b', runs: [{ index: 0, name: 'reviewer', state: 'queued' }] });
   assert.equal(tracker.snapshot().agents.length, 2);
   tracker.ingest('pi-jar.subagent', { events: [{ key: 'delegate-a-0', turn: 1 }] });
-  assert.deepEqual(tracker.snapshot().agents, [{ id: 'delegate-b-0', name: 'reviewer' }]);
+  assert.deepEqual(tracker.snapshot().agents, [{ id: 'delegate-b-0', name: 'reviewer', state: 'queued' }]);
   tracker.ingest('jar_subagent', { key: 'delegate-a-0', action: 'resume', status: 'accepted' });
   assert.equal(tracker.snapshot().agents.length, 2);
   tracker.ingest('pi-jar.subagent', { events: [{ key: 'delegate-a-0', action: 'pause', status: 'completed' }] });

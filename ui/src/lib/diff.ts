@@ -7,6 +7,7 @@ export type ChangedFile = {
   additions: number;
   deletions: number;
   binary: boolean;
+  isNew: boolean;
 };
 
 /** Decode Git's quoted paths (including octal UTF-8 bytes) without evaluating strings. */
@@ -75,7 +76,7 @@ export function splitChangedFiles(text: string): ChangedFile[] {
       else if (line.startsWith('-')) deletions++;
     }
     const path = newPath || oldPath || 'Changes';
-    return { id: `${index}:${path}`, path, oldPath, newPath, lines, additions, deletions, binary: lines.some((line) => line.startsWith('Binary files ') || line === 'GIT binary patch') };
+    return { id: `${index}:${path}`, path, oldPath, newPath, lines, additions, deletions, binary: lines.some((line) => line.startsWith('Binary files ') || line === 'GIT binary patch'), isNew: lines.some(line => line.startsWith('new file mode ')) };
   });
 }
 

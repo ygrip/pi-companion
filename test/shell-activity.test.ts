@@ -30,7 +30,12 @@ test('session feed separates user messages and hides raw shell scripts behind a 
   assert.doesNotMatch(source, /class="shell-preview"|shellPreview\(parts.result\)/);
   assert.match(source, /<summary>Full output · \{lines\}/);
   assert.match(source, /details summary\s*\{[^}]*width: 100%;[^}]*min-height: 44px/s);
-  assert.match(source, /aria-label="Background work"/);
+  assert.match(source, /class="background-badge"/);
+  assert.match(source, /aria-haspopup="dialog"/);
+  assert.match(source, /<dialog class="background-popup"[^>]*aria-labelledby="background-title"/);
+  assert.match(source, /onclick=\{\(\) => backgroundDialog\?\.showModal\(\)\}/);
+  assert.match(source, /onclose=\{\(\) => backgroundTrigger\?\.focus\(\)\}/);
+  assert.match(source, /aria-label="Close background work"/);
 });
 test('thinking renders markdown with a live animated state', () => {
   const source = readFileSync(new URL('../ui/src/routes/sessions/[id]/+page.svelte', import.meta.url), 'utf8');

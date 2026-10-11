@@ -57,8 +57,8 @@ export class BackgroundWorkTracker {
 
   snapshot(): BackgroundWork {
     return {
-      shells: [...this.shells.values()].filter(item => item.state === 'running').map(({ id, name }) => ({ id, name })),
-      agents: [...this.agents.values()].filter(item => item.state === 'working' || item.state === 'queued').map(({ id, name }) => ({ id, name }))
+      shells: [...this.shells.values()].filter(item => item.state === 'running').map(({ id, name, state }) => ({ id, name, state })),
+      agents: [...this.agents.values()].filter(item => item.state === 'working' || item.state === 'queued').map(({ id, name, state }) => ({ id, name, state }))
     };
   }
 }

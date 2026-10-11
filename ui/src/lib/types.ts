@@ -26,6 +26,8 @@ export type AutomationRun = {
   sessionId?: string;
 };
 
+export type GitWorktree = { path: string; branch: string; changedFiles: number | null; stagedFiles: number | null; unstagedFiles: number | null; error?: string };
+
 export type UsageWindow = { usedPercent: number; resetsAt?: string };
 
 /** Provider account limits, reported by any compatible extension. */
@@ -49,7 +51,7 @@ export type SessionTelemetry = {
 export type TerminalPopup = { id: string; lines: string[]; width: number };
 
 export type Session = {
-  backgroundWork?: { shells: { id: string; name: string }[]; agents: { id: string; name: string }[] };
+  backgroundWork?: { shells: { id: string; name: string; state?: string }[]; agents: { id: string; name: string; state?: string }[] };
   popups?: TerminalPopup[];
   id: string;
   name?: string | null;

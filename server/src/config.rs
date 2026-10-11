@@ -146,14 +146,18 @@ pub async fn load(dir: &Path) -> Persisted {
 }
 
 pub async fn save(dir: &Path, state: &Persisted) -> std::io::Result<()> {
+    save_json(dir, "state.json", state).await
+}
+
+pub async fn save_json<T: Serialize>(dir: &Path, filename: &str, state: &T) -> std::io::Result<()> {
     fs::create_dir_all(dir).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).await?;
     }
-    let target = state_file(dir);
-    let staging = dir.join(format!(".state.{}.{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple()));
+    let target = dir.join(filename);
+    let staging = dir.join(format!(".{filename}.{}.{}.tmp", std::process::id(), uuid::Uuid::new_v4().simple()));
     let bytes = serde_json::to_vec_pretty(state).map_err(std::io::Error::other)?;
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);

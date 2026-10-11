@@ -14,7 +14,7 @@
 
   let tab = $state<'general' | 'usage'>('general');
   let usageNow = $state(Date.now());
-  const usage = $derived(providerSnapshots(companion.sessions));
+  const usage = $derived(providerSnapshots(companion.sessions, companion.usageSnapshots));
 
   onMount(() => {
     const timer = setInterval(() => { usageNow = Date.now(); }, 60_000);
@@ -221,31 +221,32 @@
   <div class="settings-panel" id="settings-usage-panel" role="tabpanel" aria-labelledby="settings-usage-tab" tabindex="0" hidden={tab !== 'usage'}>
     <section class="card tile usage-section" aria-labelledby="provider-usage-heading">
       <div class="section-copy">
-        <h2 id="provider-usage-heading">Provider usage</h2>
-        <p class="muted">Provider quotas come from compatible extensions; recorded tokens and cost come directly from shared Pi sessions.</p>
-        <p class="subtle">Account limits and session totals are different. Missing quotas stay unavailable, never estimated from token usage.</p>
+        <h2 id="provider-usage-heading">Saved usage snapshots</h2>
+        <p class="muted">Weekly and 5-hour percentages show how much of your provider account allowance was used when last checked—not usage from a single session.</p>
+        <p class="subtle">Snapshots are saved on your computer. Closing or archiving a session does not erase them. Account limits refresh about every 5 minutes while a shared Pi session is running; pull to refresh to reload saved reports.</p>
+        <p class="subtle">“Not reported” means the provider supplied no window, not 0% used. Latest session totals come from the most recently reporting session for each provider; they are not combined account totals or your bill.</p>
       </div>
       {#if companion.connection !== 'online'}
-        <p class="usage-notice" role="status">Live updates are disconnected. Showing the last available snapshots.</p>
+        <p class="usage-notice" role="status">Your computer is disconnected. Any snapshots shown below are saved reports, not live readings.</p>
       {/if}
       {#if usage.length}
         <!-- The scroll region is focusable so keyboard users can scroll every table column. -->
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="usage-scroll" role="region" aria-label="Provider usage table, scroll horizontally for all columns" tabindex="0">
           <table class="usage-table">
-            <caption>Weekly and 5-hour usage by provider</caption>
-            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly usage</th><th scope="col">5-hour usage</th><th scope="col">Session tokens</th><th scope="col">Session cost</th><th scope="col">Snapshot</th></tr></thead>
+            <caption>Provider-reported account limits and latest session totals</caption>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly used</th><th scope="col">5-hour used</th><th scope="col">Latest session tokens</th><th scope="col">Latest session cost estimate</th><th scope="col">Last checked</th></tr></thead>
             <tbody>
               {#each usage as snapshot (snapshot.provider.toLowerCase())}
                 <tr>
                   <th scope="row"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></th>
-                  <td><strong>{usagePercent(snapshot.weekly)}</strong>{#if snapshot.weekly?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.weekly.resetsAt)}</span>{/if}</td>
-                  <td><strong>{usagePercent(snapshot.fiveHour)}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
+                  <td><strong>{snapshot.weekly ? usagePercent(snapshot.weekly) : 'Not reported'}</strong>{#if snapshot.weekly?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.weekly.resetsAt)}</span>{/if}</td>
+                  <td><strong>{snapshot.fiveHour ? usagePercent(snapshot.fiveHour) : 'Not reported'}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
                   <td>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</td>
                   <td>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</td>
                   <td>
-                    {#if snapshot.weekly || snapshot.fiveHour}<span>Quota: {reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span>{/if}
-                    {#if snapshot.sessionUpdatedAt}<span>Session: {reportedTime(snapshot.sessionUpdatedAt)}</span><span class="subtle">{snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)}</span>{/if}
+                    {#if snapshot.weekly || snapshot.fiveHour}<span>Account: {reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span>{/if}
+                    {#if snapshot.sessionUpdatedAt}<span>Session {snapshot.sessionId?.slice(0, 8)}: {reportedTime(snapshot.sessionUpdatedAt)}</span><span class="subtle">{snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)}</span>{/if}
                   </td>
                 </tr>
               {/each}
@@ -257,20 +258,20 @@
             <article class="usage-card">
               <div class="usage-card-head"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></div>
               <dl>
-                <div><dt>Weekly quota</dt><dd>{usagePercent(snapshot.weekly)}{#if snapshot.weekly?.resetsAt}<small>Resets {reportedTime(snapshot.weekly.resetsAt)}</small>{/if}</dd></div>
-                <div><dt>5-hour quota</dt><dd>{usagePercent(snapshot.fiveHour)}{#if snapshot.fiveHour?.resetsAt}<small>Resets {reportedTime(snapshot.fiveHour.resetsAt)}</small>{/if}</dd></div>
-                <div><dt>Session tokens</dt><dd>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</dd></div>
-                <div><dt>Session cost</dt><dd>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</dd></div>
+                <div><dt>Weekly used</dt><dd>{snapshot.weekly ? usagePercent(snapshot.weekly) : 'Not reported'}{#if snapshot.weekly?.resetsAt}<small>Resets {reportedTime(snapshot.weekly.resetsAt)}</small>{/if}</dd></div>
+                <div><dt>5-hour used</dt><dd>{snapshot.fiveHour ? usagePercent(snapshot.fiveHour) : 'Not reported'}{#if snapshot.fiveHour?.resetsAt}<small>Resets {reportedTime(snapshot.fiveHour.resetsAt)}</small>{/if}</dd></div>
+                <div><dt>Latest session tokens</dt><dd>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</dd></div>
+                <div><dt>Latest session cost estimate</dt><dd>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</dd></div>
               </dl>
               <div class="usage-card-foot">
-                {#if snapshot.weekly || snapshot.fiveHour}<div>Quota: {snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>{/if}
-                {#if snapshot.sessionUpdatedAt}<div>Session: {snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)} · {reportedTime(snapshot.sessionUpdatedAt)}</div>{/if}
+                {#if snapshot.weekly || snapshot.fiveHour}<div>Account: {snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>{/if}
+                {#if snapshot.sessionUpdatedAt}<div>Session {snapshot.sessionId?.slice(0, 8)}: {snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)} · {reportedTime(snapshot.sessionUpdatedAt)}</div>{/if}
               </div>
             </article>
           {/each}
         </div>
       {:else}
-        <div class="usage-empty"><Icon name="activity" /><h3>No provider usage reported yet</h3><p class="muted">Share a Pi session with <code>/companion</code> and send a model request to see recorded usage. Account quota limits additionally require a compatible reporting extension.</p></div>
+        <div class="usage-empty"><Icon name="activity" /><h3>No saved usage yet</h3><p class="muted">Share a Pi session with <code>/companion</code> to collect reports. Companion checks supported OpenAI Codex and Anthropic subscription limits when you’re logged in through Pi. Other providers can report limits through compatible extensions. Session token totals appear after a model request.</p></div>
       {/if}
     </section>
   </div>

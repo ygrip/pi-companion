@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { contextUsage, estimatedCost, providerSnapshots, reportedTime, snapshotStatus, usagePercent } from '../ui/src/lib/usage.ts';
+import { contextUsage, estimatedCost, providerSnapshots, reportedTime, retainUsageSnapshots, snapshotStatus, usagePercent } from '../ui/src/lib/usage.ts';
 import type { ProviderUsage, Session } from '../ui/src/lib/types.ts';
 
 const at = '2026-10-07T10:00:00.000Z';
@@ -99,8 +99,8 @@ test('native totals use their own freshness while quota freshness and session st
 test('mobile usage has compact cards and pull-to-refresh has no redundant button', () => {
   const settings = readFileSync(new URL('../ui/src/routes/settings/+page.svelte', import.meta.url), 'utf8');
   assert.match(settings, /class="usage-cards"/);
-  assert.match(settings, /Session tokens/);
-  assert.match(settings, /Session cost/);
+  assert.match(settings, /Latest session tokens/);
+  assert.match(settings, /Latest session cost estimate/);
   const refresh = readFileSync(new URL('../ui/src/lib/PullToRefresh.svelte', import.meta.url), 'utf8');
   assert.doesNotMatch(refresh, /<button/);
   assert.match(refresh, /touchend/);
@@ -133,12 +133,46 @@ test('empty, malformed and unavailable provider snapshots are handled gracefully
   assert.deepEqual(providerSnapshots([noTelemetry]), []);
 });
 
+test('saved usage survives session removal and quota and session freshness remain independent', () => {
+  const original = session('closed', [{ provider: 'openai-codex', source: 'account', updatedAt: at,
+    weekly: { usedPercent: 16 }, fiveHour: { usedPercent: 20 }, sessionTokens: 50 }]);
+  let cache = retainUsageSnapshots([], [original]);
+  cache = retainUsageSnapshots(cache, [{ ...original, status: 'stopped' }]);
+  const rows = providerSnapshots([], cache);
+  assert.equal(rows[0].weekly?.usedPercent, 16);
+  assert.equal(rows[0].fiveHour?.usedPercent, 20);
+  assert.equal(rows[0].sessionTokens, 50);
+  assert.equal(rows[0].sessionId, 'closed');
+  assert.equal(rows[0].ended, true);
+  assert.equal(rows[0].updatedAt, at);
+  // A tokens-only report must not erase a previously saved account snapshot.
+  cache = retainUsageSnapshots(cache, [session('closed', [{ provider: 'openai-codex',
+    updatedAt: '2026-10-07T10:05:00Z', sessionTokens: 100 }])]);
+  const updated = providerSnapshots([], cache)[0];
+  assert.equal(updated.weekly?.usedPercent, 16);
+  assert.equal(updated.updatedAt, at);
+  assert.equal(updated.sessionTokens, 100);
+  assert.equal(updated.sessionUpdatedAt, '2026-10-07T10:05:00Z');
+  assert.equal(updated.ended, true, 'saved reports are not live session readings');
+});
+
+test('saved usage is bounded, deduplicated and hidden when remote sharing is revoked', () => {
+  const report = session('shared', [{ provider: 'anthropic', updatedAt: at, weekly: { usedPercent: 10 } }]);
+  const cache = retainUsageSnapshots([], [report]);
+  assert.equal(retainUsageSnapshots(cache, [report]).length, 1);
+  assert.deepEqual(retainUsageSnapshots(cache, [{ ...report, remoteEnabled: false }], true), []);
+  const many = Array.from({ length: 505 }, (_, index) => ({ ...report, id: String(index) }));
+  const bounded = retainUsageSnapshots([], many);
+  assert.equal(bounded.length, 500);
+  assert.equal(bounded.some(snapshot => snapshot.id === '0'), false);
+});
+
 test('timestamps and snapshot status disclose ended sessions, old data and unknown dates', () => {
   const snapshot = { provider: 'OpenAI', updatedAt: at, ended: false };
   const now = Date.parse(at);
-  assert.equal(snapshotStatus(snapshot, now), 'Latest snapshot');
-  assert.equal(snapshotStatus(snapshot, now + 15 * 60_000), 'Older snapshot');
-  assert.equal(snapshotStatus({ ...snapshot, ended: true }, now), 'Last report · session ended');
+  assert.equal(snapshotStatus(snapshot, now), 'Recent snapshot');
+  assert.equal(snapshotStatus(snapshot, now + 15 * 60_000), 'Saved snapshot · older than 15 minutes');
+  assert.equal(snapshotStatus({ ...snapshot, ended: true }, now), 'Saved snapshot · session closed');
   assert.equal(snapshotStatus({ ...snapshot, updatedAt: 'bad' }, now), 'Snapshot time unknown');
   assert.equal(reportedTime(undefined), 'Unknown');
   assert.equal(reportedTime('bad'), 'Unknown');
@@ -154,11 +188,14 @@ test('Settings usage tabs expose linked panels, keyboard support and a labeled s
     assert.ok(settings.includes(`id="settings-${name}-panel" role="tabpanel" aria-labelledby="settings-${name}-tab"`));
   }
   assert.match(settings, /\['ArrowLeft', 'ArrowRight', 'Home', 'End'\]/);
-  assert.match(settings, /Weekly usage/);
-  assert.match(settings, /5-hour usage/);
-  assert.match(settings, /<caption>Weekly and 5-hour usage by provider<\/caption>/);
+  assert.match(settings, /Weekly used/);
+  assert.match(settings, /5-hour used/);
+  assert.match(settings, /<caption>Provider-reported account limits and latest session totals<\/caption>/);
+  assert.match(settings, /Not reported/);
+  assert.match(settings, /Closing or archiving a session does not erase them/);
+  assert.doesNotMatch(settings, /Account quota limits additionally require a compatible reporting extension/);
   assert.match(settings, /usage-scroll" role="region"[^>]+tabindex="0"/);
-  assert.match(settings, /providerSnapshots\(companion.sessions\)/);
+  assert.match(settings, /providerSnapshots\(companion.sessions, companion.usageSnapshots\)/);
   assert.match(settings, /\.settings-panel\[hidden\] \{ display: none; \}/);
   assert.match(settings, /clearInterval\(timer\)/);
   const detail = readFileSync(new URL('../ui/src/routes/sessions/[id]/+page.svelte', import.meta.url), 'utf8');

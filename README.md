@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.10:** Shell output uses one collapsed full-output section without a duplicate preview, with larger expand/collapse controls. Sessions show compact counts of reported running background shells and active subagents.
+**New in 0.3.11:** Changes includes worktree selection, branch and file counts, and new-file previews. Provider usage snapshots survive closed and archived sessions and daemon restarts, with accurate quota labels. Clay background-work badges open shell/subagent lists, and automation phases open scrollable flowcharts with failure and retry paths.
+
+**0.3.10:** Shell output uses one collapsed full-output section without a duplicate preview, with larger expand/collapse controls. Sessions show compact counts of reported running background shells and active subagents.
 
 **0.3.9:** Model-written session titles are saved in the session file (keyed by a hash of the prompt, not the prompt itself), so resuming or reloading a session shows the same title without asking the model again.
 

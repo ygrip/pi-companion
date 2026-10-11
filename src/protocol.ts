@@ -58,7 +58,7 @@ export type SessionTelemetry = {
 
 export type TerminalPopup = { id: string; lines: string[]; width: number };
 
-export type BackgroundWork = { shells: { id: string; name: string }[]; agents: { id: string; name: string }[] };
+export type BackgroundWork = { shells: { id: string; name: string; state?: string }[]; agents: { id: string; name: string; state?: string }[] };
 
 export type SessionSnapshot = {
   backgroundWork?: BackgroundWork;
@@ -79,6 +79,9 @@ export type SessionSnapshot = {
   asks: AskRequest[];
 };
 
+export type GitWorktree = { path: string; branch: string; changedFiles: number | null; stagedFiles: number | null; unstagedFiles: number | null; error?: string };
+export type GitChanges = { diff: string; worktree: string; branch: string; worktrees: GitWorktree[]; warnings: string[] };
+
 export type BrowserCommand =
   | { type: "popup_input"; popupId: string; data: string }
   | { type: "popup_close"; popupId: string }
@@ -86,7 +89,7 @@ export type BrowserCommand =
   | { type: "steer"; text: string }
   | { type: "abort" }
   | { type: "plan"; text?: string }
-  | { type: "git_diff"; staged?: boolean }
+  | { type: "git_diff"; staged?: boolean; worktree?: string; requestId?: string }
   | { type: "ask_answer"; requestId: string; answers: AskAnswers }
   | { type: "ask_cancel"; requestId: string };
 
@@ -94,7 +97,7 @@ export type BridgeMessage =
   | { type: "register"; session: SessionSnapshot }
   | { type: "session.update"; session: Partial<SessionSnapshot> }
   | { type: "event"; event: string; payload: unknown }
-  | { type: "git.diff"; staged: boolean; diff: string; error?: string }
+  | ({ type: "git.diff"; staged: boolean; diff: string; error?: string; requestId?: string } & Partial<Omit<GitChanges, 'diff'>>)
   | { type: "file.delete"; requestId: string; fileId: string }
   | { type: "error"; message: string };
 

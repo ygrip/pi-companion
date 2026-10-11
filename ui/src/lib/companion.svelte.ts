@@ -1,11 +1,12 @@
 import { reduceBridgeMessage, replayActivity, type ActivityEntry } from './activity.ts';
 import { sortSessions } from './format.ts';
+import { retainUsageSnapshots, type UsageSnapshot } from './usage.ts';
 import { toasts } from './toast.svelte.ts';
 import { LiveConnection, type Connection } from './connection.ts';
 export type { Connection } from './connection.ts';
 import { ApiError, WorkspaceConnectionError, unreachableMessage, workspaceRequest } from './workspace-connection.ts';
 export { ApiError } from './workspace-connection.ts';
-import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
+import type { AskAnswers, AskRequest, GitWorktree, PairedDevice, Pairing, Session, SettingsResponse, Settings, TempFile } from './types.ts';
 
 /**
  * Single live connection to the daemon, shared by every page.
@@ -18,7 +19,7 @@ import type { AskAnswers, AskRequest, PairedDevice, Pairing, Session, SettingsRe
  */
 const TOKEN_KEY = 'piCompanionDeviceToken';
 
-type Diff = { staged: boolean; text: string; at: number; error?: string };
+type Diff = { staged: boolean; text: string; at: number; error?: string; worktree?: string; branch?: string; worktrees?: GitWorktree[]; warnings?: string[]; loading?: boolean };
 type UploadPolicy = { maxUploadMb: number; allowedUploadTypes: string[] };
 
 class Companion {
@@ -32,11 +33,13 @@ class Companion {
   connection = $state<Connection>('connecting');
 
   sessions = $state<Session[]>([]);
+  usageSnapshots = $state<UsageSnapshot[]>([]);
   devices = $state<PairedDevice[]>([]);
   // Per-session live data. Raw state + reassignment keeps streaming cheap.
   activity = $state.raw<Record<string, ActivityEntry[]>>({});
   files = $state.raw<Record<string, TempFile[]>>({});
   diffs = $state.raw<Record<string, Diff>>({});
+  private diffRequests = new Map<string, string>();
 
   private live = new LiveConnection({
     enabled: () => this.booted && this.paired && navigator.onLine !== false,
@@ -212,13 +215,17 @@ class Companion {
   }
 
   async refreshSessions() {
-    const result = await this.request<{ sessions: Session[] }>('/api/sessions');
+    const result = await this.request<{ sessions: Session[]; usageSnapshots?: UsageSnapshot[] }>('/api/sessions');
     if (!result || !Array.isArray(result.sessions)) {
       const error = new WorkspaceConnectionError('The workspace returned an invalid session list. Check the tunnel URL and retry.');
       this.unavailable(error.message);
       throw error;
     }
     this.sessions = sortSessions(result.sessions);
+    this.usageSnapshots = retainUsageSnapshots(
+      Array.isArray(result.usageSnapshots) ? result.usageSnapshots : this.usageSnapshots,
+      this.sessions, this.remote
+    );
   }
 
   async refreshDevices() {
@@ -316,6 +323,7 @@ class Companion {
     clearTimeout(this.retryTimer);
     this.live.revoke();
     this.sessions = [];
+    this.usageSnapshots = [];
   }
 
   /** Observer for session snapshot changes (device notifications hook in here). */
@@ -327,6 +335,7 @@ class Companion {
         const next = message.session as Session;
         const others = this.sessions.filter((session) => session.id !== next.id);
         this.sessions = sortSessions(this.remote && !next.remoteEnabled ? others : [...others, next]);
+        this.usageSnapshots = retainUsageSnapshots(this.usageSnapshots, [next], this.remote);
         break;
       }
       case 'session.removed':
@@ -340,7 +349,13 @@ class Companion {
           break;
         }
         const previous = this.sessions.find((session) => session.id === message.sessionId);
-        if (previous) this.onSessionChange?.(previous, { ...previous, ...patch });
+        if (previous) {
+          const next = { ...previous, ...patch };
+          this.onSessionChange?.(previous, next);
+          this.usageSnapshots = retainUsageSnapshots(this.usageSnapshots, [next], this.remote);
+        } else if (patch.remoteEnabled === false && this.remote) {
+          this.usageSnapshots = this.usageSnapshots.filter(snapshot => snapshot.id !== message.sessionId);
+        }
         this.sessions = sortSessions(
           this.sessions
             .map((session) => (session.id === message.sessionId ? { ...session, ...patch } : session))
@@ -370,8 +385,15 @@ class Companion {
   private handleBridge(sessionId: string, inner: any) {
     if (!sessionId || !inner) return;
     if (inner.type === 'git.diff') {
+      const expected = this.diffRequests.get(sessionId);
+      if (expected && inner.requestId && inner.requestId !== expected) return;
       const error = typeof inner.error === 'string' ? inner.error : undefined;
-      this.diffs = { ...this.diffs, [sessionId]: { staged: Boolean(inner.staged), text: inner.diff ?? '', at: Date.now(), error } };
+      const previous = this.diffs[sessionId];
+      this.diffs = { ...this.diffs, [sessionId]: { staged: Boolean(inner.staged), text: inner.diff ?? '', at: Date.now(), error,
+        worktree: typeof inner.worktree === 'string' ? inner.worktree : previous?.worktree,
+        branch: typeof inner.branch === 'string' ? inner.branch : undefined,
+        worktrees: Array.isArray(inner.worktrees) ? inner.worktrees : previous?.worktrees,
+        warnings: Array.isArray(inner.warnings) ? inner.warnings : [], loading: false } };
       if (error) toasts.show(error, 'error');
       return;
     }
@@ -384,6 +406,16 @@ class Companion {
     const current = this.activity[sessionId] ?? [];
     const next = reduceBridgeMessage(current, inner);
     if (next !== current) this.activity = { ...this.activity, [sessionId]: next };
+  }
+
+  requestDiff(sessionId: string, staged: boolean, worktree?: string): boolean {
+    const requestId = crypto.randomUUID();
+    this.diffRequests.set(sessionId, requestId);
+    if (!this.send(sessionId, { type: 'git_diff', staged, worktree, requestId })) { this.diffRequests.delete(sessionId); return false; }
+    const previous = this.diffs[sessionId];
+    this.diffs = { ...this.diffs, [sessionId]: { staged, text: '', at: Date.now(), worktree: worktree ?? previous?.worktree,
+      branch: previous?.worktree === worktree ? previous?.branch : undefined, worktrees: previous?.worktrees, loading: true } };
+    return true;
   }
 
   send(sessionId: string, command: Record<string, unknown>) {

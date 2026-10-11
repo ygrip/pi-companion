@@ -11,6 +11,25 @@ test('Codex windows are classified by duration, not slot; Anthropic percentages 
   assert.equal(anthropic.weekly?.usedPercent, 7); assert.equal(anthropic.fiveHour?.usedPercent, 15);
 });
 
+test('Codex retains real five-hour percentages and relative reset times without fabricating missing windows', () => {
+  const now = Date.parse('2026-10-07T10:00:00Z');
+  const fiveHour = parseProviderQuota('openai-codex', { rate_limit: {
+    primary_window: { used_percent: 0, limit_window_seconds: 18000, reset_after_seconds: 7200 },
+    secondary_window: { used_percent: 16, limit_window_seconds: 604800 }
+  } }, now);
+  assert.equal(fiveHour.fiveHour?.usedPercent, 0);
+  assert.equal(fiveHour.fiveHour?.resetsAt, '2026-10-07T12:00:00.000Z');
+  assert.equal(fiveHour.weekly?.usedPercent, 16);
+  const weeklyOnly = parseProviderQuota('openai-codex', { rate_limit: {
+    primary_window: { used_percent: 16, limit_window_seconds: 604800 }, secondary_window: null
+  } }, now);
+  assert.equal(weeklyOnly.fiveHour, undefined);
+  assert.equal(weeklyOnly.weekly?.usedPercent, 16);
+  assert.deepEqual(parseProviderQuota('openai-codex', { rate_limit: {
+    primary_window: { used_percent: 30, limit_window_seconds: 86400 }
+  } }), {}, 'daily limits must not be mislabeled as five-hour limits');
+});
+
 test('quota poller resolves each OAuth provider independently and never publishes credentials', async () => {
   const original = globalThis.fetch;
   const reports: unknown[] = [];
