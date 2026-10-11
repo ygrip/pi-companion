@@ -2,7 +2,7 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.7:** Resuming a previously shared Pi session reconnects automatically under the same dashboard identity. Explicit `/remote-control off` survives resume; new and forked sessions stay private. Unnamed session titles now reflect the first user prompt, refresh with branch context, and remain editable with `/name`.
+**New in 0.3.8:** The session feed is easier to scan: shell calls show a one-line, human summary ("Check git status, Run tests +1 more") instead of the raw script, while output stays intact. Agent thinking renders as Markdown with a live animated state and "Thought for Ns" once done. Unnamed sessions get a short title that summarises the first prompt, inferred by the session's own model while shared, with an instant local fallback.
 
 When a session is shared, Companion fetches OpenAI Codex and Anthropic subscription usage via Pi's existing OAuth resolver, independently per provider with five-minute caching and failure backoff. Credentials are never sent to the browser or stored by the daemon. API-key accounts and unsupported providers have no built-in subscription lookup; extensions can still publish the neutral telemetry contract. Provider rate-limit, quota and authentication failures are shown in the activity feed with safe remediation guidance rather than raw provider payloads.
 

@@ -7,12 +7,15 @@ import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from ".
 import { ensureDaemon } from "./daemon.js";
 import { TelemetryRelay } from "./telemetry.js";
 import { PopupRelay } from "./popup.js";
+import { heuristicTitle, inferTitle, needsInference } from "./title.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
 
 export class CompanionBridge implements AskChannel {
   private pendingPrompt?: string;
+  private inferredTitles = new Map<string, string>();
+  private inferringTitles = new Set<string>();
   /** Relays question tools that ask through ctx.ui.custom (fed from tool_execution_* events). */
   readonly toolDialogs = new ToolDialogRelay(this);
   readonly popups = new PopupRelay(popups => {
@@ -82,9 +85,29 @@ export class CompanionBridge implements AskChannel {
         .filter(part => part.type === "text").map(part => part.text).join(" ");
       if (text.trim()) { prompt = text; break; }
     }
-    const title = prompt?.replace(/\s+/g, " ").trim();
-    if (title) return title.length > 120 ? title.slice(0, 119) + "…" : title;
+    const key = prompt?.replace(/\s+/g, " ").trim();
+    if (key) {
+      const inferred = this.inferredTitles.get(key);
+      if (inferred) return inferred;
+      this.scheduleTitleInference(key);
+      const title = heuristicTitle(key);
+      if (title) return title;
+    }
     return cwd.split(/[\\/]/).filter(Boolean).pop() || "Pi";
+  }
+
+  /** Summarise long first prompts with the session's model, only while the session is shared. */
+  private scheduleTitleInference(prompt: string) {
+    const ctx = this.ctx;
+    if (!ctx || !this.isActivated() || !this.snapshot.remoteEnabled) return;
+    if (this.inferredTitles.has(prompt) || this.inferringTitles.has(prompt) || !needsInference(prompt)) return;
+    this.inferringTitles.add(prompt);
+    void inferTitle(ctx, prompt).then(title => {
+      // Cache failures as the heuristic title so a broken provider is not retried every second.
+      this.inferredTitles.set(prompt, title || heuristicTitle(prompt));
+      this.inferringTitles.delete(prompt);
+      this.refreshMetadata();
+    });
   }
 
   /** Context getters remain live while idle; send only changed metadata, including explicit clears. */

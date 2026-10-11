@@ -36,7 +36,8 @@ const bridge = dataModule(transpile('../src/bridge.ts')
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)
   .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
   .replace('from "./telemetry.js"', `from ${JSON.stringify(new URL('../src/telemetry.ts', import.meta.url).href)}`)
-  .replace('from "./popup.js"', `from ${JSON.stringify(new URL('../src/popup.ts', import.meta.url).href)}`));
+  .replace('from "./popup.js"', `from ${JSON.stringify(new URL('../src/popup.ts', import.meta.url).href)}`)
+  .replace('from "./title.js"', `from ${JSON.stringify(new URL('../src/title.ts', import.meta.url).href)}`));
 const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
   .replace('from "./ask.js"', `from ${JSON.stringify(ask)}`)

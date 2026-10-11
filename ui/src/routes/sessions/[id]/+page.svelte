@@ -109,6 +109,20 @@
 
   const lineCount = (text: string) => text.split('\n').length;
 
+  /** "Thought for 12s" once reasoning ends; the next feed entry marks when it stopped. */
+  function thoughtLabel(entry: ActivityEntry, next?: ActivityEntry) {
+    const seconds = next ? Math.round((next.at - entry.at) / 1000) : 0;
+    if (seconds < 1) return 'Thought';
+    if (seconds < 60) return `Thought for ${seconds}s`;
+    return `Thought for ${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  }
+
+  /** Latest readable line of a streaming thought, stripped of markdown syntax. */
+  function lastThoughtLine(text: string) {
+    const line = text.split('\n').map(part => part.trim()).filter(Boolean).at(-1) ?? '';
+    return line.replace(/^[#>*\-\d.)\s]+/, '').replace(/[*_`]+/g, '').slice(-160);
+  }
+
   type Tab = 'activity' | 'files' | 'changes';
 
   const id = $derived(page.params.id ?? '');
@@ -505,15 +519,20 @@
                 <p class="line dim"><span class="glyph">#</span><span>Waiting for Pi. Replies, tool calls and questions stream here.</span></p>
               {:else}
                 <ol aria-live="polite" aria-relevant="additions">
-                  {#each feed as entry (entry.id)}
-                    <li class="line {entry.kind} {entry.status ?? ''}">
+                  {#each feed as entry, index (entry.id)}
+                    {@const liveThought = entry.kind === 'thinking' && index === feed.length - 1 && session.status === 'active'}
+                    <li class="line {entry.kind} {entry.status ?? ''}" class:live-thought={liveThought}>
                       <span class="glyph" aria-hidden="true">{glyph[entry.kind]}</span>
                       <div class="line-main">
                         {#if entry.kind === 'tool'}
                           {@const parts = toolParts(entry)}
                           {@const summary = toolSummary(entry, parts.args)}
                           <div class="cmd">
-                            <b>{summary.kind === 'command' ? shellLabel(inputFor(entry, parts.args), entry.status) : entry.title}</b>
+                            {#if summary.kind === 'command'}
+                              <b class="shell-label" title={summary.command}>{shellLabel(inputFor(entry, parts.args), entry.status)}</b>
+                            {:else}
+                              <b>{entry.title}</b>
+                            {/if}
                             {#if entry.status === 'running'}<span class="state run">running</span>
                             {:else if entry.status === 'ok'}<span class="state ok">ok</span>
                             {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
@@ -528,11 +547,6 @@
                             {:else}
                               <p class="shell-quiet">{entry.status === 'running' ? 'Waiting for output…' : 'No output returned.'}</p>
                             {/if}
-                            <details class="shell-script">
-                              <summary>{summary.command.includes('\n') ? 'Script details' : 'Command details'}</summary>
-                              {#if summary.command}<pre class="command"><span aria-hidden="true">$ </span>{summary.command}</pre>{/if}
-                              {#if parts.args}<details class="out"><summary>All parameters</summary><pre>{parts.args}</pre></details>{/if}
-                            </details>
                           {:else if summary.kind === 'file'}
                             <div class="tool-summary">
                               <code class="path-chip">{summary.path}</code>
@@ -575,10 +589,19 @@
                         {:else if entry.kind === 'error'}
                           <pre><b>{entry.title}:</b> {entry.body}</pre>
                         {:else if entry.kind === 'thinking'}
-                          <details class="thought">
-                            <summary>thinking · {lineCount(entry.body)} {lineCount(entry.body) === 1 ? 'line' : 'lines'}</summary>
-                            <pre>{entry.body}</pre>
+                          <details class="thought" class:live={liveThought}>
+                            <summary>
+                              {#if liveThought}
+                                <span class="thought-label shimmer">Thinking</span><span class="thinking-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+                              {:else}
+                                <span class="thought-label">{thoughtLabel(entry, feed[index + 1])}</span>
+                              {/if}
+                            </summary>
+                            <div class="md thought-body" use:prettify={{ text: entry.body, final: !liveThought }}>{@html renderMarkdown(entry.body)}</div>
                           </details>
+                          {#if liveThought && lastThoughtLine(entry.body)}
+                            <p class="thought-peek" aria-hidden="true">{lastThoughtLine(entry.body)}</p>
+                          {/if}
                         {:else if entry.kind === 'assistant'}
                           {@const final = entry !== feed.at(-1) || session.status !== 'active'}
                           <div class="md" use:prettify={{ text: entry.body, final }}>{@html renderMarkdown(entry.body)}</div>
@@ -759,8 +782,7 @@
 <style>
   .shell-preview { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
   .shell-quiet { margin: 6px 0; color: var(--text-2); font-size: .8rem; }
-  .shell-script { margin-top: 8px; font-size: .8rem; color: var(--text-2); }
-  .shell-script > summary { cursor: pointer; padding: 8px 0; }
+  .shell-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto !important; min-width: 0; }
   /* Fills the content area; only regions inside the panel scroll. */
   .detail {
     height: 100%;
@@ -989,10 +1011,97 @@
   .user .user-message { color: var(--term-text); font-family: var(--sans, sans-serif); font-size: .9rem; font-weight: 400; line-height: 1.65; }
   @media(max-width: 550px) { .line.user { margin-left: 8px; padding: 12px 10px; } }
 
-  .thinking pre,
   .thinking .glyph {
     color: var(--term-dim);
+  }
+
+  .live-thought .glyph {
+    color: var(--term-accent);
+    animation: thought-pulse 1.6s ease-in-out infinite;
+  }
+
+  .thought-label {
+    font-family: var(--sans, sans-serif);
+    font-size: .8rem;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+
+  /* A light sweep across the label signals live reasoning without flashing. */
+  .shimmer {
+    background: linear-gradient(90deg, var(--term-dim) 0%, var(--term-dim) 35%, var(--term-text) 50%, var(--term-dim) 65%, var(--term-dim) 100%);
+    background-size: 250% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: shimmer 2.2s linear infinite;
+  }
+
+  .thinking-dots {
+    display: inline-flex;
+    gap: 3px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+
+  .thinking-dots i {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--term-accent);
+    animation: dot-bounce 1.2s ease-in-out infinite;
+  }
+
+  .thinking-dots i:nth-child(2) { animation-delay: .15s; }
+  .thinking-dots i:nth-child(3) { animation-delay: .3s; }
+
+  .thought-body {
+    margin-top: 6px;
+    padding-left: 1.5ch;
+    border-left: 2px solid var(--term-line);
+    color: var(--term-dim);
+    font-size: .85rem;
+  }
+
+  .thought-peek {
+    margin: 4px 0 0;
+    padding-left: 1.5ch;
+    overflow: hidden;
+    color: var(--term-dim);
+    font-family: var(--sans, sans-serif);
+    font-size: .8rem;
     font-style: italic;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    animation: peek-in .35s ease-out;
+    mask-image: linear-gradient(90deg, #000 85%, transparent);
+  }
+
+  details.thought[open] + .thought-peek { display: none; }
+
+  @keyframes shimmer {
+    from { background-position: 100% 0; }
+    to { background-position: -150% 0; }
+  }
+
+  @keyframes dot-bounce {
+    0%, 80%, 100% { opacity: .25; transform: translateY(0); }
+    40% { opacity: 1; transform: translateY(-3px); }
+  }
+
+  @keyframes thought-pulse {
+    50% { opacity: .35; }
+  }
+
+  @keyframes peek-in {
+    from { opacity: 0; transform: translateY(2px); }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .shimmer { animation: none; color: var(--term-text); background: none; }
+    .thinking-dots i,
+    .live-thought .glyph,
+    .thought-peek { animation: none; }
   }
 
   .error,
@@ -1033,22 +1142,6 @@
   .state.err {
     color: var(--term-err);
   }
-  .command {
-    margin: 4px 0 2px;
-    padding: 10px 12px;
-    border-left: 2px solid var(--term-accent);
-    border-radius: 0 10px 10px 0;
-    background: var(--term-bg);
-    color: var(--term-text);
-    font: 0.9rem/1.5 var(--mono);
-    overflow-wrap: anywhere;
-  }
-
-  .command span {
-    color: var(--term-accent);
-    font-weight: 700;
-  }
-
   .tool-summary {
     display: flex;
     align-items: center;
@@ -1190,11 +1283,6 @@
     overflow-wrap: normal;
   }
 
-  .thought pre {
-    margin-top: 4px;
-    padding-left: 1.5ch;
-    border-left: 2px solid var(--term-line);
-  }
 
   /* ---------- Rendered Markdown (Pi's replies) ---------- */
 
