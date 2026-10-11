@@ -7,14 +7,16 @@ import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from ".
 import { ensureDaemon } from "./daemon.js";
 import { TelemetryRelay } from "./telemetry.js";
 import { PopupRelay } from "./popup.js";
-import { heuristicTitle, inferTitle, needsInference } from "./title.js";
+import { heuristicTitle, inferTitle, needsInference, promptKey, savedTitles, TITLE_ENTRY } from "./title.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
 const execFileAsync = promisify(execFile);
 
 export class CompanionBridge implements AskChannel {
   private pendingPrompt?: string;
+  /** Titles keyed by promptKey(); seeded once from the session file so resume never re-queries. */
   private inferredTitles = new Map<string, string>();
+  private titlesRestored = false;
   private inferringTitles = new Set<string>();
   /** Relays question tools that ask through ctx.ui.custom (fed from tool_execution_* events). */
   readonly toolDialogs = new ToolDialogRelay(this);
@@ -87,7 +89,11 @@ export class CompanionBridge implements AskChannel {
     }
     const key = prompt?.replace(/\s+/g, " ").trim();
     if (key) {
-      const inferred = this.inferredTitles.get(key);
+      if (!this.titlesRestored && this.ctx?.sessionManager) {
+        this.titlesRestored = true;
+        for (const [hash, title] of savedTitles(this.ctx.sessionManager.getEntries?.() ?? [])) this.inferredTitles.set(hash, title);
+      }
+      const inferred = this.inferredTitles.get(promptKey(key));
       if (inferred) return inferred;
       this.scheduleTitleInference(key);
       const title = heuristicTitle(key);
@@ -100,12 +106,18 @@ export class CompanionBridge implements AskChannel {
   private scheduleTitleInference(prompt: string) {
     const ctx = this.ctx;
     if (!ctx || !this.isActivated() || !this.snapshot.remoteEnabled) return;
-    if (this.inferredTitles.has(prompt) || this.inferringTitles.has(prompt) || !needsInference(prompt)) return;
-    this.inferringTitles.add(prompt);
+    const key = promptKey(prompt);
+    if (this.inferredTitles.has(key) || this.inferringTitles.has(key) || !needsInference(prompt)) return;
+    this.inferringTitles.add(key);
     void inferTitle(ctx, prompt).then(title => {
-      // Cache failures as the heuristic title so a broken provider is not retried every second.
-      this.inferredTitles.set(prompt, title || heuristicTitle(prompt));
-      this.inferringTitles.delete(prompt);
+      this.inferringTitles.delete(key);
+      if (this.closed) return;
+      // Cache failures in memory only, so a broken provider is not retried every refresh
+      // but a later process can still try; successes are saved to the session file.
+      this.inferredTitles.set(key, title || heuristicTitle(prompt));
+      if (title) {
+        try { this.pi.appendEntry(TITLE_ENTRY, { key, title }); } catch { /* title still shown this run */ }
+      }
       this.refreshMetadata();
     });
   }

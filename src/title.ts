@@ -1,4 +1,24 @@
+import { createHash } from "node:crypto";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+
+/** Custom session entry holding a model-written title; survives resume and reload. */
+export const TITLE_ENTRY = "companion:title";
+
+/** Stable, compact key for a prompt so the session file never stores the prompt twice. */
+export function promptKey(prompt: string) {
+  return createHash("sha256").update(prompt.replace(/\s+/g, " ").trim()).digest("hex").slice(0, 16);
+}
+
+/** Collect saved titles from session entries; later entries win. */
+export function savedTitles(entries: readonly unknown[]): Map<string, string> {
+  const titles = new Map<string, string>();
+  for (const entry of entries as Array<{ type?: string; customType?: string; data?: { key?: unknown; title?: unknown } }>) {
+    if (entry?.type !== "custom" || entry.customType !== TITLE_ENTRY) continue;
+    const { key, title } = entry.data ?? {};
+    if (typeof key === "string" && typeof title === "string" && title.trim()) titles.set(key, title.trim().slice(0, 80));
+  }
+  return titles;
+}
 
 const MAX_TITLE = 60;
 

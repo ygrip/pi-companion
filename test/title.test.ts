@@ -30,3 +30,18 @@ test('inference uses the session model and fails closed', async () => {
   assert.equal(await inferTitle(noAuth as any, 'x'), '');
   assert.equal(await inferTitle({} as any, 'x'), '');
 });
+
+test('saved titles are keyed by a prompt hash and the latest entry wins', async () => {
+  const { promptKey, savedTitles, TITLE_ENTRY } = await import('../src/title.ts');
+  assert.equal(promptKey('Fix  login\nflow'), promptKey('Fix login flow'));
+  assert.equal(promptKey('a').length, 16);
+  const titles = savedTitles([
+    { type: 'custom', customType: TITLE_ENTRY, data: { key: 'k', title: 'Old' } },
+    { type: 'custom', customType: 'other', data: { key: 'k', title: 'Nope' } },
+    { type: 'custom', customType: TITLE_ENTRY, data: { key: 'k', title: 'New' } },
+    { type: 'custom', customType: TITLE_ENTRY, data: { key: 'bad' } },
+    null
+  ]);
+  assert.equal(titles.get('k'), 'New');
+  assert.equal(titles.has('bad'), false);
+});

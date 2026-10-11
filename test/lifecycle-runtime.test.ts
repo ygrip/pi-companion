@@ -373,3 +373,59 @@ test('resume restores opt-in and stable identity, explicit off persists, and tit
     delete (globalThis as any).__companionLifecycleTest;
   }
 });
+
+test('model-written titles are saved once and reused on resume without another model call', async () => {
+  (globalThis as any).__companionLifecycleTest = state;
+  const { default: install } = await import(extension);
+  const prompt = 'please look into why the checkout page sometimes double charges customers after a retry and fix it';
+  const history: any[] = [];
+  const branch = [{ type: 'message', message: { role: 'user', content: prompt } }];
+  let calls = 0;
+  const ctx: any = {
+    cwd: '/project/shop', hasUI: true, isIdle: () => true, model: { id: 'm' },
+    modelRegistry: { hasConfiguredAuth: () => true, complete: async () => { calls++; return { content: [{ type: 'text', text: 'Fix checkout double charges' }] }; } },
+    sessionManager: { getSessionId: () => 'titled', getEntries: () => history, getBranch: () => branch },
+    ui: { notify() {}, select: async () => undefined, confirm: async () => false,
+      input: async () => undefined, custom: async () => undefined, setStatus() {} }
+  };
+  function launch() {
+    const events: Record<string, any> = {}, commands: Record<string, any> = {};
+    install({
+      getSessionName: () => undefined, getCommands: () => [],
+      appendEntry: (customType: string, data: unknown) => history.push({ type: 'custom', customType, data }),
+      events: { on() {}, emit() {} }, on: (key: string, fn: any) => { events[key] = fn; },
+      registerCommand: (key: string, command: any) => { commands[key] = command; }, registerTool() {}
+    });
+    return { events, commands };
+  }
+  let app = launch();
+  try {
+    app.events.session_start({}, ctx);
+    await app.commands['remote-control'].handler('on', ctx);
+    for (let i = 0; i < 5; i++) await nextTurn();
+    let socket = state.sockets.at(-1);
+    socket.readyState = 1; socket.emit('open');
+    for (let i = 0; i < 5; i++) await nextTurn();
+    app.events.input({ text: 'continue' }, ctx);
+    assert.equal(calls, 1);
+    const saved = history.filter(entry => entry.customType === 'companion:title');
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].data.title, 'Fix checkout double charges');
+    assert.ok(!JSON.stringify(saved[0].data).includes('checkout page'), 'the prompt itself is not duplicated');
+    assert.equal(socket.frames.at(-1).session.shortTitle, 'Fix checkout double charges');
+    app.events.session_shutdown({}, ctx);
+
+    app = launch();
+    app.events.session_start({}, ctx);
+    for (let i = 0; i < 5; i++) await nextTurn();
+    socket = state.sockets.at(-1);
+    socket.readyState = 1; socket.emit('open');
+    for (let i = 0; i < 5; i++) await nextTurn();
+    assert.equal(socket.frames[0].session.shortTitle, 'Fix checkout double charges');
+    assert.equal(calls, 1, 'resume reuses the saved title');
+    assert.equal(history.filter(entry => entry.customType === 'companion:title').length, 1);
+  } finally {
+    app.events.session_shutdown({}, ctx);
+    delete (globalThis as any).__companionLifecycleTest;
+  }
+});
