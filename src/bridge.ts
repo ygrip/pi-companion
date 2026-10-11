@@ -7,6 +7,7 @@ import { relayDialogs, ToolDialogRelay, type AskChannel, type AskInput } from ".
 import { ensureDaemon } from "./daemon.js";
 import { TelemetryRelay } from "./telemetry.js";
 import { PopupRelay } from "./popup.js";
+import { BackgroundWorkTracker } from "./background-work.js";
 import { heuristicTitle, inferTitle, needsInference, promptKey, savedTitles, TITLE_ENTRY } from "./title.js";
 import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
 
@@ -32,6 +33,7 @@ export class CompanionBridge implements AskChannel {
   private telemetryRequestedAt = 0;
   private restoreStatus?: () => void;
   private telemetry = new TelemetryRelay();
+  private backgroundWork = new BackgroundWorkTracker();
   private closed = false;
   private activated = false;
   private restoreDialogs?: () => void;
@@ -147,6 +149,14 @@ export class CompanionBridge implements AskChannel {
     Object.assign(this.snapshot, patch);
     if (Object.keys(patch).length) this.send({ type: "session.update", session: patch });
     if (this.activated && this.snapshot.remoteEnabled && Date.now() - this.telemetryRequestedAt >= 30_000) this.requestTelemetry();
+  }
+
+  ingestBackgroundWork(tool: string, details: unknown) {
+    this.backgroundWork.ingest(tool, details);
+    const backgroundWork = this.backgroundWork.snapshot();
+    if (JSON.stringify(this.snapshot.backgroundWork) === JSON.stringify(backgroundWork)) return;
+    this.snapshot.backgroundWork = backgroundWork;
+    this.send({ type: "session.update", session: { backgroundWork } });
   }
 
   invalidateContext() {

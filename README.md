@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.9:** Model-written session titles are saved in the session file (keyed by a hash of the prompt, not the prompt itself), so resuming or reloading a session shows the same title without asking the model again.
+**New in 0.3.10:** Shell output uses one collapsed full-output section without a duplicate preview, with larger expand/collapse controls. Sessions show compact counts of reported running background shells and active subagents.
+
+**0.3.9:** Model-written session titles are saved in the session file (keyed by a hash of the prompt, not the prompt itself), so resuming or reloading a session shows the same title without asking the model again.
 
 **0.3.8:** The session feed is easier to scan: shell calls show a one-line, human summary ("Check git status, Run tests +1 more") instead of the raw script, while output stays intact. Agent thinking renders as Markdown with a live animated state and "Thought for Ns" once done. Unnamed sessions get a short title that summarises the first prompt, inferred by the session's own model while shared, with an instant local fallback.
 

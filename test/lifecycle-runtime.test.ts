@@ -37,6 +37,7 @@ const bridge = dataModule(transpile('../src/bridge.ts')
   .replace('from "./daemon.js"', `from ${JSON.stringify(daemon)}`)
   .replace('from "./telemetry.js"', `from ${JSON.stringify(new URL('../src/telemetry.ts', import.meta.url).href)}`)
   .replace('from "./popup.js"', `from ${JSON.stringify(new URL('../src/popup.ts', import.meta.url).href)}`)
+  .replace('from "./background-work.js"', `from ${JSON.stringify(new URL('../src/background-work.ts', import.meta.url).href)}`)
   .replace('from "./title.js"', `from ${JSON.stringify(new URL('../src/title.ts', import.meta.url).href)}`));
 const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
@@ -222,6 +223,21 @@ test('daemon starts privately and remote-control alone shares with safe session 
   assert.equal(live.frames.length, unchanged, 'unchanged idle metadata does not flood the transport');
   await commands.companion.handler('', ctx);
   assert.equal(state.sockets.length, 1, 'repeated activation does not duplicate sockets');
+
+  events.tool_execution_end({ toolCallId: 'shell-1', toolName: 'jar_shell', isError: false, result: {
+    content: [{ type: 'text', text: 'output'.repeat(500) }],
+    details: { jobs: [{ id: 's1', name: 'dev server', status: 'running' }] }
+  } }, ctx);
+  assert.deepEqual(live.frames.findLast((frame: any) => frame.session?.backgroundWork)?.session.backgroundWork.shells, [{ id: 's1', name: 'dev server' }]);
+  assert.equal(live.frames.at(-1).payload.result.length, 3000, 'shell output is not cut to the old 1200-character preview');
+  events.tool_execution_update({ toolName: 'jar_delegate', partialResult: { details: {
+    batch: 'a', runs: [{ index: 0, name: 'scout', state: 'working' }]
+  } } }, ctx);
+  assert.equal(live.frames.at(-1).session.backgroundWork.agents.length, 1);
+  events.message_end({ message: { role: 'custom', customType: 'pi-jar.subagent', details: { events: [{ key: 'delegate-a-0', turn: 1 }] } } }, ctx);
+  assert.equal(live.frames.at(-1).session.backgroundWork.agents.length, 0);
+  events.message_end({ message: { role: 'custom', customType: 'pi-jar.shell', details: { events: [{ id: 's1', status: 'exited' }] } } }, ctx);
+  assert.equal(live.frames.at(-1).session.backgroundWork.shells.length, 0);
 
   const probes = state.probes;
   await commands['remote-control'].handler('', ctx);

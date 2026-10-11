@@ -49,6 +49,7 @@ export type SessionTelemetry = {
 export type TerminalPopup = { id: string; lines: string[]; width: number };
 
 export type Session = {
+  backgroundWork?: { shells: { id: string; name: string }[]; agents: { id: string; name: string }[] };
   popups?: TerminalPopup[];
   id: string;
   name?: string | null;

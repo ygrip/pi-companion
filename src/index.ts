@@ -61,6 +61,11 @@ function toolInput(args: unknown) {
   return input && typeof input === "object" && !Array.isArray(input) ? (input as Record<string, unknown>) : undefined;
 }
 
+function shellOutput(text: string) {
+  const max = 64_000;
+  return text.length > max ? text.slice(0, max) + '\n[Output limited to 64,000 characters]' : text;
+}
+
 function resultText(result: unknown) {
   const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)?.content;
   if (Array.isArray(content)) {
@@ -144,6 +149,10 @@ export default function companionExtension(pi: ExtensionAPI) {
   });
   pi.on("message_end", (event, ctx) => {
     bridge.setContext(ctx);
+    const message = event.message as { customType?: string; details?: unknown };
+    if (message.customType === 'pi-jar.shell' || message.customType === 'pi-jar.subagent') {
+      bridge.ingestBackgroundWork(message.customType, message.details);
+    }
     const failure = providerError(event.message);
     if (failure) bridge.emit('provider.error', failure);
   });
@@ -167,14 +176,19 @@ export default function companionExtension(pi: ExtensionAPI) {
     bridge.toolDialogs.start(event.toolName, event.toolCallId, event.args);
     bridge.emit("tool.start", { toolCallId: event.toolCallId, toolName: event.toolName, args: summarize(event.args), input: toolInput(event.args) });
   });
+  pi.on("tool_execution_update", event => {
+    bridge.ingestBackgroundWork(event.toolName, event.partialResult?.details);
+  });
   pi.on("tool_execution_end", (event, ctx) => {
     bridge.setContext(ctx);
     bridge.toolDialogs.end(event.toolCallId);
+    bridge.ingestBackgroundWork(event.toolName, event.result?.details);
     bridge.emit("tool.end", {
       toolCallId: event.toolCallId,
       toolName: event.toolName,
       isError: event.isError,
-      result: summarize(resultText(event.result), 1200)
+      result: /(?:^|[._])(?:bash|shell|run|execute|terminal|jar_shell)$/.test(event.toolName.toLowerCase())
+        ? shellOutput(resultText(event.result)) : summarize(resultText(event.result), 1200)
     });
   });
   pi.on("session_shutdown", event => {

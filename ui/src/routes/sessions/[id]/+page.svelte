@@ -13,7 +13,7 @@
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { ActivityEntry } from '#lib/activity.ts';
-  import { isShellTool, shellLabel, shellPreview } from '#lib/shell-activity.ts';
+  import { isShellTool, shellLabel } from '#lib/shell-activity.ts';
   import type { TempFile } from '#lib/types.ts';
   import { attachmentPrompt, canPreviewAttachment, validateAttachment } from '#lib/attachments.ts';
   import { filterChangedFiles, splitChangedFiles, diffLineClass as lineClass } from '#lib/diff.ts';
@@ -128,6 +128,8 @@
   const id = $derived(page.params.id ?? '');
   const session = $derived(companion.session(id));
   const ended = $derived(session?.status === 'stopped');
+  const backgroundShells = $derived(ended ? [] : session?.backgroundWork?.shells ?? []);
+  const backgroundAgents = $derived(ended ? [] : session?.backgroundWork?.agents ?? []);
   const readOnly = $derived(Boolean(session?.readOnly || session?.automationId));
   const feed = $derived(companion.activity[id] ?? []);
   /** Uploads use HTTP, not the live socket; only a deliberate disconnect/revocation blocks them. */
@@ -498,6 +500,14 @@
       <span class="chip"><span>Started {relativeTime(session.connectedAt)}</span></span>
     </div>
 
+    {#if backgroundShells.length || backgroundAgents.length}
+      <div class="background-work" role="status" aria-label="Background work" title={companion.connection === 'online' ? 'Reported background work' : 'Last reported background work · reconnecting'}>
+        {#if backgroundShells.length}<span title={backgroundShells.map(item => item.name).join(', ')}><Icon name="activity" size={13} />{backgroundShells.length} background {backgroundShells.length === 1 ? 'shell' : 'shells'}</span>{/if}
+        {#if backgroundAgents.length}<span title={backgroundAgents.map(item => item.name).join(', ')}><Icon name="brain" size={13} />{backgroundAgents.length} {backgroundAgents.length === 1 ? 'subagent' : 'subagents'}</span>{/if}
+        {#if companion.connection !== 'online'}<span>last reported</span>{/if}
+      </div>
+    {/if}
+
     {#if readOnly}<div class="composer-notice" role="status"><AutomatedSessionBadge /><p>Pi is following this automation’s instructions. You can answer its questions here; steering, plans, and file uploads are turned off.</p>{#if session.automationId}<a href={'/automations/' + encodeURIComponent(session.automationId)}>Open automation workspace →</a>{/if}</div>{/if}
     <section class="panel">
       {#if tab !== 'activity'}
@@ -537,16 +547,12 @@
                             {:else if entry.status === 'ok'}<span class="state ok">ok</span>
                             {:else if entry.status === 'error'}<span class="state err">failed</span>{/if}
                           </div>
-                          {#if summary.kind === 'command'}
-                            {@const preview = shellPreview(parts.result)}
-                            {#if preview.text}
-                              <pre class="shell-preview" class:error-output={entry.status === 'error'} aria-label="Shell output preview">{preview.truncated ? '…\n' : ''}{preview.text}</pre>
-                              {#if preview.truncated}
-                                <details class="out"><summary>Full output · {preview.lines} {preview.lines === 1 ? 'line' : 'lines'}</summary><pre class:error-output={entry.status === 'error'}>{parts.result}</pre></details>
-                              {/if}
-                            {:else}
-                              <p class="shell-quiet">{entry.status === 'running' ? 'Waiting for output…' : 'No output returned.'}</p>
-                            {/if}
+                          {#if summary.kind === 'command' && parts.result}
+                            {@const lines = lineCount(parts.result)}
+                            <details class="out" open={entry.status === 'error'}>
+                              <summary>Full output · {lines} {lines === 1 ? 'line' : 'lines'}</summary>
+                              <pre class:error-output={entry.status === 'error'}>{parts.result}</pre>
+                            </details>
                           {:else if summary.kind === 'file'}
                             <div class="tool-summary">
                               <code class="path-chip">{summary.path}</code>
@@ -780,8 +786,8 @@
 {/if}
 
 <style>
-  .shell-preview { margin: 8px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-  .shell-quiet { margin: 6px 0; color: var(--text-2); font-size: .8rem; }
+  .background-work { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--text-2); font-size: 0.75rem; }
+  .background-work > span { display: inline-flex; align-items: center; gap: 6px; }
   .shell-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto !important; min-width: 0; }
   /* Fills the content area; only regions inside the panel scroll. */
   .detail {
@@ -1238,8 +1244,11 @@
   }
 
   details summary {
-    width: fit-content;
-    padding: 0 6px;
+    width: 100%;
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
     border-radius: 6px;
     color: var(--term-dim);
     font-size: 0.75rem;
