@@ -20,6 +20,7 @@ Read the current definition with `get` before `update`, `enable`, or `disable`. 
   "name": "Repository check",
   "enabled": true,
   "schedule": "0 9 * * 1-5",
+  "timezone": "Asia/Jakarta",
   "preconditions": [],
   "actions": [
     { "type": "command", "command": "npm", "args": ["test"], "cwd": "/absolute/repo", "timeoutSeconds": 600 },
@@ -29,7 +30,8 @@ Read the current definition with `get` before `update`, `enable`, or `disable`. 
 }
 ```
 
-- `schedule` is a five-field **UTC** cron expression; `null` means manual only. The daemon must be running for scheduling. There is no catch-up while it is stopped.
+- `schedule` is a five-field cron expression evaluated in the IANA `timezone` (for example, `Asia/Jakarta`); omitted timezone defaults to **UTC**, preserving existing jobs. `null` means manual only. Confirm the user's timezone and preserve it during updates. Daylight-saving gaps skip nonexistent times; repeated local times can run twice. The daemon must be running for scheduling; there is no catch-up while it is stopped.
+- `list` and `get` include read-only `nextRunAt` (Unix seconds), or `null` for manual/disabled jobs or no upcoming occurrence. The UI shows it in the job's timezone. Do not send `nextRunAt`, IDs, or creation/update timestamps in an automation definition.
 - Commands use executable plus argument array, **no implicit shell**. Shell syntax must never be passed as an executable. Avoid explicit shells unless the user requested and authorized them.
 - Preconditions gate execution. Actions run sequentially. Post-actions are the cleanup/finalization stage; inspect the run result to determine failures.
 - Optional `maxRetries` (integer 0–5, default 0) and `retryIntervalSeconds` (integer 1–86400, default 10) retry only the failed main action, never completed steps, preconditions, or finalizers. Stop cancels a retry delay. Retries may duplicate side effects or model usage: obtain authorization, and keep them off for non-idempotent remote submissions.

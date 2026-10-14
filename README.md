@@ -2,7 +2,9 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
-**New in 0.3.11:** Changes includes worktree selection, branch and file counts, and new-file previews. Provider usage snapshots survive closed and archived sessions and daemon restarts, with accurate quota labels. Clay background-work badges open shell/subagent lists, and automation phases open scrollable flowcharts with failure and retry paths.
+**New in 0.3.12:** Browse Changes one file at a time with a file picker and previous/next controls; the complete file inventory remains visible even when previews are limited. Automations support IANA timezone selection, daylight-saving changes, and the next scheduled run. Pair devices from the terminal with `npm run --silent pair`. Settings accumulates weekly observed tokens and estimated cost across retained sessions while keeping account-limit snapshots separate.
+
+**0.3.11:** Changes includes worktree selection, branch and file counts, and new-file previews. Provider usage snapshots survive closed and archived sessions and daemon restarts, with accurate quota labels. Clay background-work badges open shell/subagent lists, and automation phases open scrollable flowcharts with failure and retry paths.
 
 **0.3.10:** Shell output uses one collapsed full-output section without a duplicate preview, with larger expand/collapse controls. Sessions show compact counts of reported running background shells and active subagents.
 
@@ -324,7 +326,7 @@ A single-page SvelteKit app, embedded in the daemon binary:
 |---|---|---|
 | Overview | everyone | Dot-field hero, live counts, sessions that need your answer, a labeled live-session table, and a spaced onboarding/help panel with Claymorphism actions |
 | Sessions | everyone | Searchable, filterable full-width session rows (Working / Waiting / Ended); the whole row opens the session, the status badge sits top-right, and ended sessions offer a safe Archive action. Paired devices only see shared sessions |
-| Session detail | everyone | Activity-first transcript with Markdown, highlighted code, Mermaid diagrams, collapsible tool output/thinking and question sheets. Compact header and navigation leave more space for the shell. The expanding composer includes Auto/Plan selection, attachment previews and a full-width labeled Send/Steer action; Plan uses the existing `/plan` command, not an agent permission setting. The top-right session menu opens Shared files, Changes and Archive session. The session header shows a status dot; clicking its title reveals status and session metadata. Changes are grouped by file with clear separators and a filename filter |
+| Session detail | everyone | Activity-first transcript with Markdown, highlighted code, Mermaid diagrams, collapsible tool output/thinking and question sheets. Compact header and navigation leave more space for the shell. The expanding composer includes Auto/Plan selection, attachment previews and a full-width labeled Send/Steer action; Plan uses the existing `/plan` command, not an agent permission setting. The top-right session menu opens Shared files, Changes and Archive session. The session header shows a status dot; clicking its title reveals status and session metadata. Changes offers worktree selection, staged/unstaged counts, a filename filter, and a file picker with previous/next navigation. Files without previews remain listed; selecting a file resets patch scrolling |
 | Devices | local console only | Pairing, connection status, disconnect and revoke |
 | Settings | everyone | Theme, notification and camera permissions; on the console also daemon settings with a save bar that appears only for unsaved edits |
 | Help, Privacy, Terms | everyone | Setup stepper, commands, tools, troubleshooting; data handling; terms of use. Help is opened from the Overview |
