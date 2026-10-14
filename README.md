@@ -183,6 +183,8 @@ Attaching files uses plain HTTP, so it keeps working while the live socket is re
 
 ## Pairing and devices
 
+For a terminal-only host, run `npm run --silent pair` from the Companion package directory (daemon must already be running). It prints a unique single-use pairing code, a pairing link, and the expiry time without opening a browser. Open the link on the device, or enter the code on its Pair page. Treat the printed invitation as a secret; it uses the same expiry, revocation, and device permissions as browser-created invitations. `PI_COMPANION_URL` may override the local admin address; remote admin targets are refused.
+
 Pairing is daemon-wide rather than session-specific. Everything lives on the **Devices** page of the local console (port 43721):
 
 1. Choose **Pair a device**. The daemon creates a single-use invitation (5 minutes by default, configurable in Settings) and shows it as a QR code, a copyable link and a short code (`XXXX-XXXX`).
@@ -206,7 +208,7 @@ Network loss and daemon restarts reconnect automatically with bounded backoff. H
 
 Shared session title, model, effort and working directory refresh on Pi events and once per second while sharing, including while idle. Session detail shows context-window usage and estimated session cost. Native Pi context and recorded usage costs take precedence; independent extension reports fill unavailable fields. Missing usage is shown as unavailable, not zero.
 
-**Settings → Usage** is available on the console and paired devices. It displays the latest snapshot per provider: weekly usage, 5-hour usage when reported, reset times, source and snapshot age. Quota snapshots are not added across sessions or accounts. Those limits are extension-reported, not billing totals or locally inferred quotas. Companion additionally reports actual session token consumption and cost grouped by the model's provider from Pi's recorded assistant messages; this is session-only data, not an account-wide tally. Settings selects the newest consumption independently of quota freshness and displays their timestamps and session-ended indicators separately. When no quota adapter is installed, 5-hour and weekly quotas still show as unavailable rather than fabricated percentages.
+**Settings → Usage** is available on the console and paired devices. It displays the latest snapshot per provider: weekly usage, 5-hour usage when reported, reset times, source and snapshot age. Quota snapshots are not added across sessions or accounts. Those limits are extension-reported, not billing totals or locally inferred quotas. Companion additionally accumulates observed token consumption and estimated cost by provider across retained sessions for the current week (Monday 00:00 UTC). The daemon persists per-session counters and adds only new consumption, avoiding duplicate counts on reconnect or restart; live updates refresh Settings without reloading. The initial saved report includes the session’s known totals, and retention is bounded to 500 sessions, so these estimates are not a complete account-wide bill. Quota freshness and consumption timestamps remain independent. When no quota adapter is installed, 5-hour and weekly quotas still show as unavailable rather than fabricated percentages.
 
 Extensions can publish a provider-neutral event without importing Companion:
 

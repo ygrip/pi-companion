@@ -168,8 +168,11 @@
   const uploading = $derived(attachments.filter((attachment) => attachment.status === 'uploading').length);
   const invalidAttachments = $derived(attachments.some((attachment) => attachment.status === 'error'));
   let diffFilter = $state('');
-  const changedFiles = $derived(splitChangedFiles(diff?.text ?? ''));
+  let selectedDiffPath = $state('');
+  const changedFiles = $derived(splitChangedFiles(diff?.text ?? '', diff?.files));
   const shownChangedFiles = $derived(filterChangedFiles(changedFiles, diffFilter));
+  const selectedDiffFile = $derived(shownChangedFiles.find(file => file.path === selectedDiffPath) ?? shownChangedFiles[0]);
+  const selectedDiffIndex = $derived(shownChangedFiles.findIndex(file => file === selectedDiffFile));
 
   function releasePreviews(items = attachments) {
     for (const item of items) if (item.preview) URL.revokeObjectURL(item.preview);
@@ -689,8 +692,8 @@
           <div class="changes">
             <div class="changes-bar">
               <div class="segmented" role="group" aria-label="Which changes">
-                <button aria-pressed={!staged} disabled={ended} onclick={() => loadDiff(false)}>Unstaged</button>
-                <button aria-pressed={staged} disabled={ended} onclick={() => loadDiff(true)}>Staged</button>
+                <button aria-pressed={!staged} disabled={ended} onclick={() => loadDiff(false)}>Unstaged{#if diff?.worktrees?.find(tree => tree.path === diff?.worktree)?.unstagedFiles != null} ({diff.worktrees.find(tree => tree.path === diff.worktree)?.unstagedFiles}){/if}</button>
+                <button aria-pressed={staged} disabled={ended} onclick={() => loadDiff(true)}>Staged{#if diff?.worktrees?.find(tree => tree.path === diff?.worktree)?.stagedFiles != null} ({diff.worktrees.find(tree => tree.path === diff.worktree)?.stagedFiles}){/if}</button>
               </div>
               {#if diff?.text}
                 <span class="chips">
@@ -710,20 +713,32 @@
               {#if diff?.warnings?.length}<p class="diff-warning" role="status">{diff.warnings.join(' ')}</p>{/if}
             </div>
             <div class="diff-filter-bar"><label class="diff-filter"><Icon name="search" size={16} /><span class="sr-only">Filter changed files</span><input class="input" type="search" placeholder="Filter changed files…" bind:value={diffFilter} /></label><span class="diff-count" aria-live="polite">{shownChangedFiles.length} of {changedFiles.length} files</span></div>
+            {#if shownChangedFiles.length}
+              <nav class="diff-navigation" aria-label="Changed file navigation">
+                <label for="changes-file" class="sr-only">Select changed file</label>
+                <select id="changes-file" class="input" value={selectedDiffFile?.path ?? ''} onchange={event => (selectedDiffPath = event.currentTarget.value)}>
+                  {#each shownChangedFiles as file (file.id)}<option value={file.path}>{file.path}{file.isNew ? ' · New' : ''}{file.binary ? ' · Binary' : ''}</option>{/each}
+                </select>
+                <span class="diff-count">{selectedDiffIndex + 1} / {shownChangedFiles.length}</span>
+                <button class="btn btn-icon" aria-label="Previous changed file" disabled={selectedDiffIndex <= 0} onclick={() => (selectedDiffPath = shownChangedFiles[selectedDiffIndex - 1].path)}>↑</button>
+                <button class="btn btn-icon" aria-label="Next changed file" disabled={selectedDiffIndex >= shownChangedFiles.length - 1} onclick={() => (selectedDiffPath = shownChangedFiles[selectedDiffIndex + 1].path)}>↓</button>
+              </nav>
+            {/if}
+            {#key `${diff?.worktree}:${staged}:${selectedDiffFile?.id}`}
             <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll this region) -->
             <div class="diff scroll" tabindex="0" role="region" aria-label="Changed files">
               {#if !diff || diff.loading}
                 <p class="subtle none">{ended ? 'Changes are unavailable after the session ends.' : companion.connection !== 'online' ? 'Reconnect to your workspace to load changes.' : 'Loading changes…'}</p>
               {:else if diff.error}<p class="subtle none">Changes unavailable. {diff.error}</p>
-              {:else if !diff.text.trim()}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
+              {:else if !changedFiles.length}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
               {:else if !shownChangedFiles.length}<div class="none"><p>No changed files match “{diffFilter}”.</p><button type="button" class="btn btn-sm" onclick={() => (diffFilter = '')}>Clear file filter</button></div>
               {:else}
-                {#each shownChangedFiles as file (file.id)}
+                {#each selectedDiffFile ? [selectedDiffFile] : [] as file (file.id)}
                   <details class="diff-file" open>
                     <summary class="diff-file-head">
                       <Icon name="chevron" size={16} class="diff-caret" />
                       <div class="diff-label"><strong><Icon name="file" size={16} /><code>{file.path}</code></strong>{#if file.oldPath && file.newPath && file.oldPath !== file.newPath}<span class="diff-rename">Renamed from <code>{file.oldPath}</code></span>{/if}</div>
-                      <span class="file-change-counts">{#if file.isNew}<span class="chip new-file">New</span>{/if}{#if file.binary}<span class="chip">Binary file</span>{:else}<span class="chip plus">+{file.additions}</span><span class="chip minus">−{file.deletions}</span>{/if}</span>
+                      <span class="file-change-counts">{#if file.isNew}<span class="chip new-file">New</span>{/if}{#if file.binary}<span class="chip">Binary file</span>{:else if file.previewUnavailable}<span class="chip">No preview</span>{:else}<span class="chip plus">+{file.additions}</span><span class="chip minus">−{file.deletions}</span>{/if}</span>
                     </summary>
                     <!-- svelte-ignore a11y_no_noninteractive_tabindex (keyboard users must be able to scroll long patch lines) -->
                     <div class="diff-code scroll-x" tabindex="0" role="region" aria-label="Patch for {file.path}">
@@ -733,6 +748,7 @@
                 {/each}
               {/if}
             </div>
+            {/key}
           </div>
         {/if}
       </div>
@@ -1651,6 +1667,9 @@
   .diff-filter { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
   .diff-filter input { width: 100%; min-width: 0; min-height: 44px; }
   .diff-count { flex: none; color: var(--text-3); font-size: 0.75rem; }
+  .diff-navigation { display: flex; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .diff-navigation select { flex: 1; width: 0; min-width: 0; min-height: 44px; }
+  .diff-navigation button { flex: none; min-width: 44px; min-height: 44px; }
   .diff-file { margin: 12px; min-width: 0; overflow: hidden; border: 1px solid var(--border-strong); border-top: 3px solid var(--accent-line); border-radius: 16px; background: var(--surface); box-shadow: var(--clay-soft); }
   .diff-file + .diff-file { margin-top: 20px; }
   .diff-file-head { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 12px; border-bottom: 2px solid var(--border-strong); background: var(--surface-2); box-shadow: var(--clay-pressed); cursor: pointer; list-style: none; }

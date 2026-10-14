@@ -10,11 +10,14 @@
   import { theme, type ThemePreference } from '#lib/theme.svelte.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
   import type { Settings, SettingsResponse } from '#lib/types.ts';
-  import { estimatedCost, providerSnapshots, reportedTime, snapshotStatus, usagePercent } from '#lib/usage.ts';
+  import { estimatedCost, providerSnapshots, reportedTime, snapshotStatus, usagePercent, weeklyConsumption } from '#lib/usage.ts';
 
   let tab = $state<'general' | 'usage'>('general');
   let usageNow = $state(Date.now());
-  const usage = $derived(providerSnapshots(companion.sessions, companion.usageSnapshots));
+  const weekly = $derived(weeklyConsumption(companion.sessions, companion.usageSnapshots, usageNow));
+  const usage = $derived(providerSnapshots(companion.sessions, companion.usageSnapshots).map(snapshot => ({
+    ...snapshot, ...weekly.get(snapshot.provider.toLowerCase())
+  })));
 
   onMount(() => {
     const timer = setInterval(() => { usageNow = Date.now(); }, 60_000);
@@ -224,7 +227,7 @@
         <h2 id="provider-usage-heading">Saved usage snapshots</h2>
         <p class="muted">Weekly and 5-hour percentages show how much of your provider account allowance was used when last checked—not usage from a single session.</p>
         <p class="subtle">Snapshots are saved on your computer. Closing or archiving a session does not erase them. Account limits refresh about every 5 minutes while a shared Pi session is running; pull to refresh to reload saved reports.</p>
-        <p class="subtle">“Not reported” means the provider supplied no window, not 0% used. Latest session totals come from the most recently reporting session for each provider; they are not combined account totals or your bill.</p>
+        <p class="subtle">“Not reported” means the provider supplied no window, not 0% used. Weekly tokens and estimated cost accumulate observed usage across retained sessions, from Monday 00:00 UTC. The first saved report includes that session’s known totals; later reports add only new usage. These estimates are not your bill.</p>
       </div>
       {#if companion.connection !== 'online'}
         <p class="usage-notice" role="status">Your computer is disconnected. Any snapshots shown below are saved reports, not live readings.</p>
@@ -234,16 +237,16 @@
         <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
         <div class="usage-scroll" role="region" aria-label="Provider usage table, scroll horizontally for all columns" tabindex="0">
           <table class="usage-table">
-            <caption>Provider-reported account limits and latest session totals</caption>
-            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly used</th><th scope="col">5-hour used</th><th scope="col">Latest session tokens</th><th scope="col">Latest session cost estimate</th><th scope="col">Last checked</th></tr></thead>
+            <caption>Provider-reported account limits and weekly observed usage</caption>
+            <thead><tr><th scope="col">Provider</th><th scope="col">Weekly used</th><th scope="col">5-hour used</th><th scope="col">Weekly tokens</th><th scope="col">Weekly cost estimate</th><th scope="col">Last checked</th></tr></thead>
             <tbody>
               {#each usage as snapshot (snapshot.provider.toLowerCase())}
                 <tr>
                   <th scope="row"><strong>{snapshot.provider}</strong><span class="subtle">{snapshot.source || 'Source not reported'}</span></th>
                   <td><strong>{snapshot.weekly ? usagePercent(snapshot.weekly) : 'Not reported'}</strong>{#if snapshot.weekly?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.weekly.resetsAt)}</span>{/if}</td>
                   <td><strong>{snapshot.fiveHour ? usagePercent(snapshot.fiveHour) : 'Not reported'}</strong>{#if snapshot.fiveHour?.resetsAt}<span class="subtle">Resets {reportedTime(snapshot.fiveHour.resetsAt)}</span>{/if}</td>
-                  <td>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</td>
-                  <td>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</td>
+                  <td>{snapshot.weeklyTokens === undefined ? '—' : snapshot.weeklyTokens.toLocaleString()}</td>
+                  <td>{snapshot.weeklyCost === undefined ? '—' : estimatedCost({ amount: snapshot.weeklyCost })}</td>
                   <td>
                     {#if snapshot.weekly || snapshot.fiveHour}<span>Account: {reportedTime(snapshot.updatedAt)}</span><span class="subtle">{snapshotStatus(snapshot, usageNow)}</span>{/if}
                     {#if snapshot.sessionUpdatedAt}<span>Session {snapshot.sessionId?.slice(0, 8)}: {reportedTime(snapshot.sessionUpdatedAt)}</span><span class="subtle">{snapshotStatus({ ...snapshot, updatedAt: snapshot.sessionUpdatedAt, ended: snapshot.sessionEnded ?? snapshot.ended }, usageNow)}</span>{/if}
@@ -260,8 +263,8 @@
               <dl>
                 <div><dt>Weekly used</dt><dd>{snapshot.weekly ? usagePercent(snapshot.weekly) : 'Not reported'}{#if snapshot.weekly?.resetsAt}<small>Resets {reportedTime(snapshot.weekly.resetsAt)}</small>{/if}</dd></div>
                 <div><dt>5-hour used</dt><dd>{snapshot.fiveHour ? usagePercent(snapshot.fiveHour) : 'Not reported'}{#if snapshot.fiveHour?.resetsAt}<small>Resets {reportedTime(snapshot.fiveHour.resetsAt)}</small>{/if}</dd></div>
-                <div><dt>Latest session tokens</dt><dd>{snapshot.sessionTokens === undefined ? '—' : snapshot.sessionTokens.toLocaleString()}</dd></div>
-                <div><dt>Latest session cost estimate</dt><dd>{snapshot.sessionCost === undefined ? '—' : estimatedCost({ amount: snapshot.sessionCost })}</dd></div>
+                <div><dt>Weekly tokens</dt><dd>{snapshot.weeklyTokens === undefined ? '—' : snapshot.weeklyTokens.toLocaleString()}</dd></div>
+                <div><dt>Weekly cost estimate</dt><dd>{snapshot.weeklyCost === undefined ? '—' : estimatedCost({ amount: snapshot.weeklyCost })}</dd></div>
               </dl>
               <div class="usage-card-foot">
                 {#if snapshot.weekly || snapshot.fiveHour}<div>Account: {snapshotStatus(snapshot, usageNow)} · {reportedTime(snapshot.updatedAt)}</div>{/if}

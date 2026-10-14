@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { contextUsage, estimatedCost, providerSnapshots, reportedTime, retainUsageSnapshots, snapshotStatus, usagePercent } from '../ui/src/lib/usage.ts';
+import { contextUsage, estimatedCost, providerSnapshots, reportedTime, retainUsageSnapshots, snapshotStatus, usagePercent, weeklyConsumption } from '../ui/src/lib/usage.ts';
 import type { ProviderUsage, Session } from '../ui/src/lib/types.ts';
 
 const at = '2026-10-07T10:00:00.000Z';
@@ -99,8 +99,8 @@ test('native totals use their own freshness while quota freshness and session st
 test('mobile usage has compact cards and pull-to-refresh has no redundant button', () => {
   const settings = readFileSync(new URL('../ui/src/routes/settings/+page.svelte', import.meta.url), 'utf8');
   assert.match(settings, /class="usage-cards"/);
-  assert.match(settings, /Latest session tokens/);
-  assert.match(settings, /Latest session cost estimate/);
+  assert.match(settings, /Weekly tokens/);
+  assert.match(settings, /Weekly cost estimate/);
   const refresh = readFileSync(new URL('../ui/src/lib/PullToRefresh.svelte', import.meta.url), 'utf8');
   assert.doesNotMatch(refresh, /<button/);
   assert.match(refresh, /touchend/);
@@ -167,6 +167,41 @@ test('saved usage is bounded, deduplicated and hidden when remote sharing is rev
   assert.equal(bounded.some(snapshot => snapshot.id === '0'), false);
 });
 
+test('weekly consumption sums unique retained sessions, preserves quotas and excludes older weeks', () => {
+  const provider = (tokens: number, cost: number, startsAt = '2026-10-05T00:00:00Z'): ProviderUsage => ({
+    provider: ' OpenAI ', updatedAt: at, weekly: { usedPercent: 20 }, sessionTokens: tokens,
+    weeklyUsage: { startsAt, tokens, cost }
+  });
+  const first = session('first', [provider(100, 1)], 'stopped');
+  const second = session('second', [provider(200, 2)]);
+  const old = session('old', [provider(900, 9, '2026-09-28T00:00:00Z')]);
+  const cached = retainUsageSnapshots([], [first, second, old]);
+  const totals = weeklyConsumption([second], cached, Date.parse(at));
+  assert.deepEqual(totals.get('openai'), { weeklyTokens: 300, weeklyCost: 3 });
+  assert.equal(providerSnapshots([second], cached)[0].weekly?.usedPercent, 20, 'quota snapshots are not summed');
+  assert.equal(weeklyConsumption([], cached, Date.parse('2026-10-12T00:00:00Z')).size, 0);
+  const live = session('second', [{ provider: 'openai', updatedAt: '2026-10-07T10:05:00Z', sessionTokens: 250 }]);
+  const retained = retainUsageSnapshots(cached, [live]);
+  assert.deepEqual(weeklyConsumption([live], retained, Date.parse(at)).get('openai'), { weeklyTokens: 300, weeklyCost: 3 }, 'a live report cannot erase daemon-owned buckets');
+  const refreshed = session('second', [{ ...provider(250, 2.5), sessionUpdatedAt: '2026-10-07T10:06:00Z' }]);
+  const updated = retainUsageSnapshots(retained, [refreshed]);
+  assert.deepEqual(weeklyConsumption([], updated, Date.parse(at)).get('openai'), { weeklyTokens: 350, weeklyCost: 3.5 }, 'a newer bucket survives an unchanged quota timestamp');
+});
+
+test('weekly consumption keeps missing counters unknown and selects the newest bucket per session', () => {
+  const saved = session('same', [{ provider: 'codex', updatedAt: at,
+    weeklyUsage: { startsAt: '2026-10-05T00:00:00Z', tokens: 50 } }]);
+  const live = session('same', [{ provider: 'codex', updatedAt: '2026-10-07T11:00:00Z',
+    weeklyUsage: { startsAt: '2026-10-05T00:00:00Z', tokens: 70 } }]);
+  const zero = session('zero', [{ provider: 'codex', updatedAt: at,
+    weeklyUsage: { startsAt: '2026-10-05T00:00:00Z', tokens: 0, cost: 0 } }]);
+  assert.deepEqual(weeklyConsumption([live], [saved], Date.parse(at)).get('codex'), { weeklyTokens: 70 });
+  assert.deepEqual(weeklyConsumption([live, zero], [saved], Date.parse(at)).get('codex'), { weeklyTokens: 70, weeklyCost: 0 });
+  const malformed = session('invalid', [{ provider: 'other', updatedAt: at,
+    weeklyUsage: { startsAt: 'bad', tokens: NaN, cost: -1 } }]);
+  assert.equal(weeklyConsumption([malformed], [], Date.parse(at)).size, 0);
+});
+
 test('timestamps and snapshot status disclose ended sessions, old data and unknown dates', () => {
   const snapshot = { provider: 'OpenAI', updatedAt: at, ended: false };
   const now = Date.parse(at);
@@ -190,7 +225,7 @@ test('Settings usage tabs expose linked panels, keyboard support and a labeled s
   assert.match(settings, /\['ArrowLeft', 'ArrowRight', 'Home', 'End'\]/);
   assert.match(settings, /Weekly used/);
   assert.match(settings, /5-hour used/);
-  assert.match(settings, /<caption>Provider-reported account limits and latest session totals<\/caption>/);
+  assert.match(settings, /<caption>Provider-reported account limits and weekly observed usage<\/caption>/);
   assert.match(settings, /Not reported/);
   assert.match(settings, /Closing or archiving a session does not erase them/);
   assert.doesNotMatch(settings, /Account quota limits additionally require a compatible reporting extension/);

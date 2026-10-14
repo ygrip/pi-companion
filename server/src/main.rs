@@ -518,9 +518,12 @@ async fn cache_session_usage(state: &AppState, session_id: &str) {
     // Serialize cache updates/writes, but never hold the sessions lock during disk I/O.
     let mut store = state.usage.lock().await;
     let snapshot = state.sessions.read().await.get(session_id).map(|s| s.snapshot.clone());
-    if let Some(snapshot) = snapshot && store.capture(session_id, &snapshot)
-        && let Err(error) = config::save_json(&state.data_dir, "usage.json", &*store).await {
-        tracing::warn!("could not save usage snapshots: {error}");
+    if let Some(snapshot) = snapshot && store.capture(session_id, &snapshot) {
+        if let Err(error) = config::save_json(&state.data_dir, "usage.json", &*store).await {
+            tracing::warn!("could not save usage snapshots: {error}");
+        }
+        // Publish the daemon-owned counters, not just the extension's raw totals.
+        broadcast(state, serde_json::json!({ "type": "usage.snapshot", "session": store.snapshot(session_id) }));
     }
 }
 

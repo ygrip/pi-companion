@@ -11,11 +11,12 @@ export type AutomationDraft = {
   actions: AutomationAction[];
   postActions: AutomationAction[];
   schedule: string | null;
+  timezone?: string;
   historyLimit?: number;
   maxRetries?: number;
   retryIntervalSeconds?: number;
 };
-export type Automation = AutomationDraft & { id: string; createdAt: number; updatedAt: number };
+export type Automation = AutomationDraft & { id: string; createdAt: number; updatedAt: number; nextRunAt?: number | null };
 export type AutomationRun = {
   id: string;
   automationId: string;
@@ -40,6 +41,8 @@ export type ProviderUsage = {
   sessionTokens?: number;
   sessionCost?: number;
   sessionUpdatedAt?: string;
+  /** Daemon-owned cumulative deltas for the UTC calendar week beginning Monday. */
+  weeklyUsage?: { startsAt: string; tokens?: number; cost?: number };
 };
 
 export type SessionTelemetry = {

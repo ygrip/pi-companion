@@ -107,8 +107,14 @@ export async function readGitChanges(cwd: string, staged: boolean, requestedWork
     }
   }
   if (!selectedTree || !selectedEntries) throw new Error('The selected directory is not a registered worktree of this session repository.');
-  let diff = await git(selected, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', ...(staged ? ['--cached'] : [])]);
   const warnings: string[] = [];
+  let diff = '';
+  try {
+    diff = await git(selected, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', ...(staged ? ['--cached'] : [])]);
+  } catch (error) {
+    if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw error;
+    warnings.push('Patch output exceeds 4 MiB. The changed-file list is still complete; previews are unavailable for tracked files.');
+  }
   let outputBytes = Buffer.byteLength(diff);
   if (!staged) {
     const untracked = selectedEntries.filter(item => item.untracked);
@@ -123,5 +129,7 @@ export async function readGitChanges(cwd: string, staged: boolean, requestedWork
     }
     if (untracked.length > MAX_NEW_PREVIEWS) warnings.push(`Showing previews for the first ${MAX_NEW_PREVIEWS} of ${untracked.length} new files.`);
   }
-  return { diff, worktree: selected, branch: selectedTree.branch, worktrees, warnings };
+  const files = selectedEntries.filter(item => staged ? item.staged : item.unstaged || item.untracked)
+    .map(({ path, untracked }) => ({ path, untracked }));
+  return { diff, files, worktree: selected, branch: selectedTree.branch, worktrees, warnings };
 }

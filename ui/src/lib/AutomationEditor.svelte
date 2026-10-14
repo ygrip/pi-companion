@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import Icon from './Icon.svelte';
-  import { automationDraft, parseAutomationDraft } from './automations.ts';
+  import { automationDraft, automationTimezones, parseAutomationDraft } from './automations.ts';
   import type { Automation, AutomationDraft } from './types.ts';
   let { automation, busy = false, onsave, oncancel }: { automation?: Automation; busy?: boolean; onsave: (draft: AutomationDraft) => Promise<void>; oncancel: () => void } = $props();
   const initial = untrack(() => automationDraft(automation));
@@ -9,6 +9,8 @@
   let enabled = $state(initial.enabled);
   let scheduled = $state(initial.schedule !== null);
   let cron = $state(initial.schedule ?? '0 9 * * 1-5');
+  let timezone = $state(initial.timezone ?? 'UTC');
+  const timezones = $derived([...new Set([timezone, ...automationTimezones()])]);
   let historyLimit = $state<number | undefined>(initial.historyLimit ?? 30);
   let retries = $state<number | undefined>(initial.maxRetries);
   let interval = $state<number | undefined>(initial.retryIntervalSeconds);
@@ -43,7 +45,7 @@
     }
     if (Object.keys(stepErrors).length) { error = 'Fix the highlighted steps before saving.'; return; }
     try {
-      const draft = parseAutomationDraft(JSON.stringify({ name, enabled, schedule: scheduled ? cron : null, ...parsed, historyLimit,
+      const draft = parseAutomationDraft(JSON.stringify({ name, enabled, schedule: scheduled ? cron : null, timezone, ...parsed, historyLimit,
         ...(retries !== undefined ? { maxRetries: retries } : {}), ...(interval !== undefined ? { retryIntervalSeconds: interval } : {}) }));
       await onsave(draft);
     } catch (cause) { error = cause instanceof Error ? cause.message : 'Unable to save automation.'; }
@@ -53,7 +55,7 @@
   <header><span class="eyebrow">JOB CONFIGURATION</span><h2>{automation ? 'Edit automation' : 'Create automation'}</h2><p class="subtle">Configure the routine, then arrange its steps. Changes apply after saving.</p></header>
   <fieldset disabled={busy}>
     <div class="fields"><label class="field wide">Automation name<input required maxlength="120" bind:value={name} placeholder="e.g. Review requested pull requests" /></label><label class="check-field"><input type="checkbox" bind:checked={enabled} />Automation enabled</label></div>
-    <section class="form-section"><div class="section-title"><Icon name="calendar" /><h3>Schedule</h3></div><label class="check-field"><input type="checkbox" bind:checked={scheduled} />Run on a schedule</label>{#if scheduled}<label class="field">Cron expression · UTC<input required bind:value={cron} placeholder="0 9 * * 1-5" spellcheck="false" /></label><p class="hint">Minute · Hour · Day · Month · Weekday. Example: <code>0 9 * * 1-5</code> runs at 09:00 UTC on weekdays.</p>{:else}<p class="hint">Manual only. You can start this automation from its workspace.</p>{/if}</section>
+    <section class="form-section"><div class="section-title"><Icon name="calendar" /><h3>Schedule</h3></div><label class="check-field"><input type="checkbox" bind:checked={scheduled} />Run on a schedule</label>{#if scheduled}<div class="fields"><label class="field">Cron expression<input required bind:value={cron} placeholder="0 9 * * 1-5" spellcheck="false" /></label><label class="field">Timezone<select bind:value={timezone}>{#each timezones as zone}<option value={zone}>{zone}</option>{/each}</select></label></div><p class="hint">Minute · Hour · Day · Month · Weekday. Example: <code>0 9 * * 1-5</code> runs at 09:00 in {timezone} on weekdays. Daylight-saving changes follow that timezone.</p>{:else}<p class="hint">Manual only. You can start this automation from its workspace.</p>{/if}</section>
     <section class="form-section"><div class="section-title"><Icon name="refresh" /><h3>Retry policy <span class="subtle">· optional</span></h3></div><div class="fields"><label class="field">Max retries<input type="number" min="0" max="5" step="1" bind:value={retries} placeholder="0 · no retries" /></label><label class="field">Retry interval · seconds<input type="number" min="1" max="86400" step="1" bind:value={interval} placeholder="10 · default when retries are enabled" /></label></div><p class="hint">Retries only the failed main action, not completed steps. Preconditions and finalizers are not retried. Commands and Pi prompts may repeat side effects—enable only for retry-safe work.</p></section>
     <section class="form-section"><div class="section-title"><Icon name="archive" /><h3>Saved run history</h3></div><label class="field">Keep the latest runs<input type="number" min="1" max="1000" step="1" bind:value={historyLimit} placeholder="30" /></label><p class="hint">Keep 30 by default, or choose 1–1000. Older finished runs are automatically removed as new ones finish. Lowering this limit deletes older history when saved.</p></section>
     {#each labels as stage, index}

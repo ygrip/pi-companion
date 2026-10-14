@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { automationDraft, automationTime, automationDuration, automationSchedule, pageItems, parseAutomationDraft } from './src/lib/automations.ts';
+import { automationDraft, automationTime, automationDuration, automationSchedule, automationNextRun, pageItems, parseAutomationDraft } from './src/lib/automations.ts';
 import { matchingSlashCommands } from './src/lib/slash-commands.ts';
 import { adfHtml, resultSections, safeResultLink, structuredResult } from './src/lib/automation-result.ts';
 
@@ -48,6 +48,17 @@ test('schedule and duration labels stay honest', () => {
   assert.equal(automationSchedule('0 2,5,8 * * 1-5'), 'Weekdays at 02:00, 05:00, 08:00 UTC');
   assert.equal(automationSchedule('*/7 2 * * *'), 'Custom schedule · UTC');
   assert.equal(automationDuration(100, 165), '1m 5s');
+});
+test('automation timezone is editable, preserved and validated', () => {
+  const draft = { ...automationDraft(), timezone: 'Asia/Jakarta', schedule: '0 9 * * *' };
+  assert.equal(parseAutomationDraft(JSON.stringify(draft)).timezone, 'Asia/Jakarta');
+  assert.throws(() => parseAutomationDraft(JSON.stringify({ ...draft, timezone: 'Invalid/Zone' })));
+  assert.equal(automationSchedule(draft.schedule, draft.timezone), 'Every day at 09:00 Asia/Jakarta');
+  const automation = { ...draft, id: 'job', createdAt: 0, updatedAt: 0, nextRunAt: 1767232800 };
+  assert.equal(automationDraft(automation).timezone, draft.timezone);
+  assert.ok(!automationNextRun(automation).includes('No upcoming'));
+  assert.equal(automationNextRun({ ...automation, enabled: false }), 'Scheduling disabled');
+  assert.equal(automationNextRun({ ...automation, schedule: null }), 'Manual only');
 });
 test('phase parsing preserves code fences and splits daemon output', () => {
   const result = resultSections('[precondition]\nOK\n[action]\n```text\n[post-action]\n```\n[post-action]\n## Review\n| PR | Status |');

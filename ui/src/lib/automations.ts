@@ -1,8 +1,8 @@
 import type { Automation, AutomationDraft, AutomationRun } from './types.ts';
 
 export function automationDraft(automation?: Automation): AutomationDraft {
-  return automation ? { name: automation.name, enabled: automation.enabled, schedule: automation.schedule, preconditions: automation.preconditions, actions: automation.actions, postActions: automation.postActions, ...(automation.historyLimit !== undefined ? { historyLimit: automation.historyLimit } : {}), ...(automation.maxRetries !== undefined ? { maxRetries: automation.maxRetries } : {}), ...(automation.retryIntervalSeconds !== undefined ? { retryIntervalSeconds: automation.retryIntervalSeconds } : {}) } : {
-    name: 'New automation', enabled: true, schedule: null, preconditions: [],
+  return automation ? { name: automation.name, enabled: automation.enabled, schedule: automation.schedule, timezone: automation.timezone ?? 'UTC', preconditions: automation.preconditions, actions: automation.actions, postActions: automation.postActions, ...(automation.historyLimit !== undefined ? { historyLimit: automation.historyLimit } : {}), ...(automation.maxRetries !== undefined ? { maxRetries: automation.maxRetries } : {}), ...(automation.retryIntervalSeconds !== undefined ? { retryIntervalSeconds: automation.retryIntervalSeconds } : {}) } : {
+    name: 'New automation', enabled: true, schedule: null, timezone: 'UTC', preconditions: [],
     actions: [{ type: 'command', command: 'echo', args: ['Hello from Pi Companion'] }], postActions: []
   };
 }
@@ -25,21 +25,33 @@ export function automationDuration(start: number, end: number | null): string {
 }
 
 /** Deliberately conservative: custom expressions remain explicit rather than misdescribed. */
-export function automationSchedule(schedule: string | null): string {
+export function automationNextRun(automation: Automation): string {
+  if (!automation.schedule) return 'Manual only';
+  if (!automation.enabled) return 'Scheduling disabled';
+  if (automation.nextRunAt == null) return 'No upcoming occurrence';
+  return new Date(automation.nextRunAt * 1000).toLocaleString(undefined, { timeZone: automation.timezone ?? 'UTC', timeZoneName: 'short' });
+}
+
+export function automationTimezones(): string[] {
+  const intl = Intl as typeof Intl & { supportedValuesOf?: (key: string) => string[] };
+  return ['UTC', ...(intl.supportedValuesOf?.('timeZone') ?? [])];
+}
+
+export function automationSchedule(schedule: string | null, timezone = 'UTC'): string {
   if (!schedule) return 'On demand';
   const parts = schedule.trim().split(/\s+/);
-  if (parts.length !== 5) return 'Custom schedule · UTC';
+  if (parts.length !== 5) return `Custom schedule · ${timezone}`;
   const [minute, hour, day, month, weekday] = parts;
   const times = /^\d+$/.test(minute) && /^\d+(,\d+)*$/.test(hour)
     && Number(minute) < 60 && hour.split(',').every(h => Number(h) < 24)
     ? hour.split(',').map(h => `${h.padStart(2, '0')}:${minute.padStart(2, '0')}`).join(', ') : null;
   if (times && day === '*' && month === '*') {
     const days = weekday === '1-5' ? 'Weekdays' : weekday === '*' ? 'Every day' : null;
-    if (days) return `${days} at ${times} UTC`;
+    if (days) return `${days} at ${times} ${timezone}`;
   }
-  if (schedule === '*/30 * * * *') return 'Every 30 minutes · UTC';
-  if (schedule === '0 * * * *') return 'Every hour · UTC';
-  return 'Custom schedule · UTC';
+  if (schedule === '*/30 * * * *') return `Every 30 minutes · ${timezone}`;
+  if (schedule === '0 * * * *') return `Every hour · ${timezone}`;
+  return `Custom schedule · ${timezone}`;
 }
 
 export function pageItems<T>(items: T[], page: number, size = 10): { items: T[]; page: number; pages: number; total: number } {
@@ -52,7 +64,7 @@ export function pageItems<T>(items: T[], page: number, size = 10): { items: T[];
 export function validateCron(value: string): void {
   const fields = value.trim().split(/\s+/);
   const bounds = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
-  if (fields.length !== 5 || value.length > 256) throw new Error('Schedule needs five UTC cron fields.');
+  if (fields.length !== 5 || value.length > 256) throw new Error('Schedule needs five cron fields.');
   fields.forEach((field, index) => {
     const [min, max] = bounds[index];
     for (const part of field.split(',')) {
@@ -105,12 +117,17 @@ export function parseAutomationDraft(text: string): AutomationDraft {
   const draft = value as AutomationDraft;
   if (typeof draft.name !== 'string' || !draft.name.trim()) throw new Error('Provide a name.');
   if (typeof draft.enabled !== 'boolean') throw new Error('enabled must be true or false.');
-  if (draft.schedule !== null && typeof draft.schedule !== 'string') throw new Error('schedule must be a five-field UTC cron expression or null.');
+  if (draft.schedule !== null && typeof draft.schedule !== 'string') throw new Error('schedule must be a five-field cron expression or null.');
   for (const key of ['preconditions', 'actions', 'postActions'] as const) {
     if (!Array.isArray(draft[key])) throw new Error(`${key} must be an array.`);
   }
   if (draft.name.length > 120) throw new Error('Name must contain 1–120 characters.');
-  const allowed = ['name', 'enabled', 'schedule', 'preconditions', 'actions', 'postActions', 'maxRetries', 'retryIntervalSeconds', 'historyLimit'];
+  if (draft.timezone !== undefined) {
+    if (typeof draft.timezone !== 'string' || !draft.timezone) throw new Error('Provide an IANA timezone.');
+    try { new Intl.DateTimeFormat('en', { timeZone: draft.timezone }); }
+    catch { throw new Error('Provide a valid IANA timezone, such as UTC or Asia/Jakarta.'); }
+  }
+  const allowed = ['name', 'enabled', 'schedule', 'timezone', 'preconditions', 'actions', 'postActions', 'maxRetries', 'retryIntervalSeconds', 'historyLimit'];
   if (Object.keys(draft).some(key => !allowed.includes(key))) throw new Error('Unknown definition field.');
   if (draft.schedule !== null) validateCron(draft.schedule);
   for (const key of ['preconditions', 'actions', 'postActions'] as const) {

@@ -19,7 +19,7 @@ import type { AskAnswers, AskRequest, GitWorktree, PairedDevice, Pairing, Sessio
  */
 const TOKEN_KEY = 'piCompanionDeviceToken';
 
-type Diff = { staged: boolean; text: string; at: number; error?: string; worktree?: string; branch?: string; worktrees?: GitWorktree[]; warnings?: string[]; loading?: boolean };
+type Diff = { staged: boolean; text: string; at: number; error?: string; files?: { path: string; untracked: boolean }[]; worktree?: string; branch?: string; worktrees?: GitWorktree[]; warnings?: string[]; loading?: boolean };
 type UploadPolicy = { maxUploadMb: number; allowedUploadTypes: string[] };
 
 class Companion {
@@ -331,6 +331,9 @@ class Companion {
 
   private handle(message: any) {
     switch (message.type) {
+      case 'usage.snapshot':
+        this.usageSnapshots = retainUsageSnapshots(this.usageSnapshots, [message.session as UsageSnapshot], this.remote);
+        break;
       case 'session.register': {
         const next = message.session as Session;
         const others = this.sessions.filter((session) => session.id !== next.id);
@@ -393,6 +396,7 @@ class Companion {
         worktree: typeof inner.worktree === 'string' ? inner.worktree : previous?.worktree,
         branch: typeof inner.branch === 'string' ? inner.branch : undefined,
         worktrees: Array.isArray(inner.worktrees) ? inner.worktrees : previous?.worktrees,
+        files: Array.isArray(inner.files) ? inner.files : undefined,
         warnings: Array.isArray(inner.warnings) ? inner.warnings : [], loading: false } };
       if (error) toasts.show(error, 'error');
       return;

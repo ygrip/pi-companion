@@ -80,7 +80,7 @@ export type SessionSnapshot = {
 };
 
 export type GitWorktree = { path: string; branch: string; changedFiles: number | null; stagedFiles: number | null; unstagedFiles: number | null; error?: string };
-export type GitChanges = { diff: string; worktree: string; branch: string; worktrees: GitWorktree[]; warnings: string[] };
+export type GitChanges = { diff: string; files: { path: string; untracked: boolean }[]; worktree: string; branch: string; worktrees: GitWorktree[]; warnings: string[] };
 
 export type BrowserCommand =
   | { type: "popup_input"; popupId: string; data: string }

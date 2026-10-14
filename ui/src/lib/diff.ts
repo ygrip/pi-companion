@@ -8,6 +8,7 @@ export type ChangedFile = {
   deletions: number;
   binary: boolean;
   isNew: boolean;
+  previewUnavailable?: boolean;
 };
 
 /** Decode Git's quoted paths (including octal UTF-8 bytes) without evaluating strings. */
@@ -48,14 +49,14 @@ function headerPaths(line: string): [string, string] {
   return [withoutPrefix(decodeGitPath(tokens[0] ?? '')), withoutPrefix(decodeGitPath(tokens[1] ?? ''))];
 }
 
-export function splitChangedFiles(text: string): ChangedFile[] {
-  if (!text.trim()) return [];
+export function splitChangedFiles(text: string, inventory?: { path: string; untracked: boolean }[]): ChangedFile[] {
+  if (!text.trim() && !inventory?.length) return [];
   const groups: string[][] = [];
   for (const line of text.split('\n')) {
     if (/^diff --(?:git|cc|combined) /.test(line) || !groups.length) groups.push([]);
     groups.at(-1)!.push(line);
   }
-  return groups.filter((lines) => lines.some((line) => line.trim())).map((lines, index) => {
+  const parsed = groups.filter((lines) => lines.some((line) => line.trim())).map((lines, index) => {
     const combinedPath = lines[0].match(/^diff --(?:cc|combined) (.+)$/)?.[1];
     let [oldPath, newPath] = lines[0].startsWith('diff --git ') ? headerPaths(lines[0]) : combinedPath ? [decodeGitPath(combinedPath), decodeGitPath(combinedPath)] : ['', ''];
     let additions = 0, deletions = 0, inHunk = false, prefixColumns = 1;
@@ -76,8 +77,18 @@ export function splitChangedFiles(text: string): ChangedFile[] {
       else if (line.startsWith('-')) deletions++;
     }
     const path = newPath || oldPath || 'Changes';
-    return { id: `${index}:${path}`, path, oldPath, newPath, lines, additions, deletions, binary: lines.some((line) => line.startsWith('Binary files ') || line === 'GIT binary patch'), isNew: lines.some(line => line.startsWith('new file mode ')) };
+    return { id: `${index}:${path}`, path, oldPath, newPath, lines, additions, deletions, binary: lines.some((line) => line.startsWith('Binary files ') || line === 'GIT binary patch'), isNew: lines.some(line => line.startsWith('new file mode ')), previewUnavailable: lines.some(line => line.startsWith('Preview omitted')) };
   });
+  const inventoryPaths = inventory && new Set(inventory.map(entry => entry.path));
+  const files: ChangedFile[] = inventoryPaths ? parsed.filter(file => inventoryPaths.has(file.path)) : parsed;
+  const paths = new Set(files.map(file => file.path));
+  for (const entry of inventory ?? []) {
+    if (paths.has(entry.path)) continue;
+    files.push({ id: `inventory:${entry.path}`, path: entry.path, oldPath: entry.untracked ? '' : entry.path,
+      newPath: entry.path, lines: ['Preview unavailable for this file. It is still included in the changed-file list.'],
+      additions: 0, deletions: 0, binary: false, isNew: entry.untracked, previewUnavailable: true });
+  }
+  return files;
 }
 
 export function diffLineClass(line: string) {

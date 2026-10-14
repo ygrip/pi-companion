@@ -1,6 +1,6 @@
 {
   "name": "@yunazgr/pi-companion",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Local-first remote control for Pi sessions: live activity feed, steering, git diff, file drop and phone pairing from a single Rust daemon.",
   "keywords": [
     "pi-package",
@@ -40,6 +40,7 @@
   "scripts": {
     "serve": "npm run --silent ui:build -- --logLevel warn && cargo run -q --manifest-path server/Cargo.toml",
     "automation:mcp": "node --experimental-strip-types --no-warnings src/automation-mcp.ts",
+    "pair": "node --experimental-strip-types --no-warnings src/pair-cli.ts",
     "server:dev": "npm run serve",
     "server:check": "npm run ui:build && cargo check --manifest-path server/Cargo.toml",
     "ui:dev": "cd ui && vite dev",

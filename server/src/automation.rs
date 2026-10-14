@@ -1,6 +1,7 @@
 //! Local, persisted automation definitions and bounded run history.
 use super::*;
-use chrono::{DateTime, Datelike, Timelike, Utc};
+use chrono::{DateTime, Datelike, Timelike, TimeZone, Utc};
+use chrono_tz::Tz;
 use std::process::Stdio;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -43,6 +44,8 @@ pub struct Definition {
     pub post_actions: Vec<Action>,
     #[serde(default)]
     pub schedule: Option<String>,
+    #[serde(default = "default_timezone")]
+    pub timezone: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_retries: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +80,44 @@ pub struct Store {
     active: HashMap<String, watch::Sender<bool>>,
     last_minute: Option<u64>,
 }
+fn default_timezone() -> String { "UTC".into() }
+fn timezone(d: &Definition) -> ApiResult<Tz> {
+    d.timezone.parse().map_err(|_| bad("Timezone must be a valid IANA timezone, such as UTC or Asia/Jakarta."))
+}
+fn next_trigger(d: &Definition, after: DateTime<Utc>) -> Option<DateTime<Utc>> {
+    let cron = schedule(d.schedule.as_ref()?).ok()?;
+    let tz = timezone(d).ok()?;
+    let start = after.with_timezone(&tz).date_naive();
+    // Eight years includes the longest leap-day gap around a non-leap century.
+    for offset in 0..=366 * 8 {
+        let date = start.checked_add_days(chrono::Days::new(offset))?;
+        let dom = cron.fields[2].contains(&date.day());
+        let dow = cron.fields[4].contains(&date.weekday().num_days_from_sunday());
+        if !cron.fields[3].contains(&date.month()) || !(if cron.any_dom || cron.any_dow { dom && dow } else { dom || dow }) {
+            continue;
+        }
+        let mut earliest = None;
+        for hour in &cron.fields[1] {
+            for minute in &cron.fields[0] {
+                let local = date.and_hms_opt(*hour, *minute, 0)?;
+                let candidates = tz.from_local_datetime(&local);
+                for candidate in [candidates.earliest(), candidates.latest()].into_iter().flatten() {
+                    let utc = candidate.with_timezone(&Utc);
+                    if utc > after && cron.matches(candidate) {
+                        earliest = Some(earliest.map_or(utc, |previous: DateTime<Utc>| previous.min(utc)));
+                    }
+                }
+            }
+        }
+        if earliest.is_some() { return earliest; }
+    }
+    None
+}
+fn response_definition(d: &Definition) -> Value {
+    let mut value = serde_json::to_value(d).expect("automation definition serializes");
+    value["nextRunAt"] = if d.enabled { serde_json::json!(next_trigger(d, Utc::now()).map(|at| at.timestamp())) } else { Value::Null };
+    value
+}
 fn bad(message: impl Into<String>) -> ApiError {
     (StatusCode::BAD_REQUEST, message.into())
 }
@@ -86,7 +127,7 @@ struct Schedule {
     any_dow: bool,
 }
 impl Schedule {
-    fn matches(&self, at: chrono::DateTime<chrono::Utc>) -> bool {
+    fn matches<T: TimeZone>(&self, at: chrono::DateTime<T>) -> bool {
         let dom = self.fields[2].contains(&at.day());
         let dow = self.fields[4].contains(&at.weekday().num_days_from_sunday());
         self.fields[0].contains(&at.minute())
@@ -102,7 +143,7 @@ impl Schedule {
 fn schedule(value: &str) -> Result<Schedule, ApiError> {
     let raw: Vec<_> = value.split_whitespace().collect();
     if raw.len() != 5 || value.len() > 256 {
-        return Err(bad("Schedule must have five UTC cron fields."));
+        return Err(bad("Schedule must have five cron fields."));
     }
     let bounds = [(0, 59), (0, 23), (1, 31), (1, 12), (0, 7)];
     let mut fields: [Vec<u32>; 5] = Default::default();
@@ -160,6 +201,7 @@ fn validate(d: &Definition) -> ApiResult<()> {
     if d.actions.is_empty() || d.preconditions.len() + d.actions.len() + d.post_actions.len() > 50 {
         return Err(bad("Provide 1–50 actions."));
     }
+    timezone(d)?;
     if let Some(s) = &d.schedule {
         schedule(s)?;
     }
@@ -349,12 +391,13 @@ pub async fn authenticate(State(state): State<AppState>, request: Request, next:
     }
 }
 async fn list(State(state): State<AppState>) -> Json<Value> {
-    Json(serde_json::json!({"automations":state.automations.lock().await.data.definitions}))
+    let definitions = state.automations.lock().await.data.definitions.iter().map(response_definition).collect::<Vec<_>>();
+    Json(serde_json::json!({"automations": definitions}))
 }
 async fn detail(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<Definition>> {
+) -> ApiResult<Json<Value>> {
     state
         .automations
         .lock()
@@ -363,14 +406,13 @@ async fn detail(
         .definitions
         .iter()
         .find(|d| d.id == id)
-        .cloned()
-        .map(Json)
+        .map(|d| Json(response_definition(d)))
         .ok_or((StatusCode::NOT_FOUND, "Automation not found.".into()))
 }
 async fn create(
     State(state): State<AppState>,
     Json(mut d): Json<Definition>,
-) -> ApiResult<Json<Definition>> {
+) -> ApiResult<Json<Value>> {
     validate(&d)?;
     d.id = Uuid::new_v4().to_string();
     d.created_at = now_secs();
@@ -384,13 +426,13 @@ async fn create(
         store.data.definitions.pop();
         return Err(e);
     }
-    Ok(Json(d))
+    Ok(Json(response_definition(&d)))
 }
 async fn update(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(mut d): Json<Definition>,
-) -> ApiResult<Json<Definition>> {
+) -> ApiResult<Json<Value>> {
     validate(&d)?;
     let mut store = state.automations.lock().await;
     let i = store
@@ -415,7 +457,7 @@ async fn update(
         store.data.runs = old_runs;
         return Err(e);
     }
-    Ok(Json(d))
+    Ok(Json(response_definition(&d)))
 }
 async fn remove(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<StatusCode> {
     let mut store = state.automations.lock().await;
@@ -639,19 +681,9 @@ async fn execute_with_retry(
                 if kind == "stopped" || attempt == retries {
                     return Err((kind, output));
                 }
-                if let Some(expression) = &definition.schedule {
-                    let cron = schedule(expression).expect("validated schedule");
+                if definition.schedule.is_some() {
                     let now = Utc::now();
-                    let minute = now.timestamp().div_euclid(60) * 60;
-                    let mut remaining = None;
-                    for offset in 1..=1440 {
-                        let next =
-                            DateTime::<Utc>::from_timestamp(minute + offset * 60, 0).unwrap();
-                        if cron.matches(next) {
-                            remaining = Some(next.timestamp() - now.timestamp());
-                            break;
-                        }
-                    }
+                    let remaining = next_trigger(definition, now).map(|next| next.timestamp() - now.timestamp());
                     if remaining.is_some_and(|seconds| seconds <= interval as i64) {
                         append(
                             &mut output,
@@ -1032,7 +1064,7 @@ pub async fn tick(state: &AppState) {
                     && !store.active.contains_key(&d.id)
                     && d.schedule
                         .as_ref()
-                        .is_some_and(|s| schedule(s).is_ok_and(|cron| cron.matches(at)))
+                        .is_some_and(|s| timezone(d).is_ok_and(|tz| schedule(s).is_ok_and(|cron| cron.matches(at.with_timezone(&tz)))))
             })
             .map(|d| d.id.clone())
             .collect::<Vec<_>>()
@@ -1046,6 +1078,28 @@ pub async fn tick(state: &AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn timezone_defaults_and_invalid_zones_are_rejected() {
+        let mut d = retry_definition();
+        assert_eq!(d.timezone, "UTC");
+        d.timezone = "Invalid/Zone".into();
+        assert!(validate(&d).is_err());
+    }
+    #[test]
+    fn next_trigger_observes_timezone_and_dst() {
+        let mut d = retry_definition();
+        d.schedule = Some("0 9 * * *".into());
+        d.timezone = "Asia/Jakarta".into();
+        let instant = |text: &str| DateTime::parse_from_rfc3339(text).unwrap().with_timezone(&Utc);
+        assert_eq!(next_trigger(&d, instant("2026-01-01T00:00:00Z")), Some(instant("2026-01-01T02:00:00Z")));
+        d.timezone = "America/New_York".into();
+        d.schedule = Some("30 2 * * *".into());
+        assert_eq!(next_trigger(&d, instant("2026-03-08T05:00:00Z")), Some(instant("2026-03-09T06:30:00Z")));
+        d.schedule = Some("30 1 * * *".into());
+        assert_eq!(next_trigger(&d, instant("2026-11-01T05:30:00Z")), Some(instant("2026-11-01T06:30:00Z")));
+        d.enabled = false;
+        assert!(response_definition(&d)["nextRunAt"].is_null());
+    }
     #[test]
     fn validates_cron() {
         assert!(schedule("* * * * *").is_ok());

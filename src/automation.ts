@@ -7,6 +7,7 @@ export type AutomationDefinition = {
   name: string;
   enabled: boolean;
   schedule: string | null;
+  timezone?: string;
   preconditions: AutomationAction[];
   actions: AutomationAction[];
   postActions: AutomationAction[];
@@ -37,7 +38,7 @@ const actionSchema = {
 
 export const automationTool = {
   name: "companion_automation",
-  description: "Manage Pi Companion automations: list, get, create, update, delete, enable, disable, start, stop, runs, or run detail. Definitions use preconditions, actions, postActions and optional five-field UTC cron schedule. Commands execute argv without a shell. Mutations require the user's authorization; running actions has the computer user's permissions. Does not start the daemon or enable session sharing.",
+  description: "Manage Pi Companion automations: list, get, create, update, delete, enable, disable, start, stop, runs, or run detail. Definitions use preconditions, actions, postActions and optional five-field cron schedule with IANA timezone (UTC by default). Commands execute argv without a shell. Mutations require the user's authorization; running actions has the computer user's permissions. Does not start the daemon or enable session sharing.",
   inputSchema: {
     type: "object", additionalProperties: false, required: ["action"],
     properties: {
@@ -48,7 +49,8 @@ export const automationTool = {
         required: ["name", "enabled", "schedule", "preconditions", "actions", "postActions"],
         properties: {
           name: { type: "string", minLength: 1 }, enabled: { type: "boolean" },
-          schedule: { type: ["string", "null"], description: "Five-field UTC cron; null for manual only." },
+          schedule: { type: ["string", "null"], description: "Five-field cron; null for manual only." },
+          timezone: { type: "string", description: "IANA timezone, e.g. Asia/Jakarta. Defaults to UTC." },
           preconditions: { type: "array", items: actionSchema },
           actions: { type: "array", minItems: 1, items: actionSchema },
           postActions: { type: "array", items: actionSchema },
@@ -98,8 +100,8 @@ export async function executeAutomation(params: AutomationParams, signal?: Abort
     case "enable": case "disable": {
       const current = await request(path) as AutomationDefinition;
       // PUT only definition fields, never server-generated metadata.
-      const { name, schedule, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit } = current;
-      return request(path, "PUT", { name, schedule, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit, enabled: params.action === "enable" });
+      const { name, schedule, timezone, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit } = current;
+      return request(path, "PUT", { name, schedule, timezone, preconditions, actions, postActions, maxRetries, retryIntervalSeconds, historyLimit, enabled: params.action === "enable" });
     }
     case "start": case "stop": return request(path + "/" + params.action, "POST");
     case "runs": return request(path + "/runs");

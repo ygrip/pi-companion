@@ -107,7 +107,37 @@ test('new-file preview batches are bounded and disclose omitted files', () => re
   const result = await readGitChanges(repo, false);
   assert.equal(result.worktrees[0].changedFiles, 202);
   assert.equal(splitChangedFiles(result.diff).length, 200);
+  const allFiles = splitChangedFiles(result.diff, result.files);
+  assert.equal(allFiles.length, 202, 'preview limits must not hide changed files');
+  assert.equal(allFiles.filter(file => file.lines[0].startsWith('Preview unavailable')).length, 2);
+  assert.ok(allFiles.every(file => file.isNew));
   assert.match(result.warnings.join(' '), /first 200 of 202/);
+}));
+
+test('oversized tracked patches preserve the complete file inventory', () => repository(async repo => {
+  await writeFile(join(repo, 'tracked.txt'), 'x'.repeat(4 * 1024 * 1024 + 1));
+  const result = await readGitChanges(repo, false);
+  assert.equal(result.diff, '');
+  assert.deepEqual(result.files, [{ path: 'tracked.txt', untracked: false }]);
+  assert.match(result.warnings.join(' '), /exceeds 4 MiB/);
+  const files = splitChangedFiles(result.diff, result.files);
+  assert.equal(files.length, 1);
+  assert.equal(files[0].path, 'tracked.txt');
+  assert.equal(files[0].previewUnavailable, true);
+}));
+
+test('file inventory stays scoped to selected worktree and staging area', () => repository(async repo => {
+  await writeFile(join(repo, 'staged.txt'), 'staged\n');
+  await git(repo, 'add', 'staged.txt');
+  await writeFile(join(repo, 'new.txt'), 'untracked\n');
+  await writeFile(join(repo, 'tracked.txt'), 'modified\n');
+  assert.deepEqual((await readGitChanges(repo, true)).files, [{ path: 'staged.txt', untracked: false }]);
+  assert.deepEqual((await readGitChanges(repo, false)).files.map(file => file.path).sort(), ['new.txt', 'tracked.txt']);
+  await git(repo, 'config', 'diff.noprefix', 'true');
+  await git(repo, 'config', 'diff.mnemonicPrefix', 'true');
+  const result = await readGitChanges(repo, false);
+  assert.equal(splitChangedFiles(result.diff, result.files).filter(file => file.path === 'tracked.txt').length, 1);
+  assert.match(result.diff, /diff --git a\/tracked.txt b\/tracked.txt/);
 }));
 
 test('Changes refreshes on open, labels workspace and distinguishes new files', () => {
@@ -119,4 +149,8 @@ test('Changes refreshes on open, labels workspace and distinguishes new files', 
   assert.match(page, /diff\?\.worktree \?\? session\.cwd/);
   assert.match(page, /file\.isNew[^]*?class="chip new-file">New/);
   assert.match(store, /inner\.requestId !== expected/);
+  assert.match(page, /aria-label="Changed file navigation"/);
+  assert.match(page, /aria-label="Next changed file"/);
+  assert.match(page, /selectedDiffFile \? \[selectedDiffFile\] : \[\]/);
+  assert.match(page, /splitChangedFiles\(diff\?\.text \?\? '', diff\?\.files\)/);
 });

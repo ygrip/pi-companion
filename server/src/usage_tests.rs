@@ -10,6 +10,25 @@ fn report(tokens: u64) -> Value {
 }
 
 #[tokio::test]
+async fn usage_publishes_weekly_counters_to_connected_devices_without_reload() {
+    let state = test_state();
+    add_session(&state, "live", true).await;
+    let mut events = state.browser_tx.subscribe();
+    for tokens in [100, 160] {
+        state.sessions.write().await.get_mut("live").unwrap().snapshot = report(tokens);
+        cache_session_usage(&state, "live").await;
+        let event = events.recv().await.unwrap();
+        assert_eq!(event["type"], "usage.snapshot");
+        assert_eq!(event["session"]["id"], "live");
+        assert_eq!(event["session"]["telemetry"]["providers"][0]["weeklyUsage"]["tokens"].as_f64(), Some(tokens as f64));
+        assert!(visible_to_device(&state, &event).await);
+        state.sessions.write().await.get_mut("live").unwrap().snapshot["remoteEnabled"] = json!(false);
+        assert!(!visible_to_device(&state, &event).await);
+    }
+    fs::remove_dir_all(&state.data_dir).await.unwrap();
+}
+
+#[tokio::test]
 async fn usage_survives_archive_and_daemon_restart_without_storing_private_metadata() {
     let state = test_state();
     add_session(&state, "closed", true).await;
@@ -78,6 +97,68 @@ fn usage_preserves_independent_account_and_session_timestamps_and_rejects_old_re
     let saved = serde_json::to_value(store.snapshots(false)).unwrap();
     assert_eq!(saved[0]["telemetry"]["providers"][0]["weekly"]["usedPercent"].as_f64(), Some(18.0));
     assert_eq!(saved[0]["telemetry"]["providers"][0]["sessionTokens"].as_f64(), Some(300.0));
+}
+
+#[test]
+fn usage_weekly_accumulates_deltas_once_and_rolls_over_without_recounting_session_totals() {
+    let mut store = usage::Store::default();
+    store.capture("same", &report(100));
+    let mut next = report(140);
+    next["telemetry"]["providers"][0]["sessionUpdatedAt"] = json!("2026-10-08T10:00:00Z");
+    next["telemetry"]["providers"][0]["sessionCost"] = json!(2);
+    store.capture("same", &next);
+    store.capture("same", &next);
+    let saved = serde_json::to_value(store.snapshots(false)).unwrap();
+    assert_eq!(saved[0]["telemetry"]["providers"][0]["weeklyUsage"], json!({
+        "startsAt":"2026-10-05T00:00:00+00:00", "tokens":140.0, "cost":2.0
+    }));
+    // Persist/reload the counter baseline, including already archived sessions.
+    let mut store: usage::Store = serde_json::from_value(serde_json::to_value(&store).unwrap()).unwrap();
+    store.mark_stopped();
+    next["telemetry"]["providers"][0]["sessionUpdatedAt"] = json!("2026-10-12T00:00:00Z");
+    next["telemetry"]["providers"][0]["sessionTokens"] = json!(180);
+    next["telemetry"]["providers"][0]["sessionCost"] = json!(3);
+    store.capture("same", &next);
+    store.capture("same", &report(999)); // an older timestamp cannot inflate either counter
+    let saved = serde_json::to_value(store.snapshots(false)).unwrap();
+    assert_eq!(saved[0]["telemetry"]["providers"][0]["weeklyUsage"], json!({
+        "startsAt":"2026-10-12T00:00:00+00:00", "tokens":40.0, "cost":1.0
+    }));
+    assert_eq!(saved[0]["telemetry"]["providers"][0]["weekly"]["usedPercent"], json!(16.0));
+}
+
+#[test]
+fn usage_weekly_ignores_client_buckets_and_preserves_partial_cumulative_counters() {
+    let mut store = usage::Store::default();
+    let mut first = report(100);
+    first["telemetry"]["providers"][0]["sessionCost"] = json!(2);
+    first["telemetry"]["providers"][0]["weeklyUsage"] = json!({"startsAt":"2026-10-05T00:00:00Z", "tokens":999999});
+    store.capture("same", &first);
+    let mut next = report(50);
+    next["telemetry"]["providers"][0]["sessionUpdatedAt"] = json!("2026-10-08T10:00:00Z");
+    next["telemetry"]["providers"][0]["sessionCost"] = Value::Null;
+    store.capture("same", &next);
+    next["telemetry"]["providers"][0]["sessionTokens"] = json!(110);
+    next["telemetry"]["providers"][0]["sessionUpdatedAt"] = json!("2026-10-08T10:01:00Z");
+    store.capture("same", &next);
+    let saved = serde_json::to_value(store.snapshots(false)).unwrap();
+    let provider = &saved[0]["telemetry"]["providers"][0];
+    assert_eq!(provider["weeklyUsage"]["tokens"], json!(110.0));
+    assert_eq!(provider["weeklyUsage"]["cost"], json!(2.0));
+    assert_eq!(provider["sessionCost"], json!(2.0));
+}
+
+#[test]
+fn usage_weekly_migrates_legacy_saved_counters_using_their_original_timestamp() {
+    let mut store = usage::Store::default();
+    store.capture("same", &report(123));
+    let mut legacy = serde_json::to_value(&store).unwrap();
+    legacy["sessions"]["same"]["telemetry"]["providers"][0].as_object_mut().unwrap().remove("weeklyUsage");
+    let mut restored: usage::Store = serde_json::from_value(legacy).unwrap();
+    restored.mark_stopped();
+    let saved = serde_json::to_value(restored.snapshots(false)).unwrap();
+    assert_eq!(saved[0]["telemetry"]["providers"][0]["weeklyUsage"]["startsAt"], json!("2026-10-05T00:00:00+00:00"));
+    assert_eq!(saved[0]["telemetry"]["providers"][0]["weeklyUsage"]["tokens"], json!(123.0));
 }
 
 #[test]

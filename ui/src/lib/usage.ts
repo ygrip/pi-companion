@@ -51,7 +51,8 @@ export function retainUsageSnapshots(cached: UsageSnapshot[], incoming: UsageSna
     const previous = retained.get(session.id);
     const providers = providerSnapshots(previous ? [previous, session] : [session]).map(snapshot => {
       const { ended: _ended, sessionEnded: _sessionEnded, sessionId: _sessionId, ...provider } = snapshot;
-      return provider;
+      const saved = previous?.telemetry?.providers?.find(item => item.provider.toLowerCase() === provider.provider.toLowerCase());
+      return { ...provider, weeklyUsage: provider.weeklyUsage ?? saved?.weeklyUsage };
     });
     const telemetry = providers.length ? { providers } : previous?.telemetry;
     if (telemetry?.providers?.length) retained.set(session.id, {
@@ -91,9 +92,40 @@ export function providerSnapshots(sessions: UsageSnapshot[], cached: UsageSnapsh
     const chosen = (limit ?? consumption)!;
     return { ...chosen,
       ...(consumption && { sessionTokens: consumption.sessionTokens, sessionCost: consumption.sessionCost,
-        sessionUpdatedAt: consumption.updatedAt, sessionEnded: consumption.ended, sessionId: consumption.sessionId })
+        sessionUpdatedAt: consumption.updatedAt, sessionEnded: consumption.ended, sessionId: consumption.sessionId,
+        weeklyUsage: consumption.weeklyUsage ?? chosen.weeklyUsage })
     };
   }).sort((a, b) => a.provider.localeCompare(b.provider));
+}
+
+/** Sum each retained session once; account percentages remain independent snapshots. */
+export function weeklyConsumption(sessions: UsageSnapshot[], cached: UsageSnapshot[] = [], now = Date.now()): Map<string, { weeklyTokens?: number; weeklyCost?: number }> {
+  const monday = new Date(now);
+  monday.setUTCHours(0, 0, 0, 0);
+  monday.setUTCDate(monday.getUTCDate() - (monday.getUTCDay() + 6) % 7);
+  const perSession = new Map<string, ProviderUsage>();
+  for (const session of [...cached, ...sessions]) {
+    if (!Array.isArray(session.telemetry?.providers)) continue;
+    for (const provider of session.telemetry.providers) {
+      if (typeof provider?.provider !== 'string' || !provider.provider.trim() || !provider.weeklyUsage) continue;
+      const key = `${session.id}\u0000${provider.provider.trim().toLowerCase()}`;
+      const previous = perSession.get(key);
+      const nextAt = Date.parse(provider.sessionUpdatedAt ?? provider.updatedAt);
+      const oldAt = previous ? Date.parse(previous.sessionUpdatedAt ?? previous.updatedAt) : -Infinity;
+      if (Number.isFinite(nextAt) && (!Number.isFinite(oldAt) || nextAt >= oldAt)) perSession.set(key, provider);
+    }
+  }
+  const totals = new Map<string, { weeklyTokens?: number; weeklyCost?: number }>();
+  for (const provider of perSession.values()) {
+    const bucket = provider.weeklyUsage!;
+    if (Date.parse(bucket.startsAt) !== monday.getTime()) continue;
+    const key = provider.provider.trim().toLowerCase();
+    const total = totals.get(key) ?? {};
+    if (nonnegative(bucket.tokens)) total.weeklyTokens = (total.weeklyTokens ?? 0) + bucket.tokens;
+    if (nonnegative(bucket.cost)) total.weeklyCost = (total.weeklyCost ?? 0) + bucket.cost;
+    totals.set(key, total);
+  }
+  return totals;
 }
 
 export function snapshotStatus(snapshot: ProviderSnapshot, now = Date.now()): string {
