@@ -2,6 +2,10 @@
 
 Lightweight, local-first remote control for Pi sessions.
 
+[![Watch the Pi Companion walkthrough (1 min)](docs/pi-companion-promo.webp)](docs/pi-companion-promo.mp4)
+
+**[Watch the 1-minute walkthrough](docs/pi-companion-promo.mp4)**: start a session, share it with `/remote-control`, pair your phone, answer Pi's questions, and run automations from anywhere. The video is rendered from code in [`tools/promo-video`](tools/promo-video).
+
 **New in 0.3.12:** Browse Changes one file at a time with a file picker and previous/next controls; the complete file inventory remains visible even when previews are limited. Automations support IANA timezone selection, daylight-saving changes, and the next scheduled run. Pair devices from the terminal with `npm run --silent pair`. Settings accumulates weekly observed tokens and estimated cost across retained sessions while keeping account-limit snapshots separate.
 
 **0.3.11:** Changes includes worktree selection, branch and file counts, and new-file previews. Provider usage snapshots survive closed and archived sessions and daemon restarts, with accurate quota labels. Clay background-work badges open shell/subagent lists, and automation phases open scrollable flowcharts with failure and retry paths.
