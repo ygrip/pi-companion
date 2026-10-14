@@ -10,3 +10,6 @@ onion.png
 test_render/
 _frame_snapshots/*.actual.png
 _frame_snapshots/*.diff.png
+captures/
+clips/
+__pycache__/

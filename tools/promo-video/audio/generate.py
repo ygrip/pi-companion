@@ -19,7 +19,7 @@ RNG = np.random.default_rng(7)
 BPM = 100
 BEAT = 60 / BPM
 BAR = 4 * BEAT
-LENGTH = 64.0  # seconds; the video is ~62.5 s and fades out in fframes
+LENGTH = 116.0  # seconds; the video is ~110 s and fades out in fframes
 
 
 def write(name: str, x: np.ndarray, peak: float = 0.89) -> None:

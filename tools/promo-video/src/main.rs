@@ -1,4 +1,4 @@
-use fframes::{EncoderOptions, RenderOptions, StaticMediaProvider, cli};
+use fframes::{CombinedMediaProvider, EncoderOptions, MediaDirectory, MediaProvider, RenderOptions, StaticMediaProvider, cli};
 use fframes_skia_renderer::{
     SkiaFFramesRenderer, SkiaPipelineConcurrencyPolicy, SkiaPipelineConfig,
     metal::SkiaMetalCtx,
@@ -8,13 +8,19 @@ use std::process::ExitCode;
 
 fn main() -> ExitCode {
     let media = PromoVideoMedia::prepare().expect("media");
+    // The recorded footage (capture/cut.py) is large, so it loads at runtime instead of
+    // being embedded like `media/`.
+    let clips_dir = MediaDirectory::read_folder(concat!(env!("CARGO_MANIFEST_DIR"), "/clips"))
+        .expect("clips/ missing: run capture/record.mjs and capture/cut.py first");
+    let clips = clips_dir.process_media_source().expect("clips");
+    let all_media = CombinedMediaProvider::from([&media as &dyn MediaProvider, &clips]);
     let video = PromoVideoVideo::new(&media);
     let gpu = SkiaMetalCtx::new(WIDTH, HEIGHT).expect("GPU context");
 
     cli::new(
         &video,
         RenderOptions {
-            media: Some(&media),
+            media: Some(&all_media),
             video_encoder_options: EncoderOptions {
                 preferred_encoder: Some("libx264"),
                 codec_params: Some(&[("crf", "20"), ("preset", "medium"), ("tune", "animation")]),
