@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { GitChanges, GitWorktree } from './protocol.js';
 
@@ -21,15 +21,15 @@ export function gitChangesError(error: unknown): string {
   return 'Changes unavailable: ' + (stderr.trim().split('\n')[0] || (error instanceof Error ? error.message : String(error)));
 }
 
-function statusEntries(output: string): { path: string; staged: boolean; unstaged: boolean; untracked: boolean }[] {
+function statusEntries(output: string): { path: string; oldPath?: string; staged: boolean; unstaged: boolean; untracked: boolean }[] {
   const fields = output.split('\0');
   const entries: ReturnType<typeof statusEntries> = [];
   for (let index = 0; index < fields.length; index++) {
     const field = fields[index];
     if (field.length < 4) continue;
     const code = field.slice(0, 2);
-    entries.push({ path: field.slice(3), staged: code !== '??' && code[0] !== ' ', unstaged: code !== '??' && code[1] !== ' ', untracked: code === '??' });
-    if (/[RC]/.test(code)) index++;
+    const oldPath = /[RC]/.test(code) ? fields[++index] : undefined;
+    entries.push({ path: field.slice(3), ...(oldPath ? { oldPath } : {}), staged: code !== '??' && code[0] !== ' ', unstaged: code !== '??' && code[1] !== ' ', untracked: code === '??' });
   }
   return entries;
 }
@@ -76,7 +76,20 @@ async function newFilePatch(root: string, path: string): Promise<string> {
 }
 
 /** Only Git-registered worktrees of the session repository may be selected. */
-export async function readGitChanges(cwd: string, staged: boolean, requestedWorktree?: string): Promise<GitChanges> {
+export async function readGitChanges(cwd: string, staged: boolean, requestedWorktree?: string, touchedPaths?: readonly string[]): Promise<GitChanges> {
+  const scope = touchedPaths === undefined ? undefined : new Set(await Promise.all(touchedPaths.map(async path => {
+    const absolute = resolve(cwd, path);
+    let parent = dirname(absolute);
+    for (;;) {
+      try { return resolve(await realpath(parent), relative(parent, absolute)); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const next = dirname(parent);
+        if (next === parent) throw error;
+        parent = next;
+      }
+    }
+  })));
   const sessionRoot = await realpath((await git(cwd, ['rev-parse', '--show-toplevel'])).trim());
   const commonDir = await realpath(resolve(sessionRoot, (await git(sessionRoot, ['rev-parse', '--git-common-dir'])).trim()));
   const listing = await git(sessionRoot, ['worktree', 'list', '--porcelain', '-z']);
@@ -97,7 +110,8 @@ export async function readGitChanges(cwd: string, staged: boolean, requestedWork
       path = await realpath(path);
       const treeCommonDir = await realpath(resolve(path, (await git(path, ['rev-parse', '--git-common-dir'])).trim()));
       if (treeCommonDir !== commonDir) throw new Error('The worktree no longer belongs to this session repository.');
-      const entries = statusEntries(await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all']));
+      const entries = statusEntries(await git(path, ['status', '--porcelain=v1', '-z', '--untracked-files=all']))
+        .filter(entry => !scope || scope.has(resolve(path, entry.path)) || Boolean(entry.oldPath && scope.has(resolve(path, entry.oldPath))));
       const tree: GitWorktree = { path, branch: record.branch, changedFiles: entries.length, stagedFiles: entries.filter(item => item.staged).length, unstagedFiles: entries.filter(item => item.unstaged || item.untracked).length };
       worktrees.push(tree);
       if (path === selected) { selectedTree = tree; selectedEntries = entries; }
@@ -107,10 +121,11 @@ export async function readGitChanges(cwd: string, staged: boolean, requestedWork
     }
   }
   if (!selectedTree || !selectedEntries) throw new Error('The selected directory is not a registered worktree of this session repository.');
-  const warnings: string[] = [];
+  const warnings: string[] = scope ? ['Only recorded session edits and applied Pi Jar subagent files are shown. Shell-only edits or delegates without an applied-file report may be missing; shared files can include other changes.'] : [];
   let diff = '';
+  const paths = [...new Set(selectedEntries.flatMap(entry => entry.oldPath ? [entry.path, entry.oldPath] : [entry.path]))];
   try {
-    diff = await git(selected, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', ...(staged ? ['--cached'] : [])]);
+    if (!scope || paths.length) diff = await git(selected, ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-relative', '--src-prefix=a/', '--dst-prefix=b/', ...(staged ? ['--cached'] : []), ...(scope ? ['--', ...paths.map(path => ':(literal)' + path)] : [])]);
   } catch (error) {
     if (!(error instanceof Error) || (error as NodeJS.ErrnoException).code !== 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') throw error;
     warnings.push('Patch output exceeds 4 MiB. The changed-file list is still complete; previews are unavailable for tracked files.');
@@ -131,5 +146,5 @@ export async function readGitChanges(cwd: string, staged: boolean, requestedWork
   }
   const files = selectedEntries.filter(item => staged ? item.staged : item.unstaged || item.untracked)
     .map(({ path, untracked }) => ({ path, untracked }));
-  return { diff, files, worktree: selected, branch: selectedTree.branch, worktrees, warnings };
+  return { diff, files, worktree: selected, branch: selectedTree.branch, worktrees, warnings, ...(scope ? { scope: 'session' as const } : {}) };
 }

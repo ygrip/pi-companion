@@ -8,7 +8,7 @@
   import Icon from '#lib/Icon.svelte';
   import ArchiveSession from '#lib/ArchiveSession.svelte';
   import { companion } from '#lib/companion.svelte.ts';
-  import { formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
+  import { elapsedTime, formatBytes, prettyPath, relativeTime, sessionTitle, statusLabel } from '#lib/format.ts';
   import { contextUsage, estimatedCost } from '#lib/usage.ts';
   import { prettify, renderMarkdown } from '#lib/markdown.ts';
   import { errorMessage, toasts } from '#lib/toast.svelte.ts';
@@ -130,6 +130,11 @@
   const ended = $derived(session?.status === 'stopped');
   const backgroundShells = $derived(ended ? [] : session?.backgroundWork?.shells ?? []);
   const backgroundAgents = $derived(ended ? [] : session?.backgroundWork?.agents ?? []);
+  const tasks = $derived(session?.tasks ?? []);
+  const taskParents = $derived(new Set(tasks.flatMap(task => task.parentId ? [task.parentId] : [])));
+  const taskLeaves = $derived(tasks.filter(task => !taskParents.has(task.id)));
+  const completedTasks = $derived(taskLeaves.filter(task => task.status === 'completed').length);
+  const taskLabels = { pending: 'Pending', in_progress: 'In progress', completed: 'Done' } as const;
   const readOnly = $derived(Boolean(session?.readOnly || session?.automationId));
   const feed = $derived(companion.activity[id] ?? []);
   /** Uploads use HTTP, not the live socket; only a deliberate disconnect/revocation blocks them. */
@@ -158,7 +163,26 @@
   let infoOpen = $state(false);
   let askOpen = $state(false);
   let backgroundDialog = $state<HTMLDialogElement | null>(null);
-  let backgroundTrigger = $state<HTMLButtonElement | null>(null);
+  let backgroundOpen = $state(false);
+  let backgroundNow = $state(Date.now());
+  $effect(() => {
+    if (companion.connection !== 'online') return;
+    backgroundNow = Date.now();
+    if (!backgroundOpen) return;
+    const timer = setInterval(() => { backgroundNow = Date.now(); }, 1000);
+    return () => clearInterval(timer);
+  });
+  let taskDialog = $state<HTMLDialogElement | null>(null);
+  function openBackground() {
+    menuEl?.removeAttribute('open');
+    backgroundOpen = true;
+    backgroundDialog?.showModal();
+  }
+  function openTasks() {
+    menuEl?.removeAttribute('open');
+    taskDialog?.showModal();
+  }
+  function focusSessionMenu() { menuEl?.querySelector<HTMLElement>('summary')?.focus(); }
   const backgroundStatus = (item: { id: string; state?: string }, fallback: string) => item.state ?? fallback;
   type DraftAttachment = { key: number; sessionId: string; file: File; preview: string; previewUnavailable?: boolean; status: 'uploading' | 'ready' | 'error'; error: string; uploaded?: TempFile };
   let attachmentKey = 0;
@@ -218,6 +242,7 @@
     diffFilter = '';
     staged = false;
     backgroundDialog?.close();
+    taskDialog?.close();
     infoOpen = false;
     follow = true;
     unseen = 0;
@@ -462,7 +487,7 @@
     </div>
   </div>
 {:else}
-  <div class="detail">
+  <div class="detail" class:reviewing={tab === 'changes'}>
     <header class="head">
       <a class="btn btn-ghost btn-icon" href="/sessions" aria-label="All sessions"><Icon name="back" /></a>
       <h1 class="title">
@@ -484,6 +509,8 @@
             <button type="button" class="btn btn-ghost" onclick={() => selectTab('files')}><Icon name="folder" size={16} />Shared files{#if files.length}<span class="badge count quiet">{files.length}</span>{/if}</button>
             <button type="button" class="btn btn-ghost" onclick={() => selectTab('changes')}><Icon name="diff" size={16} />Changes{#if diffStats.files}<span class="badge count quiet">{diffStats.files}</span>{/if}</button>
           {/if}
+          <button type="button" class="btn btn-ghost" onclick={openBackground} aria-haspopup="dialog"><Icon name="activity" size={16} />Background work<span class="badge count quiet">{backgroundShells.length + backgroundAgents.length}</span></button>
+          <button type="button" class="btn btn-ghost" onclick={openTasks} aria-haspopup="dialog"><Icon name="plan" size={16} />Tasks<span class="badge count quiet">{completedTasks}/{taskLeaves.length}</span></button>
           <ArchiveSession {session} redirect />
           {#if !ended}<p>Only ended sessions can be archived.</p>{/if}
         </div>
@@ -509,20 +536,25 @@
       <span class="chip"><span>Started {relativeTime(session.connectedAt)}</span></span>
     </div>
 
-    {#if backgroundShells.length || backgroundAgents.length}
-      <button type="button" class="background-badge" bind:this={backgroundTrigger} onclick={() => backgroundDialog?.showModal()} aria-label="Background work: {backgroundShells.length} shells and {backgroundAgents.length} subagents, open details" aria-haspopup="dialog">
-        <Icon name="activity" size={15} />
-        {#if backgroundShells.length}<span>{backgroundShells.length} {backgroundShells.length === 1 ? 'shell' : 'shells'}</span>{/if}
-        {#if backgroundAgents.length}<span>{backgroundAgents.length} {backgroundAgents.length === 1 ? 'subagent' : 'subagents'}</span>{/if}
-        {#if companion.connection !== 'online'}<span class="background-stale">last reported</span>{/if}
-        <Icon name="chevron" size={13} />
-      </button>
-    {/if}
-    <dialog class="background-popup" bind:this={backgroundDialog} aria-labelledby="background-title" onclose={() => backgroundTrigger?.focus()}>
+    <dialog class="background-popup" bind:this={backgroundDialog} aria-labelledby="background-title" onclose={() => { backgroundOpen = false; focusSessionMenu(); }}>
       <header><div><h2 id="background-title">Background work</h2><p>{companion.connection === 'online' ? 'Latest reported activity in this session.' : 'Last reported activity. Reconnect for updates.'}</p></div><button type="button" class="btn btn-ghost btn-icon" aria-label="Close background work" onclick={() => backgroundDialog?.close()}><Icon name="close" /></button></header>
-      {#if backgroundShells.length}<h3>Background shells</h3><ul>{#each backgroundShells as item (item.id)}<li><Icon name="activity" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code></div><span class="background-state">{backgroundStatus(item, 'running')}</span></li>{/each}</ul>{/if}
-      {#if backgroundAgents.length}<h3>Subagents</h3><ul>{#each backgroundAgents as item (item.id)}<li><Icon name="brain" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code></div><span class="background-state">{backgroundStatus(item, 'working')}</span></li>{/each}</ul>{/if}
+      {#if backgroundShells.length}<h3>Background shells</h3><ul>{#each backgroundShells as item (item.id)}<li><Icon name="activity" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code><small class="background-elapsed" title="Elapsed since the source start time, or the first active report when no timestamp is provided"><Icon name="clock" size={12} />{elapsedTime(item.startedAt, backgroundNow)}{#if item.startedAt !== undefined}<span>{' elapsed'}</span>{/if}</small></div><span class="background-state">{backgroundStatus(item, 'running')}</span></li>{/each}</ul>{/if}
+      {#if backgroundAgents.length}<h3>Subagents</h3><ul>{#each backgroundAgents as item (item.id)}<li><Icon name="brain" size={16} /><div><strong>{item.name}</strong><code>{item.id}</code><small class="background-elapsed" title="Elapsed since the source start time, or the first active report when no timestamp is provided"><Icon name="clock" size={12} />{elapsedTime(item.startedAt, backgroundNow)}{#if item.startedAt !== undefined}<span>{' elapsed'}</span>{/if}</small></div><span class="background-state">{backgroundStatus(item, 'working')}</span></li>{/each}</ul>{/if}
       {#if !backgroundShells.length && !backgroundAgents.length}<p class="subtle">No background work is currently reported.</p>{/if}
+    </dialog>
+
+    <dialog class="background-popup task-popup" bind:this={taskDialog} aria-labelledby="tasks-title" onclose={focusSessionMenu}>
+      <header><div><h2 id="tasks-title">Tracked tasks</h2><p>{completedTasks} of {taskLeaves.length} complete{#if companion.connection !== 'online'} · last reported{/if}</p></div><button type="button" class="btn btn-ghost btn-icon" aria-label="Close tracked tasks" onclick={() => taskDialog?.close()}><Icon name="close" /></button></header>
+      {#if tasks.length}
+        <ol class="task-list" aria-label="Task list">
+          {#each tasks as task (task.id)}
+            <li class:subtask={Boolean(task.parentId)} data-status={task.status}>
+              <Icon name={task.status === 'completed' ? 'check' : task.status === 'in_progress' ? 'activity' : 'clock'} size={16} />
+              <div><strong>{task.title}</strong>{#if task.status === 'in_progress' && task.activeForm}<small>{task.activeForm}</small>{/if}{#if task.details}<p>{task.details}</p>{/if}<span class="task-status">{taskLabels[task.status]}</span></div>
+            </li>
+          {/each}
+        </ol>
+      {:else}<p class="task-empty">No tracked tasks in this session. Pi Jar tasks appear automatically; other extensions can publish compatible task snapshots.</p>{/if}
     </dialog>
 
     {#if readOnly}<div class="composer-notice" role="status"><AutomatedSessionBadge /><p>Pi is following this automation’s instructions. You can answer its questions here; steering, plans, and file uploads are turned off.</p>{#if session.automationId}<a href={'/automations/' + encodeURIComponent(session.automationId)}>Open automation workspace →</a>{/if}</div>{/if}
@@ -692,27 +724,28 @@
           <div class="changes">
             <div class="changes-bar">
               <div class="segmented" role="group" aria-label="Which changes">
-                <button aria-pressed={!staged} disabled={ended} onclick={() => loadDiff(false)}>Unstaged{#if diff?.worktrees?.find(tree => tree.path === diff?.worktree)?.unstagedFiles != null} ({diff.worktrees.find(tree => tree.path === diff.worktree)?.unstagedFiles}){/if}</button>
-                <button aria-pressed={staged} disabled={ended} onclick={() => loadDiff(true)}>Staged{#if diff?.worktrees?.find(tree => tree.path === diff?.worktree)?.stagedFiles != null} ({diff.worktrees.find(tree => tree.path === diff.worktree)?.stagedFiles}){/if}</button>
+                <button aria-pressed={!staged} disabled={ended} onclick={() => loadDiff(false)}>Unstaged</button>
+                <button aria-pressed={staged} disabled={ended} onclick={() => loadDiff(true)}>Staged</button>
               </div>
-              {#if diff?.text}
-                <span class="chips">
-                  <span class="chip plus">+{diffStats.add}</span>
-                  <span class="chip minus">−{diffStats.del}</span>
-                </span>
-              {/if}
+              <details class="review-options">
+                <summary class="btn btn-ghost" aria-label="Review options and warnings"><Icon name="settings" size={16} /><span>Options</span>{#if diffFilter}<span class="filter-active" aria-label="File filter active"></span>{/if}</summary>
+                <div class="review-options-body">
+                  <p class="scope-note">{diff?.scope === 'session' ? 'Files with recorded edits in this session. Patches show their current Git changes.' : 'This Pi extension returns repository-wide changes. Reload the extension to enable session-only files.'}</p>
+                  <div class="worktree-bar">
+                    <label for="changes-worktree">Worktree</label>
+                    <select id="changes-worktree" class="input" value={diff?.worktree ?? ''} disabled={ended || !diff?.worktrees?.length} onchange={event => loadDiff(staged, event.currentTarget.value)}>
+                      {#if !diff?.worktrees?.length}<option value="">Session directory</option>{/if}
+                      {#each diff?.worktrees ?? [] as tree (tree.path)}<option value={tree.path} disabled={Boolean(tree.error)}>{tree.branch} · {prettyPath(tree.path)}</option>{/each}
+                    </select>
+                  </div>
+                  <label class="diff-filter"><Icon name="search" size={16} /><span class="sr-only">Filter changed files</span><input class="input" type="search" placeholder="Filter session files…" bind:value={diffFilter} /></label>
+                  {#if diffFilter}<button class="btn btn-sm" onclick={() => (diffFilter = '')}>Clear file filter</button>{/if}
+                  <p class="diff-count" aria-live="polite">{shownChangedFiles.length} of {changedFiles.length} files · <span class="plus">+{diffStats.add}</span> <span class="minus">−{diffStats.del}</span></p>
+                  {#if diff?.warnings?.length}<p class="diff-warning" role="status">{diff.warnings.join(' ')}</p>{/if}
+                </div>
+              </details>
               <button class="btn btn-ghost btn-icon refresh" aria-label="Refresh changes" onclick={() => loadDiff()} disabled={ended}><Icon name="refresh" size={16} /></button>
             </div>
-            <div class="worktree-bar">
-              <label for="changes-worktree">Worktree</label>
-              <select id="changes-worktree" class="input" value={diff?.worktree ?? ''} disabled={ended || !diff?.worktrees?.length} onchange={event => loadDiff(staged, event.currentTarget.value)}>
-                {#if !diff?.worktrees?.length}<option value="">Session directory</option>{/if}
-                {#each diff?.worktrees ?? [] as tree (tree.path)}<option value={tree.path} disabled={Boolean(tree.error)}>{tree.branch} · {prettyPath(tree.path)} · {tree.changedFiles === null ? 'unavailable' : `${tree.changedFiles} changed ${tree.changedFiles === 1 ? 'file' : 'files'}`}</option>{/each}
-              </select>
-              <p><Icon name="folder" size={13} /><code>{diff?.worktree ?? session.cwd}</code>{#if diff?.branch}<span class="chip">{diff.branch}</span>{/if}</p>
-              {#if diff?.warnings?.length}<p class="diff-warning" role="status">{diff.warnings.join(' ')}</p>{/if}
-            </div>
-            <div class="diff-filter-bar"><label class="diff-filter"><Icon name="search" size={16} /><span class="sr-only">Filter changed files</span><input class="input" type="search" placeholder="Filter changed files…" bind:value={diffFilter} /></label><span class="diff-count" aria-live="polite">{shownChangedFiles.length} of {changedFiles.length} files</span></div>
             {#if shownChangedFiles.length}
               <nav class="diff-navigation" aria-label="Changed file navigation">
                 <label for="changes-file" class="sr-only">Select changed file</label>
@@ -730,7 +763,7 @@
               {#if !diff || diff.loading}
                 <p class="subtle none">{ended ? 'Changes are unavailable after the session ends.' : companion.connection !== 'online' ? 'Reconnect to your workspace to load changes.' : 'Loading changes…'}</p>
               {:else if diff.error}<p class="subtle none">Changes unavailable. {diff.error}</p>
-              {:else if !changedFiles.length}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes.</p>
+              {:else if !changedFiles.length}<p class="subtle none">No {diff.staged ? 'staged' : 'unstaged'} changes{diff.scope === 'session' ? ' in files with recorded session edits' : ''}.</p>
               {:else if !shownChangedFiles.length}<div class="none"><p>No changed files match “{diffFilter}”.</p><button type="button" class="btn btn-sm" onclick={() => (diffFilter = '')}>Clear file filter</button></div>
               {:else}
                 {#each selectedDiffFile ? [selectedDiffFile] : [] as file (file.id)}
@@ -825,10 +858,6 @@
 {/if}
 
 <style>
-  .background-badge { align-self: flex-start; display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; min-height: 44px; padding: 8px 13px; border: 1px solid var(--border); border-radius: 16px; color: var(--text-2); background: var(--surface-2); box-shadow: var(--clay-soft); font-size: 0.75rem; }
-  .background-badge:hover { background: var(--surface-3); }
-  .background-badge:active { box-shadow: var(--clay-pressed); }
-  .background-stale { color: var(--text-3); }
   .background-popup { width: min(520px, calc(100vw - 32px)); max-height: min(640px, calc(100dvh - 40px)); margin: auto; padding: 20px; border: 1px solid var(--border); border-radius: 24px; color: var(--text); background: var(--surface); box-shadow: var(--clay-raised); overflow: auto; }
   .background-popup::backdrop { background: rgb(0 0 0 / 35%); }
   .background-popup header { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
@@ -843,6 +872,18 @@
   .background-popup strong { font-size: 0.85rem; }
   .background-popup code { color: var(--text-3); font-size: 0.7rem; }
   .background-state { flex: none; font-size: 0.7rem; color: var(--accent-text); }
+  .background-elapsed { display: flex; align-items: center; gap: 5px; color: var(--text-2); font-size: .75rem; font-variant-numeric: tabular-nums; }
+  .task-popup[open] { display: flex; flex-direction: column; gap: 18px; overflow: hidden; }
+  .task-popup header { flex: none; }
+  .task-list { display: grid; gap: 10px; min-height: 0; overflow: auto; margin: 0; padding: 0; list-style: none; }
+  .task-list li { align-items: flex-start; }
+  .task-list li.subtask { margin-left: 20px; }
+  .task-list small, .task-list p, .task-empty { margin: 0; color: var(--text-2); font-size: .8rem; line-height: 1.5; overflow-wrap: anywhere; }
+  .task-empty { margin-top: 20px; }
+  .task-status { justify-self: start; padding: 3px 8px; border-radius: 8px; background: var(--surface-3); color: var(--text-2); font-size: .7rem; }
+  .task-list [data-status='in_progress'] { border-color: var(--accent-line); }
+  .task-list [data-status='in_progress'] .task-status { background: var(--accent-soft); color: var(--accent-text); }
+  .task-list [data-status='completed'] .task-status { color: var(--ok); }
   .shell-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 0 1 auto !important; min-width: 0; }
   /* Fills the content area; only regions inside the panel scroll. */
   .detail {
@@ -1631,23 +1672,28 @@
     flex: none;
     display: flex;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-    padding: 10px 12px;
+    gap: 6px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border);
   }
+  .changes-bar .segmented { min-width: 0; }
+  .changes-bar .segmented button { padding-inline: 10px; min-height: 44px; }
+  .review-options { position: static; }
+  .review-options > summary { list-style: none; min-height: 44px; padding-inline: 10px; }
+  .review-options > summary::-webkit-details-marker { display: none; }
+  .review-options > summary::before { display: none; }
+  .review-options[open] > summary { background: var(--accent-soft); }
+  .review-options-body { position: absolute; top: 62px; right: 8px; left: 8px; z-index: 5; display: grid; gap: 12px; max-height: min(420px, 55dvh); overflow: auto; padding: 16px; border: 1px solid var(--border-strong); border-radius: 16px; background: var(--surface); box-shadow: var(--clay-raised); }
+  .scope-note, .diff-warning { margin: 0; color: var(--text-2); font-size: .75rem; line-height: 1.5; }
+  .diff-warning { color: var(--warning, var(--text-2)); }
+  .filter-active { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
 
   .refresh {
     margin-left: auto;
   }
 
-  .chip.plus {
-    color: var(--ok);
-  }
-
-  .chip.minus {
-    color: var(--danger);
-  }
+  .plus { color: var(--ok); }
+  .minus { color: var(--danger); }
 
   .diff {
     flex: 1 1 0;
@@ -1656,14 +1702,10 @@
     background: var(--code-bg);
   }
 
-  .worktree-bar { flex: none; display: grid; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--border); }
+  .worktree-bar { display: grid; gap: 6px; min-width: 0; }
   .worktree-bar label { color: var(--text-2); font-size: 0.75rem; }
   .worktree-bar select { width: 100%; min-width: 0; min-height: 44px; }
-  .worktree-bar p { margin: 2px 0 0; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; color: var(--text-3); font-size: 0.7rem; }
-  .worktree-bar code { overflow-wrap: anywhere; }
-  .worktree-bar .diff-warning { color: var(--warning, var(--text-2)); }
   .new-file { color: var(--accent-text); }
-  .diff-filter-bar { flex: none; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface); }
   .diff-filter { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
   .diff-filter input { width: 100%; min-width: 0; min-height: 44px; }
   .diff-count { flex: none; color: var(--text-3); font-size: 0.75rem; }
@@ -1794,6 +1836,18 @@
   .ended .glyph { color: var(--term-err); }
   @media (max-width: 900px) {
     .detail { padding: 4px 8px 8px; gap: 4px; }
+    .reviewing > .head, .reviewing > .info { display: none; }
+    .reviewing .accessory-head { min-height: 44px; }
+    .diff-file { margin: 6px; border-radius: 10px; }
+    .diff-file-head { padding: 8px; gap: 6px; align-items: flex-start; }
+    .diff-file-head code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .diff-label strong { font-size: .75rem; }
+    .file-change-counts { gap: 4px; }
+    .file-change-counts .chip { padding: 3px 5px; font-size: .65rem; box-shadow: none; }
+    .diff-navigation { padding: 6px; }
+    .changes-bar { padding-inline: 6px; }
+    .review-options > summary > span:not(.filter-active) { display: none; }
+    .diff pre > span { padding-inline: 12px; }
     .title { font-size: 0.98rem; }
     .title button { padding: 0 2px; }
     .head { gap: 8px; }

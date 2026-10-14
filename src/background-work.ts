@@ -1,6 +1,6 @@
 import type { BackgroundWork } from './protocol.js';
 
-type Item = { id: string; name: string; state: string };
+type Item = { id: string; name: string; state: string; startedAt?: number };
 const object = (value: unknown): Record<string, unknown> =>
   value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 
@@ -9,12 +9,15 @@ export class BackgroundWorkTracker {
   private shells = new Map<string, Item>();
   private agents = new Map<string, Item>();
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   ingest(tool: string, value: unknown) {
     const details = object(value);
     const name = tool.split(/[._]/).slice(-2).join('_');
     if ((name === 'jar_shell' || tool === 'pi-jar.shell') && Array.isArray(details.jobs)) {
-      this.shells.clear();
+      const ids = new Set(details.jobs.map(job => object(job).id));
       for (const job of details.jobs) this.upsert(this.shells, job, 'status');
+      for (const id of this.shells.keys()) if (!ids.has(id)) this.shells.delete(id);
     }
     if (name === 'jar_delegate' && Array.isArray(details.runs)) {
       for (const raw of details.runs) {
@@ -48,17 +51,24 @@ export class BackgroundWorkTracker {
     const value = object(raw);
     const id = value.key ?? value.id;
     if (typeof id !== 'string' || typeof value[field] !== 'string') return;
-    items.set(id, { id, name: typeof value.name === 'string' ? value.name.slice(0, 120) : items.get(id)?.name ?? id, state: value[field] as string });
+    const previous = items.get(id);
+    const state = value[field] as string;
+    const reported = typeof value.startedAt === 'string' ? Date.parse(value.startedAt)
+      : typeof value.startedAt === 'number' ? (value.startedAt < 1e12 ? value.startedAt * 1000 : value.startedAt) : NaN;
+    // Without a source timestamp, measure from the first active report, not popup opening.
+    const startedAt = Number.isFinite(reported) && reported > 0 ? reported
+      : previous?.state === state ? previous.startedAt : ['running', 'working', 'queued'].includes(state) ? this.now() : undefined;
+    items.set(id, { id, name: typeof value.name === 'string' ? value.name.slice(0, 120) : previous?.name ?? id, state, ...(startedAt !== undefined ? { startedAt } : {}) });
   }
 
   private update(items: Map<string, Item>, id: string, state: string) {
-    items.set(id, { id, name: items.get(id)?.name ?? id, state });
+    this.upsert(items, { id, state }, 'state');
   }
 
   snapshot(): BackgroundWork {
     return {
-      shells: [...this.shells.values()].filter(item => item.state === 'running').map(({ id, name, state }) => ({ id, name, state })),
-      agents: [...this.agents.values()].filter(item => item.state === 'working' || item.state === 'queued').map(({ id, name, state }) => ({ id, name, state }))
+      shells: [...this.shells.values()].filter(item => item.state === 'running').map(item => ({ ...item })),
+      agents: [...this.agents.values()].filter(item => item.state === 'working' || item.state === 'queued').map(item => ({ ...item }))
     };
   }
 }

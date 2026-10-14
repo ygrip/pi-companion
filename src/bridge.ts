@@ -7,8 +7,10 @@ import { TelemetryRelay } from "./telemetry.js";
 import { PopupRelay } from "./popup.js";
 import { BackgroundWorkTracker } from "./background-work.js";
 import { gitChangesError, readGitChanges } from "./git-changes.js";
+import { sessionChangedPaths } from "./session-changes.js";
+import { normalizeTasks, sessionTasks } from "./session-tasks.js";
 import { heuristicTitle, inferTitle, needsInference, promptKey, savedTitles, TITLE_ENTRY } from "./title.js";
-import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, TempFile } from "./protocol.js";
+import type { AskAnswers, AskRequest, BridgeMessage, ServerMessage, SessionSnapshot, SessionTask, TempFile } from "./protocol.js";
 
 export class CompanionBridge implements AskChannel {
   private pendingPrompt?: string;
@@ -31,6 +33,7 @@ export class CompanionBridge implements AskChannel {
   private restoreStatus?: () => void;
   private telemetry = new TelemetryRelay();
   private backgroundWork = new BackgroundWorkTracker();
+  private taskCache?: { sessionId?: string; leafId: string | null; items: SessionTask[] };
   private closed = false;
   private activated = false;
   private restoreDialogs?: () => void;
@@ -121,6 +124,16 @@ export class CompanionBridge implements AskChannel {
     });
   }
 
+  private projectedTasks(ctx: ExtensionContext): SessionTask[] {
+    const manager = ctx.sessionManager;
+    const leafId = manager?.getLeafId?.();
+    const sessionId = manager?.getSessionId?.();
+    if (leafId !== undefined && this.taskCache?.leafId === leafId && this.taskCache.sessionId === sessionId) return this.taskCache.items;
+    const items = sessionTasks(manager?.getBranch?.() ?? []);
+    this.taskCache = leafId === undefined ? undefined : { sessionId, leafId, items };
+    return items;
+  }
+
   /** Context getters remain live while idle; send only changed metadata, including explicit clears. */
   refreshMetadata() {
     const ctx = this.ctx;
@@ -134,6 +147,7 @@ export class CompanionBridge implements AskChannel {
       mainModel: ctx.model?.id ?? null,
       effort: ctx.thinkingLevel ?? this.pi.getThinkingLevel?.() ?? null,
       telemetry: this.telemetry.snapshot(ctx),
+      tasks: this.projectedTasks(ctx),
       // Expose only executable slash commands, not local source paths or credentials.
       commands: (this.pi.getCommands?.() ?? []).slice(0, 500).map(command => ({
         name: command.name, description: command.description?.slice(0, 500), source: command.source
@@ -146,6 +160,19 @@ export class CompanionBridge implements AskChannel {
     Object.assign(this.snapshot, patch);
     if (Object.keys(patch).length) this.send({ type: "session.update", session: patch });
     if (this.activated && this.snapshot.remoteEnabled && Date.now() - this.telemetryRequestedAt >= 30_000) this.requestTelemetry();
+  }
+
+  ingestTasks(value: unknown) {
+    const sessionId = value && typeof value === 'object' && 'sessionId' in value ? value.sessionId : undefined;
+    if (sessionId !== undefined && sessionId !== this.ctx?.sessionManager?.getSessionId?.()) return;
+    const items = normalizeTasks(value);
+    if (!items) return;
+    try {
+      this.pi.appendEntry('companion.tasks', { items });
+      this.refreshMetadata();
+    } catch (error) {
+      console.warn('Pi Companion could not save the task snapshot:', error);
+    }
   }
 
   ingestBackgroundWork(tool: string, details: unknown) {
@@ -426,7 +453,9 @@ export class CompanionBridge implements AskChannel {
 
   private async sendGitDiff(staged: boolean, worktree?: string, requestId?: string) {
     try {
-      const changes = await readGitChanges(this.ctx?.cwd ?? process.cwd(), staged, worktree);
+      const cwd = this.ctx?.cwd ?? process.cwd();
+      const paths = sessionChangedPaths(this.ctx?.sessionManager?.getEntries?.() ?? [], cwd);
+      const changes = await readGitChanges(cwd, staged, worktree, paths);
       this.send({ type: "git.diff", staged, requestId, ...changes });
     } catch (error) {
       // Reported with the diff (shown as a toast), never as a session activity error.

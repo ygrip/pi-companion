@@ -53,8 +53,13 @@ export type SessionTelemetry = {
 
 export type TerminalPopup = { id: string; lines: string[]; width: number };
 
+export type BackgroundWorkItem = { id: string; name: string; state?: string; startedAt?: number };
+
+export type SessionTask = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string; details?: string; parentId?: string };
+
 export type Session = {
-  backgroundWork?: { shells: { id: string; name: string; state?: string }[]; agents: { id: string; name: string; state?: string }[] };
+  tasks?: SessionTask[];
+  backgroundWork?: { shells: BackgroundWorkItem[]; agents: BackgroundWorkItem[] };
   popups?: TerminalPopup[];
   id: string;
   name?: string | null;

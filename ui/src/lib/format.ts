@@ -24,6 +24,16 @@ export function relativeTime(value: number | string, now = Date.now()) {
   return toDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
+/** Background-work timestamps are epoch milliseconds; absent legacy timestamps stay unknown. */
+export function elapsedTime(startedAt: number | undefined, now = Date.now()): string {
+  if (startedAt === undefined || !Number.isFinite(startedAt) || !Number.isFinite(now)) return 'Time unavailable';
+  const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ${Math.floor(seconds % 3600 / 60)}m`;
+  return `${Math.floor(seconds / 86400)}d ${Math.floor(seconds % 86400 / 3600)}h`;
+}
+
 export function shortDate(value: number | string) {
   return toDate(value).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }

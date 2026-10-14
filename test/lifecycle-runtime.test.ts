@@ -39,6 +39,8 @@ const bridge = dataModule(transpile('../src/bridge.ts')
   .replace('from "./popup.js"', `from ${JSON.stringify(new URL('../src/popup.ts', import.meta.url).href)}`)
   .replace('from "./background-work.js"', `from ${JSON.stringify(new URL('../src/background-work.ts', import.meta.url).href)}`)
   .replace('from "./git-changes.js"', `from ${JSON.stringify(new URL('../src/git-changes.ts', import.meta.url).href)}`)
+  .replace('from "./session-changes.js"', `from ${JSON.stringify(new URL('../src/session-changes.ts', import.meta.url).href)}`)
+  .replace('from "./session-tasks.js"', `from ${JSON.stringify(new URL('../src/session-tasks.ts', import.meta.url).href)}`)
   .replace('from "./title.js"', `from ${JSON.stringify(new URL('../src/title.ts', import.meta.url).href)}`));
 const extension = dataModule(transpile('../src/index.ts')
   .replace('from "typebox"', `from ${JSON.stringify(import.meta.resolve('typebox'))}`)
@@ -49,6 +51,34 @@ const extension = dataModule(transpile('../src/index.ts')
   .replace('from "./provider-status.ts"', `from ${JSON.stringify(new URL('../src/provider-status.ts', import.meta.url).href)}`));
 
 const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+
+test('task projection is cached by session and branch leaf, not replayed on idle refresh', async () => {
+  const { CompanionBridge } = await import(bridge);
+  const entries: any[] = [];
+  let reads = 0, sessionId = 'first';
+  let leafId: string | null = null;
+  const instance = new CompanionBridge({ getSessionName: () => 'Task cache', getCommands: () => [] } as any);
+  instance.setContext({ cwd: '/project', sessionManager: {
+    getSessionId: () => sessionId, getLeafId: () => leafId,
+    getBranch: () => { reads++; return entries; }
+  } } as any);
+  try {
+    const initialReads = reads;
+    instance.refreshMetadata();
+    instance.refreshMetadata();
+    assert.equal(reads, initialReads, 'unchanged leaf reuses the task projection');
+    entries.push({ type: 'custom', customType: 'pi-jar.task', data: { v: 1, op: 'add', id: 'task', title: 'Review' } });
+    leafId = 'new-leaf';
+    instance.refreshMetadata();
+    assert.equal(reads, initialReads + 1);
+    assert.equal((instance as any).snapshot.tasks[0].title, 'Review');
+    sessionId = 'second';
+    entries.length = 0;
+    instance.refreshMetadata();
+    assert.equal(reads, initialReads + 2, 'same leaf in another session cannot reuse old tasks');
+    assert.deepEqual((instance as any).snapshot.tasks, []);
+  } finally { instance.close(); }
+});
 
 test('custom popup frames and input round-trip through the live bridge transport', async () => {
   const { CompanionBridge } = await import(bridge);
@@ -133,8 +163,10 @@ test('daemon starts privately and remote-control alone shares with safe session 
   let prompts = 0;
   let sessionName: string | undefined = 'Workspace polish';
   const bus: Record<string, (data: any) => void> = {};
+  const branch: any[] = [];
   const ctx = {
     cwd: '/project/demo', hasUI: true, isIdle: () => true,
+    sessionManager: { getBranch: () => branch, getEntries: () => branch },
     model: { id: 'initial-model' } as { id: string } | undefined, thinkingLevel: 'medium' as string | undefined,
     ui: {
       notify: (message: string) => notices.push(message),
@@ -147,7 +179,7 @@ test('daemon starts privately and remote-control alone shares with safe session 
   const originalStatus = ctx.ui.setStatus;
   install({
     getSessionName: () => sessionName,
-    appendEntry: () => {},
+    appendEntry: (customType: string, data: unknown) => { branch.push({ type: 'custom', customType, data }); },
     events: { on: (channel: string, fn: any) => { bus[channel] = fn; }, emit: () => {} },
     sendUserMessage: async () => { prompts++; },
     on: (name: string, fn: any) => { events[name] = fn; },
@@ -229,7 +261,9 @@ test('daemon starts privately and remote-control alone shares with safe session 
     content: [{ type: 'text', text: 'output'.repeat(500) }],
     details: { jobs: [{ id: 's1', name: 'dev server', status: 'running' }] }
   } }, ctx);
-  assert.deepEqual(live.frames.findLast((frame: any) => frame.session?.backgroundWork)?.session.backgroundWork.shells, [{ id: 's1', name: 'dev server', state: 'running' }]);
+  const shells = live.frames.findLast((frame: any) => frame.session?.backgroundWork)?.session.backgroundWork.shells;
+  assert.deepEqual(shells.map(({ startedAt, ...item }: any) => item), [{ id: 's1', name: 'dev server', state: 'running' }]);
+  assert.ok(Number.isFinite(shells[0].startedAt));
   assert.equal(live.frames.at(-1).payload.result.length, 3000, 'shell output is not cut to the old 1200-character preview');
   events.tool_execution_update({ toolName: 'jar_delegate', partialResult: { details: {
     batch: 'a', runs: [{ index: 0, name: 'scout', state: 'working' }]
@@ -239,6 +273,19 @@ test('daemon starts privately and remote-control alone shares with safe session 
   assert.equal(live.frames.at(-1).session.backgroundWork.agents.length, 0);
   events.message_end({ message: { role: 'custom', customType: 'pi-jar.shell', details: { events: [{ id: 's1', status: 'exited' }] } } }, ctx);
   assert.equal(live.frames.at(-1).session.backgroundWork.shells.length, 0);
+
+  const nativeTask = { id: 'native-task', title: 'Review changes', status: 'in_progress' };
+  branch.push({ type: 'custom', customType: 'pi-jar.task', data: { v: 1, op: 'write', items: [nativeTask] } });
+  events.tool_execution_end({ toolCallId: 'task-1', toolName: 'jar_todo', isError: false, result: { details: { items: [] } } }, ctx);
+  assert.deepEqual(live.frames.findLast((frame: any) => frame.session?.tasks)?.session.tasks, [nativeTask], 'native task history is authoritative, not truncated tool previews');
+  const externalTask = { id: 'external-task', title: 'Run checks', status: 'completed' };
+  bus['companion:tasks']({ items: [externalTask] });
+  assert.deepEqual(live.frames.at(-1).session.tasks, [externalTask]);
+  assert.equal(branch.at(-1).customType, 'companion.tasks', 'compatible task snapshots persist on the active branch');
+  const taskFrames = live.frames.length;
+  bus['companion:tasks']({ items: [{ id: 'bad' }] });
+  bus['companion:tasks']({ sessionId: 'another-session', items: [] });
+  assert.equal(live.frames.length, taskFrames, 'malformed or mismatched snapshots cannot clear valid tasks');
 
   const probes = state.probes;
   await commands['remote-control'].handler('', ctx);

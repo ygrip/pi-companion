@@ -19,7 +19,7 @@ import type { AskAnswers, AskRequest, GitWorktree, PairedDevice, Pairing, Sessio
  */
 const TOKEN_KEY = 'piCompanionDeviceToken';
 
-type Diff = { staged: boolean; text: string; at: number; error?: string; files?: { path: string; untracked: boolean }[]; worktree?: string; branch?: string; worktrees?: GitWorktree[]; warnings?: string[]; loading?: boolean };
+type Diff = { staged: boolean; text: string; at: number; error?: string; scope?: 'session'; files?: { path: string; untracked: boolean }[]; worktree?: string; branch?: string; worktrees?: GitWorktree[]; warnings?: string[]; loading?: boolean };
 type UploadPolicy = { maxUploadMb: number; allowedUploadTypes: string[] };
 
 class Companion {
@@ -397,6 +397,7 @@ class Companion {
         branch: typeof inner.branch === 'string' ? inner.branch : undefined,
         worktrees: Array.isArray(inner.worktrees) ? inner.worktrees : previous?.worktrees,
         files: Array.isArray(inner.files) ? inner.files : undefined,
+        scope: inner.scope === 'session' ? 'session' : undefined,
         warnings: Array.isArray(inner.warnings) ? inner.warnings : [], loading: false } };
       if (error) toasts.show(error, 'error');
       return;

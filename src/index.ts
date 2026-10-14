@@ -96,6 +96,9 @@ export default function companionExtension(pi: ExtensionAPI) {
     pi.events?.on(channel, value => bridge.ingestTelemetry(value, channel));
   }
 
+  // Task providers can publish complete, session-local snapshots without a Jar dependency.
+  pi.events?.on('companion:tasks', value => bridge.ingestTasks(value));
+
   pi.on("session_start", (_event, ctx) => {
     // Restore only this session's explicit opt-in, never the previous session's.
     sharingGeneration += 1;

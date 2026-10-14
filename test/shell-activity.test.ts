@@ -30,11 +30,16 @@ test('session feed separates user messages and hides raw shell scripts behind a 
   assert.doesNotMatch(source, /class="shell-preview"|shellPreview\(parts.result\)/);
   assert.match(source, /<summary>Full output · \{lines\}/);
   assert.match(source, /details summary\s*\{[^}]*width: 100%;[^}]*min-height: 44px/s);
-  assert.match(source, /class="background-badge"/);
+  assert.doesNotMatch(source, /class="background-badge"/);
+  assert.match(source, /onclick=\{openBackground\}/);
+  assert.match(source, /onclick=\{openTasks\}/);
   assert.match(source, /aria-haspopup="dialog"/);
   assert.match(source, /<dialog class="background-popup"[^>]*aria-labelledby="background-title"/);
-  assert.match(source, /onclick=\{\(\) => backgroundDialog\?\.showModal\(\)\}/);
-  assert.match(source, /onclose=\{\(\) => backgroundTrigger\?\.focus\(\)\}/);
+  assert.match(source, /backgroundDialog\?\.showModal\(\)/);
+  assert.match(source, /onclose=\{\(\) => \{ backgroundOpen = false; focusSessionMenu\(\); \}\}/);
+  assert.match(source, /elapsedTime\(item\.startedAt, backgroundNow\)/);
+  assert.match(source, /aria-labelledby="tasks-title"/);
+  assert.match(source, /\.task-list\s*\{[^}]*overflow: auto/s);
   assert.match(source, /aria-label="Close background work"/);
 });
 test('thinking renders markdown with a live animated state', () => {

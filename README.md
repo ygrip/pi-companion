@@ -6,7 +6,9 @@ Lightweight, local-first remote control for Pi sessions.
 
 **[Watch the 2-minute narrated walkthrough](docs/pi-companion-promo.mp4)**: a real Pi session shared with `/remote-control`, a phone paired from the dashboard, Pi's questions answered from the phone, and an automation created, triggered and reviewed. It is recorded from the actual terminal and UI and composed in code in [`tools/promo-video`](tools/promo-video).
 
-**New in 0.3.12:** Browse Changes one file at a time with a file picker and previous/next controls; the complete file inventory remains visible even when previews are limited. Automations support IANA timezone selection, daylight-saving changes, and the next scheduled run. Pair devices from the terminal with `npm run --silent pair`. Settings accumulates weekly observed tokens and estimated cost across retained sessions while keeping account-limit snapshots separate.
+**New in 0.3.13:** Changes is scoped to session-recorded edits and applied Pi Jar subagent files, with compact mobile review controls. The session menu contains background work with elapsed timers and a scrollable Tasks popup for Pi Jar and compatible extensions. Claymorphism error pages provide safe recovery actions and explain failed page downloads.
+
+**0.3.12:** Browse Changes one file at a time with a file picker and previous/next controls; the complete file inventory remains visible even when previews are limited. Automations support IANA timezone selection, daylight-saving changes, and the next scheduled run. Pair devices from the terminal with `npm run --silent pair`. Settings accumulates weekly observed tokens and estimated cost across retained sessions while keeping account-limit snapshots separate.
 
 **0.3.11:** Changes includes worktree selection, branch and file counts, and new-file previews. Provider usage snapshots survive closed and archived sessions and daemon restarts, with accurate quota labels. Clay background-work badges open shell/subagent lists, and automation phases open scrollable flowcharts with failure and retry paths.
 
@@ -336,6 +338,24 @@ A single-page SvelteKit app, embedded in the daemon binary:
 | Help, Privacy, Terms | everyone | Setup stepper, commands, tools, troubleshooting; data handling; terms of use. Help is opened from the Overview |
 
 The Live indicator in the header and sidebar opens the connection sheet (status, version and, on this computer, the console and device addresses and data folders).
+
+Changes shows dirty files with successful file-operation records in that session, including Pi Jar subagent files explicitly applied to the parent checkout—not every dirty file in the repository. Worktree selection, filtering and attribution warnings are under Options so the patch has room on mobile. Shell-only edits or delegates without an applied-file report may be missing, and a shared file’s patch can contain other sessions’ hunks. Reload the Pi extension to enable this scope in an existing session.
+
+The session’s three-dot menu opens **Background work** (shells and subagents with live elapsed time) and **Tasks** (a scrollable checklist with statuses and subtasks). Elapsed time uses the source start timestamp when available, otherwise the first active report; it freezes while disconnected. Older extensions without timestamps show “Time unavailable.”
+
+Pi Jar tasks are restored from complete task events on the active session branch, including lists larger than its tool-result preview. Other task extensions can publish complete snapshots without importing Companion:
+
+```ts
+pi.events.emit('companion:tasks', {
+  sessionId: ctx.sessionManager.getSessionId(), // guards against late reports from another session
+  items: [
+    { id: 'review', title: 'Review changes', status: 'in_progress', activeForm: 'Reviewing changes' },
+    { id: 'tests', title: 'Run tests', status: 'pending' }
+  ]
+});
+```
+
+Statuses are `pending`, `in_progress` or `completed`. Use at most 50 items, short alphanumeric/hyphen IDs, and one subtask level with parents listed first. Optional `details` supplies context; `{ items: [] }` clears the list. Snapshots are saved on the active branch; malformed snapshots and mismatched session IDs are ignored. Arbitrary todo-tool output is not interpreted as a complete task list.
 
 Git problems in the Changes panel (for example a folder that is not a git repository) show as a toast, never in the transcript.
 

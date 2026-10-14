@@ -58,9 +58,13 @@ export type SessionTelemetry = {
 
 export type TerminalPopup = { id: string; lines: string[]; width: number };
 
-export type BackgroundWork = { shells: { id: string; name: string; state?: string }[]; agents: { id: string; name: string; state?: string }[] };
+export type BackgroundWorkItem = { id: string; name: string; state?: string; startedAt?: number };
+export type BackgroundWork = { shells: BackgroundWorkItem[]; agents: BackgroundWorkItem[] };
+
+export type SessionTask = { id: string; title: string; status: 'pending' | 'in_progress' | 'completed'; activeForm?: string; details?: string; parentId?: string };
 
 export type SessionSnapshot = {
+  tasks?: SessionTask[];
   backgroundWork?: BackgroundWork;
   popups?: TerminalPopup[];
   id: string;
@@ -80,7 +84,7 @@ export type SessionSnapshot = {
 };
 
 export type GitWorktree = { path: string; branch: string; changedFiles: number | null; stagedFiles: number | null; unstagedFiles: number | null; error?: string };
-export type GitChanges = { diff: string; files: { path: string; untracked: boolean }[]; worktree: string; branch: string; worktrees: GitWorktree[]; warnings: string[] };
+export type GitChanges = { scope?: 'session'; diff: string; files: { path: string; untracked: boolean }[]; worktree: string; branch: string; worktrees: GitWorktree[]; warnings: string[] };
 
 export type BrowserCommand =
   | { type: "popup_input"; popupId: string; data: string }

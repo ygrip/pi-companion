@@ -71,7 +71,7 @@
 
   let notificationPromptDismissed = $state(true);
   const showNotificationPrompt = $derived(
-    companion.booted && companion.paired && !notificationPromptDismissed && devicePermissions.notifications === 'prompt'
+    page.status < 400 && companion.booted && companion.paired && !notificationPromptDismissed && devicePermissions.notifications === 'prompt'
   );
 
   function dismissNotificationPrompt() {

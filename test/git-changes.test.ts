@@ -140,13 +140,72 @@ test('file inventory stays scoped to selected worktree and staging area', () => 
   assert.match(result.diff, /diff --git a\/tracked.txt b\/tracked.txt/);
 }));
 
+test('session scope excludes unrelated dirt from inventories, patches, previews and counts', () => repository(async repo => {
+  await mkdir(join(repo, 'subdir'));
+  await writeFile(join(repo, 'tracked.txt'), 'unrelated baseline dirt\n');
+  await writeFile(join(repo, 'subdir', 'session.txt'), 'session change\n');
+  await writeFile(join(repo, 'unrelated.txt'), 'unrelated new file\n');
+  const result = await readGitChanges(join(repo, 'subdir'), false, undefined, [join(repo, 'subdir', 'session.txt')]);
+  assert.equal(result.scope, 'session');
+  assert.deepEqual(result.files, [{ path: 'subdir/session.txt', untracked: true }]);
+  assert.equal(result.worktrees[0].changedFiles, 1);
+  assert.equal(result.worktrees[0].unstagedFiles, 1);
+  assert.equal(splitChangedFiles(result.diff)[0].path, 'subdir/session.txt');
+  assert.ok(!result.diff.includes('unrelated'));
+  assert.match(result.warnings.join(' '), /Shell-only edits/);
+  const empty = await readGitChanges(repo, false, undefined, []);
+  assert.equal(empty.diff, '');
+  assert.deepEqual(empty.files, []);
+  assert.equal(empty.worktrees[0].changedFiles, 0);
+}));
+
+test('session scope uses literal filenames and handles renamed or deleted paths', () => repository(async repo => {
+  const literal = ':(glob)*.txt';
+  await writeFile(join(repo, literal), 'literal original\n');
+  await git(repo, 'add', '--', ':(literal)' + literal);
+  await git(repo, 'commit', '-qm', 'literal fixture');
+  await writeFile(join(repo, literal), 'literal edited\n');
+  await writeFile(join(repo, 'tracked.txt'), 'unrelated edited\n');
+  const selected = await readGitChanges(repo, false, undefined, [join(repo, literal)]);
+  assert.deepEqual(selected.files, [{ path: literal, untracked: false }]);
+  assert.ok(selected.diff.includes('literal edited'));
+  assert.ok(!selected.diff.includes('unrelated edited'));
+  await git(repo, 'restore', 'tracked.txt');
+  await git(repo, 'mv', 'tracked.txt', 'renamed.txt');
+  const renamed = await readGitChanges(repo, true, undefined, [join(repo, 'tracked.txt')]);
+  assert.deepEqual(renamed.files, [{ path: 'renamed.txt', untracked: false }]);
+  assert.match(renamed.diff, /rename from tracked.txt/);
+  assert.equal(renamed.worktrees[0].stagedFiles, 1);
+  await git(repo, 'reset', '--hard', '-q', 'HEAD');
+  await rm(join(repo, 'tracked.txt'));
+  const deleted = await readGitChanges(repo, false, undefined, [join(repo, 'tracked.txt')]);
+  assert.deepEqual(deleted.files, [{ path: 'tracked.txt', untracked: false }]);
+  assert.match(deleted.diff, /deleted file mode/);
+}));
+
+test('session scope does not map a main-checkout edit onto a different worktree', () => repository(async (repo, directory) => {
+  const worker = join(directory, 'worker');
+  await git(repo, 'worktree', 'add', '-q', '-b', 'worker', worker, 'HEAD');
+  await writeFile(join(repo, 'tracked.txt'), 'main change\n');
+  await writeFile(join(worker, 'tracked.txt'), 'worker change\n');
+  const result = await readGitChanges(repo, false, worker, [join(repo, 'tracked.txt')]);
+  assert.equal(result.diff, '');
+  assert.deepEqual(result.files, []);
+  assert.equal(result.worktrees.find(tree => tree.path === repo)?.changedFiles, 1);
+  assert.equal(result.worktrees.find(tree => tree.path === worker)?.changedFiles, 0);
+  const workerResult = await readGitChanges(repo, false, worker, [join(worker, 'tracked.txt')]);
+  assert.match(workerResult.diff, /worker change/);
+}));
+
 test('Changes refreshes on open, labels workspace and distinguishes new files', () => {
   const page = readFileSync(new URL('../ui/src/routes/sessions/[id]/+page.svelte', import.meta.url), 'utf8');
   const store = readFileSync(new URL('../ui/src/lib/companion.svelte.ts', import.meta.url), 'utf8');
   assert.match(page, /if \(next === 'changes'\) loadDiff\(\)/);
   assert.match(page, /<label for="changes-worktree">Worktree<\/label>/);
-  assert.match(page, /tree\.changedFiles/);
-  assert.match(page, /diff\?\.worktree \?\? session\.cwd/);
+  assert.match(page, /<details class="review-options">/);
+  assert.match(page, /diff\?\.scope === 'session'/);
+  assert.match(page, /class:reviewing=\{tab === 'changes'\}/);
+  assert.match(store, /scope: inner\.scope === 'session'/);
   assert.match(page, /file\.isNew[^]*?class="chip new-file">New/);
   assert.match(store, /inner\.requestId !== expected/);
   assert.match(page, /aria-label="Changed file navigation"/);
