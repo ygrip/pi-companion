@@ -8,7 +8,7 @@
 //! Every UI is drawn as vector mockups in the Companion dark theme (colors from
 //! `ui/src/app.css`); content is demo data, not real sessions.
 use fframes::{
-    AudioMap, Color, Duration, FFramesContext, FontQuery, Frame, Overlap, Scene, Scenes, Svgr,
+    AudioMap, AudioTimestamp::{Eof, Second}, AudioTrack, Color, Duration, FFramesContext, FontQuery, Frame, Overlap, Scene, Scenes, Svgr,
     Video, include_media_dir,
 };
 
@@ -89,6 +89,81 @@ fn typed(text: &'static str, t: f32, start: f32, cps: f32) -> &'static str {
 
 fn typing_done(text: &str, start: f32, cps: f32) -> f32 {
     start + text.chars().count() as f32 / cps
+}
+
+/// A line typed at `cps` characters per second from `start`.
+#[derive(Clone, Copy)]
+struct Typing {
+    text: &'static str,
+    start: f32,
+    cps: f32,
+}
+
+impl Typing {
+    fn at(&self, t: f32) -> &'static str {
+        typed(self.text, t, self.start, self.cps)
+    }
+
+    fn done(&self) -> f32 {
+        typing_done(self.text, self.start, self.cps)
+    }
+
+    /// The next line, typed `gap` seconds after this one finishes.
+    fn then(&self, text: &'static str, gap: f32, cps: f32) -> Typing {
+        Typing { text, start: self.done() + gap, cps }
+    }
+
+    /// Seconds (scene relative) of every non-space keystroke.
+    fn keystrokes(&self) -> impl Iterator<Item = f32> + '_ {
+        self.text.chars().enumerate().filter(|(_, c)| *c != ' ').map(|(i, _)| self.start + i as f32 / self.cps)
+    }
+}
+
+// Cue timings, in seconds from each scene's start. Visuals and sounds both read these.
+const TOOL_LINES: [f32; 3] = [3.0, 3.4, 3.8];
+const PAIR_CLICK: f32 = 2.1;
+const OPEN_SESSION: f32 = 1.5;
+const ASK_NOTIFY: f32 = 0.2;
+const ASK_SHEET: f32 = 1.1;
+const ASK_PICK: f32 = 2.9;
+const ASK_SEND: f32 = 4.0;
+const ASK_ANSWERED: f32 = ASK_SEND + 0.55;
+const RUN_AT: f32 = 1.6;
+const RUN_DONE: f32 = RUN_AT + 2.4;
+const RUN_OPEN: f32 = RUN_DONE + 1.0;
+
+/// `pi`, the first prompt, `/remote-control`.
+fn terminal_typing() -> [Typing; 3] {
+    [
+        Typing { text: "pi", start: 0.5, cps: 8.0 },
+        Typing { text: "Fix the session expiring early on Android", start: 1.5, cps: 32.0 },
+        Typing { text: "/remote-control", start: 5.1, cps: 13.0 },
+    ]
+}
+
+/// Pairing code, device name, and the Connect tap.
+fn connect_cues() -> (Typing, Typing, f32) {
+    let code = Typing { text: "K7QF-29XM", start: 1.2, cps: 8.0 };
+    let name = code.then("Yunaz's iPhone", 0.35, 22.0);
+    let connect_at = name.done() + 0.6;
+    (code, name, connect_at)
+}
+
+/// The two composer lines and the Send tap.
+fn session_cues() -> ([Typing; 2], f32) {
+    let first = Typing { text: "Still expires after resume. Give", start: 3.4, cps: 24.0 };
+    let second = first.then("me options before fixing.", 0.05, 24.0);
+    (([first, second]), second.done() + 0.45)
+}
+
+/// Automation name, three prompt lines, schedule toggle tap, Create tap.
+fn automation_cues() -> (Typing, [Typing; 3], f32, f32) {
+    let name = Typing { text: "Daily research digest", start: 0.9, cps: 20.0 };
+    let p0 = name.then("Research the latest WebGPU news", 0.35, 34.0);
+    let p1 = p0.then("and summarise the 5 biggest", 0.04, 34.0);
+    let p2 = p1.then("updates, with links.", 0.04, 34.0);
+    let toggle_at = p2.done() + 0.04 + 0.45;
+    (name, [p0, p1, p2], toggle_at, toggle_at + 1.4)
 }
 
 fn blink(t: f32) -> f32 {
@@ -403,6 +478,10 @@ impl Scene for Shot {
         if self.kind == Kind::Intro { Overlap::None } else { Overlap::Previous(FADE) }
     }
 
+    fn audio(&self) -> AudioMap<'_> {
+        AudioMap::from(sounds(self.kind))
+    }
+
     fn name(&self) -> &'static str {
         match self.kind {
             Kind::Intro => "Intro",
@@ -440,6 +519,92 @@ impl Scene for Shot {
     }
 }
 
+// ---------------------------------------------------------------------------------------
+// Sound. All files are synthesized by `audio/generate.py`; times come from the cue helpers.
+
+/// Level of every effect relative to the gains below (one knob for the SFX bus).
+const SFX_DB: f32 = 5.0;
+
+fn sfx(file: &'static str, at: f32, gain_db: f32) -> AudioTrack<'static> {
+    AudioTrack::new(file, Second(at.max(0.0))..Eof).gain_db(gain_db + SFX_DB)
+}
+
+/// Soft keyboard clicks for a typed line, rotating through three samples.
+fn keys(out: &mut Vec<AudioTrack<'static>>, line: &Typing, gain_db: f32) {
+    const KEYS: [&str; 3] = ["key0.wav", "key1.wav", "key2.wav"];
+    for (i, at) in line.keystrokes().enumerate() {
+        out.push(sfx(KEYS[i % 3], at, gain_db - (i % 2) as f32 * 2.0));
+    }
+}
+
+/// Every sound of one scene, relative to the scene start (cross-fade included).
+fn sounds(kind: Kind) -> Vec<AudioTrack<'static>> {
+    const TAP: f32 = -9.0;
+    const KEY: f32 = -17.0;
+    let mut out = Vec::new();
+    if kind != Kind::Intro {
+        out.push(sfx("whoosh.wav", 0.0, -16.0));
+    }
+    match kind {
+        Kind::Intro => out.push(sfx("shimmer.wav", 0.85, -10.0)),
+        Kind::Terminal => {
+            let [pi_cmd, ask, rc] = terminal_typing();
+            for line in [&pi_cmd, &ask, &rc] {
+                keys(&mut out, line, KEY);
+            }
+            out.extend(TOOL_LINES.iter().map(|&at| sfx("pop.wav", at, -20.0)));
+            out.push(sfx("chime.wav", rc.done() + 0.35, -9.0));
+        }
+        Kind::Pair => {
+            out.push(sfx("tap.wav", PAIR_CLICK, TAP));
+            out.push(sfx("pop.wav", PAIR_CLICK + 0.12, -14.0));
+        }
+        Kind::Connect => {
+            let (code, name, connect_at) = connect_cues();
+            keys(&mut out, &code, KEY);
+            keys(&mut out, &name, KEY);
+            out.push(sfx("tap.wav", connect_at, TAP));
+            out.push(sfx("chime.wav", connect_at + 0.4, -8.0));
+        }
+        Kind::Session => {
+            let (lines, send_at) = session_cues();
+            out.push(sfx("tap.wav", OPEN_SESSION, TAP));
+            out.push(sfx("whoosh.wav", OPEN_SESSION + 0.15, -20.0));
+            for line in &lines {
+                keys(&mut out, line, KEY);
+            }
+            out.push(sfx("tap.wav", send_at, TAP));
+            out.push(sfx("pop.wav", send_at + 0.15, -14.0));
+        }
+        Kind::Ask => {
+            out.push(sfx("ping.wav", ASK_NOTIFY, -9.0));
+            out.push(sfx("whoosh.wav", ASK_SHEET - 0.1, -18.0));
+            out.push(sfx("tap.wav", ASK_PICK, TAP));
+            out.push(sfx("tap.wav", ASK_SEND, TAP));
+            out.push(sfx("pop.wav", ASK_ANSWERED, -13.0));
+        }
+        Kind::Automation => {
+            let (name, prompt, toggle_at, create_at) = automation_cues();
+            keys(&mut out, &name, KEY);
+            for line in &prompt {
+                keys(&mut out, line, KEY);
+            }
+            out.push(sfx("tap.wav", toggle_at, TAP));
+            out.push(sfx("tap.wav", create_at, TAP));
+            out.push(sfx("chime.wav", create_at + 0.25, -9.0));
+        }
+        Kind::Runs => {
+            out.push(sfx("tap.wav", RUN_AT, TAP));
+            out.push(sfx("pop.wav", RUN_AT + 0.2, -14.0));
+            out.push(sfx("chime.wav", RUN_DONE, -8.0));
+            out.push(sfx("tap.wav", RUN_OPEN, TAP));
+            out.push(sfx("whoosh.wav", RUN_OPEN + 0.05, -18.0));
+        }
+        Kind::Outro => out.push(sfx("shimmer.wav", 0.3, -10.0)),
+    }
+    out
+}
+
 fn intro(t: f32) -> Svgr<'static> {
     let draw = smooth(t, 0.15, 1.3);
     let o1 = ramp(t, 0.9, 0.6);
@@ -460,13 +625,11 @@ fn terminal(t: f32) -> Svgr<'static> {
     let (x, y, w, h) = (860.0, 230.0, 930.0, 620.0);
     let lx = x + 36.0;
     let line = |i: usize| y + 104.0 + i as f32 * 44.0;
-    let prompt_cmd = typed("pi", t, 0.5, 8.0);
-    let ask = "Fix the session expiring early on Android";
-    let ask_t = typed(ask, t, 1.5, 32.0);
-    let rc = "/remote-control";
-    let rc_start = 5.1;
-    let rc_t = typed(rc, t, rc_start, 13.0);
-    let rc_done = typing_done(rc, rc_start, 13.0);
+    let [pi_cmd, ask, rc] = terminal_typing();
+    let prompt_cmd = pi_cmd.at(t);
+    let ask_t = ask.at(t);
+    let rc_t = rc.at(t);
+    let rc_done = rc.done();
     let appear = |at: f32| ramp(t, at, 0.35);
     let highlight = smooth(t, rc_done + 0.1, 0.3);
     // Caret follows whichever line is being typed.
@@ -479,7 +642,7 @@ fn terminal(t: f32) -> Svgr<'static> {
     } else {
         (lx + 2.0 * 14.4, line(10))
     };
-    let caret_o = blink(t) * if t < 4.2 && t > typing_done(ask, 1.5, 32.0) + 0.2 { 0.0 } else { 1.0 };
+    let caret_o = blink(t) * if t < 4.2 && t > ask.done() + 0.2 { 0.0 } else { 1.0 };
     let glow = 0.5 + 0.5 * (t * 3.0).sin();
     fframes::svgr!(<g>
         {caption(t, 0.2, 4.5, "01  START A SESSION", ["Work in Pi", "like you always do."], ["Pi runs in your terminal and", "stays the source of truth."])}
@@ -489,9 +652,9 @@ fn terminal(t: f32) -> Svgr<'static> {
             <text x={lx} y={line(0)} fill={ACCENT_TEXT}>"~/code/mobile-app" <tspan fill={TEXT3}>" ❯ "</tspan><tspan fill={TEXT}>{prompt_cmd}</tspan></text>
             <text opacity={appear(1.0)} x={lx} y={line(1)} fill={TEXT3}>"π pi  ·  claude-sonnet-4.5  ·  high"</text>
             <text x={lx} y={line(2)} fill={TEXT}><tspan fill={ACCENT}>"› "</tspan>{ask_t}</text>
-            <g opacity={appear(3.0)}><text x={lx} y={line(3)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Read  src/auth/session.ts"</text></g>
-            <g opacity={appear(3.4)}><text x={lx} y={line(4)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Edit  src/auth/session.ts  "<tspan fill={OK}>"+12"</tspan><tspan fill={DANGER}>" -3"</tspan></text></g>
-            <g opacity={appear(3.8)}><text x={lx} y={line(5)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Run   npm test  "<tspan fill={OK}>"✓ 42 passed"</tspan></text></g>
+            <g opacity={appear(TOOL_LINES[0])}><text x={lx} y={line(3)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Read  src/auth/session.ts"</text></g>
+            <g opacity={appear(TOOL_LINES[1])}><text x={lx} y={line(4)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Edit  src/auth/session.ts  "<tspan fill={OK}>"+12"</tspan><tspan fill={DANGER}>" -3"</tspan></text></g>
+            <g opacity={appear(TOOL_LINES[2])}><text x={lx} y={line(5)} fill={TEXT2}><tspan fill={OK}>"● "</tspan>"Run   npm test  "<tspan fill={OK}>"✓ 42 passed"</tspan></text></g>
             <rect x={lx + 26.0} y={line(6) - 30.0} width={15.0 * 14.4 + 16.0} height="42" rx="8" fill="#f5b027" fill-opacity={0.16 * highlight} stroke="#f5b027" stroke-opacity={0.6 * highlight * (0.6 + 0.4 * glow)} />
             <text x={lx} y={line(6)} fill={TEXT} opacity={appear(4.9)}><tspan fill={ACCENT}>"› "</tspan><tspan fill={ACCENT_TEXT} font-weight="700">{rc_t}</tspan></text>
             <g opacity={appear(rc_done + 0.35)}><text x={lx} y={line(7) + 8.0} fill={OK} font-weight="700">"✓ Remote control on"</text></g>
@@ -505,7 +668,7 @@ fn terminal(t: f32) -> Svgr<'static> {
 fn pair(t: f32) -> Svgr<'static> {
     let (x, y, w, h) = (840.0, 170.0, 960.0, 720.0);
     let mx = x + 210.0; // main column
-    let click = 2.1;
+    let click = PAIR_CLICK;
     let travel = smooth(t, 0.7, 1.2);
     let (px, py) = (mix(1360.0, 1700.0, travel), mix(820.0, 300.0, travel));
     let modal = spring(t, click + 0.15);
@@ -566,15 +729,9 @@ fn pair(t: f32) -> Svgr<'static> {
 }
 
 fn connect<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<'static> {
-    let code = "K7QF-29XM";
-    let code_start = 1.2;
-    let code_t = typed(code, t, code_start, 8.0);
-    let code_done = typing_done(code, code_start, 8.0);
-    let name = "Yunaz's iPhone";
-    let name_start = code_done + 0.35;
-    let name_t = typed(name, t, name_start, 22.0);
-    let name_done = typing_done(name, name_start, 22.0);
-    let connect_at = name_done + 0.6;
+    let (code, name, connect_at) = connect_cues();
+    let (code_start, code_t, code_done) = (code.start, code.at(t), code.done());
+    let (name_t, name_done) = (name.at(t), name.done());
     let success = ramp(t, connect_at + 0.3, 0.4);
     let check = spring(t, connect_at + 0.4);
     let code_w = text_w(frame, ctx, MONO, 24, 500, code_t);
@@ -648,7 +805,7 @@ fn session_list(t: f32) -> Svgr<'static> {
                 _ => TEXT3,
             };
             let o = ramp(t, 0.15 + i as f32 * 0.1, 0.4);
-            let pressed = if i == 0 { press(t, 1.5) } else { 0.0 };
+            let pressed = if i == 0 { press(t, OPEN_SESSION) } else { 0.0 };
             fframes::svgr!(<g opacity={o} font-family={SANS}>
                 <rect x="20" y={y} width="380" height="134" rx="16" fill={if pressed > 0.0 { SURFACE3 } else { SURFACE2 }} stroke={BORDER} />
                 <text x="40" y={y + 38.0} font-size="20" font-weight="700" fill={TEXT}>{title.to_string()}</text>
@@ -733,15 +890,11 @@ fn feed(t: f32, start: f32, prompt: Option<f32>, answered: Option<f32>) -> Svgr<
 }
 
 fn session<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<'static> {
-    let slide = smooth(t, 1.75, 0.45);
-    let msg = ["Still expires after resume. Give", "me options before fixing."];
-    let type_start = 3.4;
-    let cps = 24.0;
-    let first = typed(msg[0], t, type_start, cps);
-    let second_start = typing_done(msg[0], type_start, cps) + 0.05;
-    let second = typed(msg[1], t, second_start, cps);
-    let typing_end = typing_done(msg[1], second_start, cps);
-    let send_at = typing_end + 0.45;
+    let slide = smooth(t, OPEN_SESSION + 0.25, 0.45);
+    let ([line0, line1], send_at) = session_cues();
+    let type_start = line0.start;
+    let first = line0.at(t);
+    let second = line1.at(t);
     let sent = t > send_at + 0.1;
     let (l1, l2) = if sent { ("", "") } else { (first, second) };
     let caret_line = if second.is_empty() { 0 } else { 1 };
@@ -770,7 +923,7 @@ fn session<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<
         <g transform={format!("translate({} 0)", 420.0 * (1.0 - slide))}>{detail}</g>
         {app_bar()}
         {bottom_nav(1)}
-        {tap(t, 1.5, 200.0, 290.0)}
+        {tap(t, OPEN_SESSION, 200.0, 290.0)}
         {tap(t, send_at, 340.0, 780.0)}
     </g>);
     fframes::svgr!(<g>
@@ -780,15 +933,14 @@ fn session<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<
 }
 
 fn ask(t: f32) -> Svgr<'static> {
-    let notify = shown(t, 0.2, 1.3);
-    let notify_dy = (1.0 - spring(t, 0.2)) * -90.0;
-    let sheet_in = spring(t, 1.1);
-    let pick_at = 2.9;
-    let send_at = 4.0;
+    let notify = shown(t, ASK_NOTIFY, 1.3);
+    let notify_dy = (1.0 - spring(t, ASK_NOTIFY)) * -90.0;
+    let sheet_in = spring(t, ASK_SHEET);
+    let (pick_at, send_at) = (ASK_PICK, ASK_SEND);
     let sheet_out = smooth(t, send_at + 0.25, 0.35);
     let sheet_y = 880.0 - 560.0 * sheet_in + 600.0 * sheet_out;
     let picked = smooth(t, pick_at, 0.2);
-    let answered_at = send_at + 0.55;
+    let answered_at = ASK_ANSWERED;
     let options = [
         ("Refresh the token on app resume", "Recommended"),
         ("Extend the session TTL to 7 days", ""),
@@ -852,21 +1004,11 @@ fn ask(t: f32) -> Svgr<'static> {
 }
 
 fn automation<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Svgr<'static> {
-    let name = "Daily research digest";
-    let name_start = 0.9;
-    let name_t = typed(name, t, name_start, 20.0);
-    let name_done = typing_done(name, name_start, 20.0);
-    let prompt = ["Research the latest WebGPU news", "and summarise the 5 biggest", "updates, with links."];
-    let mut start = name_done + 0.35;
-    let mut prompt_t = Vec::new();
-    for line in prompt {
-        prompt_t.push(typed(line, t, start, 34.0));
-        start = typing_done(line, start, 34.0) + 0.04;
-    }
-    let prompt_done = start;
-    let toggle_at = prompt_done + 0.45;
+    let (name, prompt, toggle_at, create_at) = automation_cues();
+    let (name_start, name_t, name_done) = (name.start, name.at(t), name.done());
+    let prompt_t: Vec<&'static str> = prompt.iter().map(|line| line.at(t)).collect();
+    let prompt_done = prompt[2].done() + 0.04;
     let toggle = smooth(t, toggle_at, 0.25);
-    let create_at = toggle_at + 1.4;
     let toast = shown(t, create_at + 0.25, 99.0);
     let toast_dy = (1.0 - spring(t, create_at + 0.25)) * -40.0;
     let name_w = text_w(frame, ctx, SANS, 19, 500, name_t);
@@ -919,11 +1061,9 @@ fn automation<'a>(t: f32, frame: &mut Frame, ctx: &FFramesContext<'a, '_>) -> Sv
 }
 
 fn runs(t: f32) -> Svgr<'static> {
-    let run_at = 1.6;
+    let (run_at, done_at, open_at) = (RUN_AT, RUN_DONE, RUN_OPEN);
     let insert = smooth(t, run_at + 0.2, 0.45);
-    let done_at = run_at + 2.4;
     let done = smooth(t, done_at, 0.25);
-    let open_at = done_at + 1.0;
     let report = spring(t, open_at + 0.2);
     let report_o = ramp(t, open_at + 0.15, 0.3);
     let past = [
@@ -1094,7 +1234,10 @@ impl Video for PromoVideoVideo<'_> {
     }
 
     fn audio(&self) -> AudioMap<'_> {
-        AudioMap::none()
+        let end = self.total();
+        AudioMap::from(vec![
+            AudioTrack::new("music.mp3", Second(0.0)..Second(end)).gain_db(-2.5).fade_in(1.0).fade_out(3.0),
+        ])
     }
 
     fn define_scenes(&self) -> Scenes<'_> {

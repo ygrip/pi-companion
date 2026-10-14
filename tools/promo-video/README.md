@@ -14,4 +14,11 @@ cargo run --release -- preview 0s               # real-time preview window
 cargo run --release -- render -o ../../docs/pi-companion-promo.mp4
 ```
 
+Sound: the music and UI effects (taps, keystrokes, whooshes, chimes) are synthesized by `audio/generate.py` from oscillators and noise, so they are original and royalty-free. Effect times come from the same cue helpers that drive the animation in `src/lib.rs`. To change the sound:
+
+```bash
+python3 audio/generate.py                       # regenerate media/music.mp3 and the effect WAVs (numpy, ffmpeg)
+cargo run --release -- audio analyze            # target about -14 LUFS, true peak at or below -1 dBTP
+```
+
 Fonts in `media/`: Inter and JetBrains Mono (SIL Open Font License).
