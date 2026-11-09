@@ -60,11 +60,11 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact: pi-companion-server-linux-x86_64
             binary: pi-companion-server
-          - os: macos-14
+          - os: macos-15
             target: aarch64-apple-darwin
             artifact: pi-companion-server-darwin-arm64
             binary: pi-companion-server
-          - os: macos-14
+          - os: macos-15
             target: x86_64-apple-darwin
             artifact: pi-companion-server-darwin-x86_64
             binary: pi-companion-server
